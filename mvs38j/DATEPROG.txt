@@ -1,5 +1,4 @@
-//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T,
-// USER=MARK,PASSWORD=MVS38J
+//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T
 //* *****************************************************************
 //*
 //* INSTALL DATE/TIME UTILITY PROGRAM
