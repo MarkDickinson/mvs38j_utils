@@ -1,0 +1,290 @@
+//MARKA    JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN
+//         DD  DISP=SHR,DSN=SYS1.ATSOMAC
+//         DD  DISP=SHR,DSN=SYS1.HASPSRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  DATA,DLM=ZZ
+* *******************************************************************
+*
+* COBRENUM:
+*
+*
+* PURPOSE:
+*  To renumber a MVT COBOL card deck. Renumbers the sequence numbers
+*  at the start of each line (cols 1-6) required by the MVT COBOL
+*  compiler, and also renumbers the sequence numbers in cols 72-80.
+*
+*  It may do one of (depending upon the parm value)
+*    i) Renumber an existing (already numbered) member in a PDS
+*   ii) Take a sysin card deck (with no numbers, source left aligned)
+*       and will move the data on the card right to make room for
+*       the leading sequence numbers, then do the numbering and
+*       store the output in the PDS.
+*
+*
+* DD CARDS REQUIRED:
+*    ALWAYS REQUIRED
+*       COBOL    - The PDS file and member to use
+*       SYSUT1   - A work file, fixed length 80 byte records, to be
+*                  used as an intermediary work area for the program
+*    ONLY REQUIRED FOR PARM='NEW'
+*       SYSIN    - provides an un-numbered left aligned card deck
+*                  to be slid right and numbered.
+*
+*
+* PROGRAM PARM VALUES REQUIRED
+*    ONE OF THESE MUST BE PROVIDED
+*        RENUMBER - renumber in place an existing PDS member
+*        NEW      - read a new un-numbered card deck from
+*                   SYSIN to be numbered and stored in the
+*                   PDS member.
+*
+* NOTES:
+*    The SYSUT1 DD is used as a work area for the renumbering,
+*    only if no problems occur in program execution will the
+*    changed data in the work area be written back to the PDS.
+*    This should minimise any loss of data, HOWEVER you need
+*    to ensure there is enough space free in the PDS to accept
+*    the new member.
+*
+*
+* EXAMPLE JCL:
+*
+*    1 - reading an unnumbered deck from SYSIN
+*      //TEST3    EXEC PGM=COBRENUM,PARM='NEW'
+*      //STEPLIB  DD   DISP=SHR,DSN=SYS9.LINKLIB
+*      //SYSUT1   DD   DISP=(NEW,PASS,DELETE),
+*      //   DCB=(RECFM=F,LRECL=80,BLKSIZE=80,DSORG=PS),
+*      //   UNIT=SYSDA,SPACE=(TRK,(5,5)),DSN=&&WORK
+*      //COBOL    DD   DISP=SHR,
+*      //   DSN=MARK.LIB.SOURCE.COBOL(TESTRNUM)
+*      //SYSIN    DD   *
+*      CARD LINE 1
+*      CARD LINE 2
+*      CARD LINE 3
+*      /*
+*
+*    2 - renumbering an existing member in place
+*      //TEST4    EXEC PGM=COBRENUM,PARM='RENUMBER'
+*      //STEPLIB  DD   DISP=SHR,DSN=SYS9.LINKLIB
+*      //SYSUT1   DD   DISP=(NEW,PASS,DELETE),
+*      //   DCB=(RECFM=F,LRECL=80,BLKSIZE=80,DSORG=PS),
+*      //   UNIT=SYSDA,SPACE=(TRK,(5,5)),DSN=&&WORK
+*      //COBOL    DD   DISP=SHR,
+*      //   DSN=MARK.LIB.SOURCE.COBOL(TESTRNUM)
+*
+* *******************************************************************
+COBRENUM  CSECT
+         STM   R14,R12,12(R13)       SAVE REGISTERS
+         BALR  R12,0                    LOAD BASE REGISTER
+         USING *,R12                    ESTABLISH ADDRESSABILITY
+         ST    13,SAVEAREA+4         STORE CALLER'S S/A @ IN OUR S/A
+         LR    14,13                 SAVE CALLER'S S/A @ IN R14
+         LA    13,SAVEAREA           POINT R13 TO OUR SAVE AREA
+         ST    13,8(14)              STORE OUR S/A @ IN CALLER'S S/A
+*
+*                                    GET AND CHECK THE PARM, MUST BE
+*                                    NEW OR RENUMBER
+         L     R1,0(R1)              ADDRESS OF THE PARAMETER LIST
+         LH    R3,0(R1)              GET PARM LENGTH
+         LTR   R3,R3                 IF LENGTH ZERO WE HAVE NO PARM
+         BZ    BADPARM
+         LA    R4,2(R1)              ADDRESS OF PARM VALUE
+         CLC   PRENUM,0(R4)          IS IT A 'RENUMBER' REQUEST ?
+         BE    COBOLSRC              YES, RENUMBER EXISTING MEMBER
+         CLC   PNEW,0(R4)            IS IT A 'NEW' REQUEST ?
+         BE    SYSINSRC
+* If we fall through or jumped to here it was a missing or invalid parm
+BADPARM  WTO   'MISSING OR INVALID PARM, EXPECT NEW OR RENUMBER'
+         B     EXIT04
+         EJECT
+* Parm was new, we will read unnumbered data from the
+* sysin DD, move it a little to the right in the card
+* so we can insert the leading numbers, renumber it
+* and put it into the workfile.
+SYSINSRC BAL   R4,CHECKDD3           CHECK ALL DD CARDS ARE PRESENT
+         OPEN  (SYSIN,INPUT)         INPUT FROM SYSIN FOR 'NEW'
+         OPEN  (WRKOUT,OUTPUT)       OUTPUT TO WORK FILE
+         SR    R7,R7                 R7 WILL BE OUR COUNTER
+SYSINRD  GET   SYSIN                 READ CARD IMAGE
+         MVC   CARDLINE(80),0(R1)        MOVE TO DATA AREA
+*                                    IF THE PARM WAS 'NEW' OFFSET THE
+*                                    CARD DATA SO WE CAN INSERT THE
+*                                    LEADING NUMBERING.
+         MVC   CARDWRK+7(L'CARDLINE-7),CARDLINE
+         MVC   CARDLINE,CARDWRK
+         MVI   CARDLINE+6,C' '       MAY HAVE BEEN DATA THERE, ERASE
+         BAL   R4,RENUMCRD           RENUMBER THE CARD
+         PUT   WRKOUT,CARDLINE
+         B     SYSINRD
+EOFSIN   CLOSE (SYSIN,,WRKOUT)
+         B     REWRITE
+         EJECT
+* Parm was renumber, so we read an existing member from the cobol
+* DD card, it is already correctly aligned so just renumber it and
+* write it to the workfile.
+COBOLSRC BAL   R4,CHECKDD2           CHECK ALL DD CARDS ARE PRESENT
+*                                    THEN OPEN THE FILES, COPY THE OLD
+         OPEN  (COBOLIN,(INPUT))     TO A WORK FILE RENUMBERING AS WE
+         OPEN  (WRKOUT,(OUTPUT))       DO SO.
+         SR    R7,R7                 R7 WILL BE OUT COUNTER
+CBLINRD  GET   COBOLIN
+         MVC   CARDLINE,0(R1)
+         BAL   R4,RENUMCRD           RENUMBER THE CARD
+         PUT   WRKOUT,CARDLINE
+         B     CBLINRD
+EOFCIN   CLOSE (COBOLIN,,WRKOUT)
+         EJECT
+* We have a valid workfile if we didn't die before here,
+* so write the workfile into the cobol DD file
+* Note: will replace what was there if our source was from
+*       there.
+REWRITE  OPEN  (WRKIN,(INPUT))
+         OPEN  (COBOLOUT,(OUTPUT))
+WRKINRD  GET   WRKIN
+         MVC   CARDLINE,0(R1)
+         PUT   COBOLOUT,CARDLINE
+         B     WRKINRD
+EOFWIN   CLOSE (WRKIN,,COBOLOUT)
+EXIT00   L     13,SAVEAREA+4         LOAD CALLER'S R13
+         LM    14,12,12(13)          RESTORE THE REGISTERS
+         LA    15,0(0,0)             LOAD RETURN CODE 0
+         BR    14                    RETURN
+EXIT04   L     13,SAVEAREA+4         LOAD CALLER'S R13
+         LM    14,12,12(13)          RESTORE THE REGISTERS
+         LA    15,=F'4'              LOAD RETURN CODE 4
+         BR    14                    RETURN
+         EJECT
+* Renumber the card image here. We insert a 6 byte number in
+* the front (cols 1-6), an 8 byte number at the end (cols 72-80).
+RENUMCRD ST    R4,RENUMSA
+         A     R7,FULLONE            INCREMENT THE COUNTER FOR EACH
+         C     R7,FULL999            AT MAX ALLOWED ?
+         BH    RENUMERR              YUP, ABORT
+         CVD   R7,DECIMAL            CONVERT TO 3 BYTE DECIMAL
+         UNPK  DECIMAL(3),DECIMAL+6(2)
+         OI    DECIMAL+2,C'0'
+         MVC   CARDLINE(6),ZEROS
+         MVC   CARDLINE+1(3),DECIMAL
+         MVC   CARDLINE+72(8),ZEROS
+         MVC   CARDLINE+73(3),DECIMAL
+         L     R4,RENUMSA
+         BR    R4
+RENUMERR WTO   'HAVE EXCEEDED MAX INPUT OF 999 LINES'
+         WTO   'PROGRAM CHANGE NEEDED NOW.'
+         B     EXIT04
+         EJECT
+CHECKDD3 RDJFCB SYSIN
+         LTR    R15,R15
+         BZ     CHECKDD2
+         L      R3,DDERRCNT
+         A      R3,FULLONE
+         ST     R3,DDERRCNT
+         WTO    'SYSIN DD CARD MISSING'
+CHECKDD2 RDJFCB COBOLIN
+         LTR    R15,R15
+         BZ     CHECKDD1
+         L      R3,DDERRCNT
+         A      R3,FULLONE
+         ST     R3,DDERRCNT
+         WTO    'COBOL DD CARD MISSING'
+CHECKDD1 RDJFCB WRKOUT
+         LTR    R15,R15
+         BZ     CHECKDD0
+         L      R3,DDERRCNT
+         A      R3,FULLONE
+         ST     R3,DDERRCNT
+         WTO    'SYSUT1 DD CARD MISSING'
+CHECKDD0 L      R3,DDERRCNT
+         C      R3,FULLZERO
+         BNE    EXIT04           DD CARDS MISSING, EXIT RC4
+         BR     R4               ELSE RETURN TO MAINLINE
+*
+*   D A T A   A R E A   B I T S
+*
+SAVEAREA DS    18F                   SAVE AREA
+RENUMSA  DS    1F                    SAVE AREA FOR RENUMCRD
+FULLONE  DC    F'1'                  THE NUMBER 1
+FULLZERO DC    F'0'                  THE NUMBER 0
+FULL999  DC    F'999'                MAX WE ALLOW FOR AT PRESENT
+DDERRCNT DC    F'0'                  MISSING DD COUNTER
+DECIMAL  DC    D'0'                  WORK BUF FOR NUMBR TO TEXT
+CARDLINE DS    CL80                  CARD IMAGE DATA
+CARDWRK  DS    CL80                  WORK AREA FOR OFFSETING CARD
+ZEROS    DC    CL8'00000000'         FOR ZERO FILLING FIELDS
+PRENUM   DC    CL8'RENUMBER'         TO TEST PARM VALUE
+PNEW     DC    CL3'NEW'              TO TEST PARM VALUE
+*
+*   D C B   B I T S
+*
+COBOLIN  DCB   DDNAME=COBOL,DSORG=PS,MACRF=(GL),EODAD=EOFCIN,          X
+               RECFM=F,BLKSIZE=80,LRECL=80,EXLST=EXLSTC
+COBOLOUT DCB   DDNAME=COBOL,DSORG=PS,MACRF=PM,LRECL=80,BLKSIZE=80,     X
+               RECFM=F
+WRKOUT   DCB   DDNAME=SYSUT1,DSORG=PS,MACRF=PM,LRECL=80,BLKSIZE=80,    X
+               RECFM=F,EXLST=EXLSTS1
+WRKIN    DCB   DDNAME=SYSUT1,DSORG=PS,MACRF=(GL),EODAD=EOFWIN,         X
+               RECFM=F,BLKSIZE=80,LRECL=80
+SYSIN    DCB   DDNAME=SYSIN,DSORG=PS,MACRF=(GL),EODAD=EOFSIN,          X
+               RECFM=F,BLKSIZE=80,LRECL=80,EXLST=EXLSTSY
+* Used by RDJFCB when I check if DD cards are present
+EXLSTC   DS    0F
+         DC    X'87',AL3(JFCBC)
+JFCBC    DS    CL176
+EXLSTS1  DS    0F
+         DC    X'87',AL3(JFCBS1)
+JFCBS1   DS    CL176
+EXLSTSY  DS    0F
+         DC    X'87',AL3(JFCBSY)
+JFCBSY   DS    CL176
+*
+* And the register equates
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+ZZ
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=SYS9.LINKLIB(COBRENUM),DISP=(OLD,PASS,DELETE)
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=SYS9.LINKLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(COBRENUM)
+ ENTRY COBRENUM
+ NAME COBRENUM(R)
+/*
+//

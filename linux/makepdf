@@ -1,0 +1,402 @@
+#!/bin/bash
+# ==============================================================
+#
+# Convert a text file to a PDF text stream.
+# Defaults as set are landscape, 132cols, 72 lines (lineflow)
+#
+# Will test for the IBM Form Feed byte hercules writes out
+# so it will be able to page break on hercules printer
+# data streams.
+# Yes, it's primary purpose is to produce pdf files for
+# job output. It should handle any other text input without
+# any issue but you may want to change it back to portrait
+# for that (and maybe implement line breaks for long lines).
+#
+# TODO: put the recomended binary flags after the start of the
+#       header section.
+# ==============================================================
+infile="$1"    # input file to process
+diskfile="$2"  # optional, to screen if not provided
+if [ "${infile}." = "." ];   # if omitted pipe from stdin
+then
+   infile='-'
+fi
+mypid=$$       # to keep workfiles unique
+objnum=3       # we dynamically build from object 3
+pagecount=0    # needed to build pdf fields
+linecount=0    # just used to break page objects into pages
+parentobject=0
+outfile="/tmp/wrk_final.${mypid}"
+workfile1="/tmp/wrk1.${mypid}"
+workfile2="/tmp/wrk2.${mypid}"   # xrefs
+workfile3="/tmp/wrk3.${mypid}"   # xrefs
+xrefprog="/tmp/calclen.${mypid}" # program/script we need to create and use
+
+# PORTRAIT   ---- 60 lines
+#  mediabox='[0 0 612 792]'
+#  maxlines=60
+#  YPOSINIT=770   # default Yposition on page for line 1
+#  fontsize=12
+#  linespace="12.5"
+#  fontname="Helvetica"
+# LANDSCAPE   ---- 132 colums and 72 lines
+#                  Lineflow :-)
+mediabox='[0 0 792 612]'
+maxlines=72
+YPOSINIT=600   # default Yposition on page for line 1
+fontsize=9
+linespace="8"
+fontname="Courier"
+IBMFFCHAR=''  # hercules specific, form feed on this
+
+# -----------------------------------------------------------
+# A little helper to clean up work files so we keep things
+# nice and tidy.
+# -----------------------------------------------------------
+clean_files() {
+   if [ -f ${outfile} ];
+   then
+      /bin/rm ${outfile}
+   fi
+   if [ -f ${workfile1} ];
+   then
+      /bin/rm ${workfile1}
+   fi
+   if [ -f ${workfile2} ];
+   then
+      /bin/rm ${workfile2}
+   fi
+   if [ -f ${workfile3} ];
+   then
+      /bin/rm ${workfile3}
+   fi
+#   if [ -f ${xrefprog} ];
+#   then
+#      /bin/rm ${xrefprog}
+#   fi
+} # end clean_files
+
+# ---------------------------------------------------------------------
+# Offsets must always be 10 bytes with leading zeros
+# A little helper to stuff zeros on the front of a text string.
+# ---------------------------------------------------------------------
+ten_bytes() {
+   tempsize="$1"
+   # NOT IN A LOOP, bash won't preserve the changes
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   if [ ${#tempsize} -lt 10 ];
+   then
+      tempsize=0${tempsize}
+   fi
+   echo "${tempsize}"
+} # end store_xref_entries}
+
+clean_files
+
+# ------------------------------------------------------------
+# Create this script, we need it.
+# It will calculate the byte offsets we need for creating
+# teh xref table later on.
+# ------------------------------------------------------------
+cat << EOF > ${xrefprog}
+linenum=0
+xref=1   # addressing offset by 1 as we want addr
+         # of first byte in next line
+# Change IFS to newline so read does not strip off
+# any leading spaces
+IFS="
+"
+cat \$1 | while read dataline
+do
+   linenum=\$((\${linenum} + 1))
+   echo "\${linenum}:\${xref}:\${dataline}:"
+   linelen=\${#dataline}
+   xref=\$((\${xref} + \${linelen}))
+done
+unset IFS
+EOF
+if [ ! -f ${xrefprog} ];
+then
+   echo "**** Unable to create utility script."
+   exit 1
+fi
+
+# ------------------------------------------------------------
+# The PDF doctype/version comment header is not optional
+# ------------------------------------------------------------
+echo '%PDF-1.4' > ${outfile}              # alays start of document
+
+# ------------------------------------------------------------
+# Common objects at the top. Seems to barf badly if the        
+# Catalog entry is not the first entry (probably my addressing
+# as if the catalog is at the end pdf readers cannot seem to
+# find it.
+# ------------------------------------------------------------
+cat << EOF >> ${outfile}
+1 0 obj
+<< /Type /Catalog
+/Outlines 2 0 R
+/Pages XXXXXX 0 R
+>>
+endobj
+2 0 obj
+<< /Type /Outlines
+/Count 0
+>>
+endobj
+EOF
+
+# ------------------------------------------------------------
+# Process everything in the file, break into new page
+# objects after every 59 lines. (Max a 10pt font will
+# fit on a page before showing just a blank page)
+# ------------------------------------------------------------
+begin_page() {
+   echo "BT">> ${workfile1}
+   echo "/F1 ${fontsize} Tf">> ${workfile1}
+   echo "${linespace} TL">> ${workfile1}
+   #     X  Y
+   echo "10 ${YPOSINIT} Td">> ${workfile1}
+} # end begin_page
+write_page() {
+   startobjnum="$1"    # initial object we are working with
+   echo "ET">> ${workfile1}
+   echo "${startobjnum} 0 obj" >> ${outfile}
+   echo "<< /Type /Page" >> ${outfile}
+   echo "/Parent XXXXXX 0 R" >> ${outfile}   # adjust when we know
+   echo "/MediaBox ${mediabox}" >> ${outfile} 
+   echo "/Contents $((${startobjnum} + 1)) 0 R" >> ${outfile}
+   echo "/Resources << /ProcSet XXXXXX 0 R" >> ${outfile}
+   echo "/Font << /F1 XXXXXX 0 R >>" >> ${outfile}
+   echo ">>" >> ${outfile}
+   echo ">>" >> ${outfile}
+   echo "endobj" >> ${outfile}
+   # xref entry, byte position in outfile before write
+   # data stream size we will have
+   streamsize=`wc -c ${workfile1} | awk {'print $1'}`
+   streamsize=$((${streamsize} - 1))  # do not count last LF
+   echo "$((${startobjnum} + 1)) 0 obj" >> ${outfile}
+   echo "<< /Length ${streamsize} >>" >> ${outfile}
+   echo "stream" >> ${outfile}
+   cat ${workfile1} >> ${outfile}
+   echo "endstream" >> ${outfile}
+   echo "endobj" >> ${outfile}
+   /bin/rm ${workfile1}
+} # end write_page
+
+
+# Change IFS to newline so read does not strip off
+# any leading spaces in the read of the dataline
+IFS="
+"
+begin_page
+cat ${infile} | while read dataline
+do
+   # hercules specific, FF is before the line is printed
+   # so we have to do this before the block to text line
+   # number is at max.
+   # However, the blasted thing can be in the middle of
+   # a data line, it doesn't have to be the first byte.
+   # expr will return 1 for character 1, which is string position
+   # 0 for extraction.
+   charpos=`expr index "${dataline}" ${IBMFFCHAR}`
+   if [ ${charpos} -gt 0 ];   # its in the string
+   then
+      if [ ${charpos} -eq 1 ];   # the easy one
+      then
+         # strip off the FF, leave the rest of the line in
+         # dataline for normal processing on the next page
+         dataline=${dataline:1:132}
+         if [ ${linecount} -gt 0 ];  # ignore if just page jumped
+         then
+            write_page "${objnum}"
+            objnum=$((${objnum} + 2))
+            linecount=0
+            pagecount=$((${pagecount} + 1))
+            begin_page
+         fi
+      else
+         # write the part before the FF, save the rest
+         # of the line after the FF for normal processing
+         # on the next page.
+         part1=${dataline:0:$((${charpos} - 1))}
+         dataline=${dataline:${charpos}:132}
+         echo "T* (${part1}) Tj">> ${workfile1}
+         if [ ${linecount} -gt 0 ];  # ignore if just page jumped
+         then
+            write_page "${objnum}"
+            objnum=$((${objnum} + 2))
+            linecount=0
+            pagecount=$((${pagecount} + 1))
+            begin_page
+         fi
+      fi
+   fi
+   # write line, resume normal code
+   echo "T* (${dataline}) Tj">> ${workfile1}
+   linecount=$((${linecount} + 1))
+   if [ ${linecount} -ge ${maxlines} ];
+   then
+      write_page "${objnum}"
+      objnum=$((${objnum} + 2))
+      linecount=0
+      pagecount=$((${pagecount} + 1))
+      begin_page
+   fi
+   # outside if, we always need to save this
+   echo "${objnum} ${pagecount}" > ${workfile3}
+done
+# retrieve the variables we saved
+zzz=`cat ${workfile3}`
+objnum=`echo "${zzz}" | awk {'print $1'}`
+pagecount=`echo "${zzz}" | awk {'print $2'}`
+
+# and save the last page
+write_page "${objnum}"
+objnum=$((${objnum} + 2))
+pagecount=$((${pagecount} + 1))
+echo "${objnum} ${pagecount}" > ${workfile3}
+unset IFS
+
+# ------------------------------------------------------------
+# We can now create the parent as we have a final
+# page count and will use the next available
+# object for the parent
+# ------------------------------------------------------------
+parentobject=${objnum}   # have to globally fix the data file with this
+cat << EOF >> ${outfile}
+${objnum} 0 obj
+<< /Type /Pages
+/Kids [
+EOF
+# Kids start at 3, inc by 2 (page,stream then next pair)
+temp1=${pagecount}
+temp2=3
+temp3=0
+while [ ${temp3} -lt ${pagecount} ];
+do
+   echo "${temp2} 0 R" >> ${outfile}
+   temp2=$((${temp2} + 2))
+   temp3=$((${temp3} + 1))
+done
+cat << EOF >> ${outfile}
+]
+/Count ${pagecount}
+>>
+endobj
+EOF
+
+# ------------------------------------------------------------
+# ------------------------------------------------------------
+objnum=$((${objnum} + 1))
+fontnum=${objnum}
+cat << EOF >> ${outfile}
+${objnum} 0 obj
+<< /Type /Font
+/Subtype /Type1
+/Name /F1
+/BaseFont /${fontname}
+/Encoding /MacRomanEncoding
+>>
+endobj
+EOF
+objnum=$((${objnum} + 1))
+procsetnum=${objnum}
+cat << EOF >> ${outfile}
+${objnum} 0 obj
+[/PDF /Text]
+endobj
+EOF
+
+# ------------------------------------------------------------
+# We have the page parent object number, update all the child
+# pages and the catalog entry with the correct number now
+# Also update the font and procset references 
+# ------------------------------------------------------------
+cat ${outfile} \
+  | sed -e "s/Parent XXXXXX 0 R/Parent ${parentobject} 0 R/g" \
+  | sed -e "s/Pages XXXXXX 0 R/Pages ${parentobject} 0 R/g" \
+  | sed -e "s/F1 XXXXXX 0 R/F1 ${fontnum} 0 R/g" \
+  | sed -e "s/ProcSet XXXXXX 0 R/ProcSet ${procsetnum} 0 R/g" > ${workfile2}
+/bin/mv ${workfile2} ${outfile}
+
+# ------------------------------------------------------------
+# Now we can store the xref entries
+# ------------------------------------------------------------
+countxref=`grep "0 obj" ${outfile} | wc -l | awk {'print $1'}`
+countxref=$((${countxref} + 1))   # must count entry 0 also
+echo "xref" >> ${outfile}
+echo "0 ${countxref}" >> ${outfile}   # sections 1 to ..
+echo '0000000000 65535 f ' >> ${outfile}  # always present for index 0
+bash ${xrefprog} ${outfile} | grep "0 obj:" | awk -F: {'print $2'} | while read bytepos
+do
+   bytepos=`ten_bytes ${bytepos}`
+   echo "${bytepos} 00000 n " >> ${outfile}
+done
+
+# ------------------------------------------------------------
+# And then the trailer entry
+# countxref we needed above so we already have that
+# ------------------------------------------------------------
+startxref=`bash ${xrefprog} ${outfile} | grep ":xref:" | awk -F: {'print $2'}`
+cat << EOF >> ${outfile}
+trailer
+<< /Size ${countxref}
+/Root 1 0 R
+>>
+startxref
+${startxref}
+%%EOF
+EOF
+
+# ------------------------------------------------------------
+# Move to output pdf file or display on screen depending on
+# whether an output disk filename was specified.
+# ------------------------------------------------------------
+if [ "${diskfile}." != "." ];
+then
+   /bin/mv ${outfile} ${diskfile}
+else
+   cat ${outfile}
+fi
+
+# ------------------------------------------------------------
+# Now done, clean up
+# ------------------------------------------------------------
+clean_files
+exit 0

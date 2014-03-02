@@ -1,0 +1,833 @@
+//MARKSTOR JOB (0),'STORE BKBYVTOC',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//* =================== START JOB COMMENTS =======================
+//*        READ ALL THESE PLEASE BEFORE RUNNING THE JOB
+//*
+//* THIS JOC INSTALLS THE BKBYVTOC PROGRAM, A SAMPLE JOB TEMPLATE,
+//* A SAMPLE BACKUP JOB AND THE DOCUMENTATION MEMBER.
+//*
+//* --- GLOBALLY CHANGE THE BELOW TO YOUR NAMING STANDARDS ---
+//* (1) INSTALL FILE
+//*    INSTALL.UTILS.BKBYVTOC    (install file this job creates)
+//*    UNIT=3350,VOL=SER=SRCMD1  (allocated disk for above)
+//* (2) FOR USE BY ASSEMBLY STEPS
+//*    MARK.LIB.LOAD             (load library to assemble into)
+//*    UNIT=WORK                 (to unit=sysda for tk3)
+//* (3) USED BY THE TEST JOB --only required if you want to test :-)
+//*    MARK.TEST.BKBTVTOC        (test job report listing file)
+//*    UNIT=3380,VOL=SER=PUB002  (alloced disk for above)
+//*
+//* --- I M P O R T A N T   N O T E ---
+//*    If you have not already installed my date utility
+//*    program YOU WILL HAVE TO MAKE CHANGES to the BKBYVTOC
+//*    member; as follows...
+//*      - remove the INSTALL.UTILS.DATETIME file from the
+//*        SYSLIB DD concatonation list
+//*      - in the source code locate and comment out the
+//*        line containing UDATEVAR
+//*      - in the source code locate and comment out the
+//*        line containing UDATEMAC and the lines below
+//*        that that copy date fileds onto the report line.
+//*    The only impact of doing so is that you will not have
+//*    dates included in your backup report listings
+//*    OR you could download and install my date utility
+//*    prgram from my website; the same one you got this
+//*    from I hope. At the time this file was created that is
+//*    http://mdickinson.dyndns.org/hercules/downloads
+//*
+//* ---- After you have run this job to create the install DS ----
+//* Run the memeber BKBYVTOC to assemble the program
+//* Optionally run the TESTJOB member to test it
+//*
+//* ---- notes ----
+//* really tight on symbol space now, if you modify this code
+//* you will need to add an additional register for addressing.
+//* UPDATE: 2013/07/25 - nope, I changed the date library again
+//*         and needed more code space, two registers are now
+//*         used for addressing.
+//*
+//* =================== END JOB COMMENTS =======================
+//CREATE   EXEC PGM=IEFBR14
+//DD1      DD   DISP=(NEW,CATLG,DELETE),
+// UNIT=3350,VOL=SER=SRCMD1,
+// SPACE=(TRK,(1,1,5)),
+// DCB=(DSORG=PO,RECFM=FB,LRECL=80,BLKSIZE=19040),
+// DSN=INSTALL.UTILS.BKBYVTOC
+//*
+//STORE    EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC
+//SYSUT2   DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC
+//SYSIN    DD   DATA,DLM=AA
+./ ADD NAME=BKBYVTOC
+//MARKASMJ JOB  (0),'BKBYVTOC',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//*
+//* BACKUP BY VTOC: INSTALL
+//*
+//* GLOBALLY CHANGE "MARK.LIB.LOAD" TO A LOAD LIBRARY YOU CAN USE.
+//* REVIEW THE TEST STEP AT THE END, ADJUST DISK DD CARDS TO SUIT.
+//*
+//* YOU WILL PROBABLY WANT TO CUSTOMISE THE SAMPLE TEMPLATE MEMBER
+//* BEFORE RUNNING THE SAMPLE TEST JOB AS WELL.
+//*
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN
+//         DD  DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC
+//         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=WORK,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//SYSIN    DD  DATA,DLM=ZZ
+* ********************************************************************
+*
+* BKBYVTOC - BACKUP BY VTOC
+*            READ THE VTOC OF A DISK VOLSER(S) AND BUILD A BACKUP JOB
+*            FOR ALL DSORG=PS AND DSORG=PO FILES FOUND ON THE DISK.
+*
+*            ALSO CREATES A BACKUP LISTING OF WHAT FILES WILL BE
+*            WRITEN TO WHAT FILE POSITION ON THE BACKUP TAPE(S)
+*            AND PUTS THAT AT FILE POSITION 001 ON EACH TAPE.
+*
+*            PRODUCE A LIST OF FILES WITH OTHER DSORGS SO WE KNOW WHAT
+*            HAS BEEN SKIPPED... I MAY USE THAT LATER TO ADD OTHER
+*            DSORG TYPES TO THE BACKUP TEMPLATES.
+*
+* --------------------------------------------------------------------
+* CREDITS... THE VTOC SEARCH PROCESSING I COPIED...
+*    BASED ON THE VTOC SEARCH CODE IN A PROGRAM WRITTEN TO FIND
+*    UNCATALOGED OR INCORRECTLY CATALOGED FILES PROVIDED
+*    TO XEPHON DIGEST BY ERNIE ISHMAN (C)XEPHON 1991
+*    WHICH WORKS FINE UNDER HERCULES MVS3.8J
+* --------------------------------------------------------------------
+*
+* DD CARDS REQUIRED...
+*
+* INPUTS...
+*    TEMPLATE - JOB TEMPLATE NEEDED TO PROVIDE THE
+*               BKPPO AND BKPPS PROCS AND MANAGE
+*               THE INITIAL TAPE MOUNT
+*    DDnn     - DD CARDS IDENTIFYING VOLSERS TO SCAN
+*
+* OUTPUTS...
+*    SKIPLIST - FILES SKIPPED FROM THE BACKUP, AND WHY
+*                   FMTERR MEANS SKIPPED BECAUSE NOT PO OR PS DSORG
+*                   NOTCAT MEANS FILE IS NOT CATALOGUED TO THAT DISK
+*               LRECL=80. GENERALLY TO SYSOUT.
+*    BKPLIST  - THE BACKUP LISTING.
+*               LRECL=80. MAY BE A PDS MEMBER OR A SEQUENTIAL FILE.
+*               MAY N O T BE SYSOUT/SPOOL.
+*    JCLOUT   - THE BACKUP JOB(S) TO BACKUP ALL THE PACKS
+*               LRECL=80. MAY BE A SEQUENTIAL FILE FOR LATER
+*               USE OR SPOOL FOR TESTING, BUT WOULD NORMALLY BE
+*               //JCLOUT   DD   SYSOUT=(A,INTRDR) 
+*    
+* --------------------------------------------------------------------
+*    
+* OTHER NOTES:
+*
+*   AS MVS3.8J HAS A LIMIT OF 250 SOMETHING JOBSTEPS WE BREAK
+*   THE BACKUP JOBS INTO SEPERATE JOBS AT JOBSTEP 250, IF THERE
+*   ARE THAT MANY FILES TO BE PROCESSED OF COURSE.
+* ====> ALL BACKUP JOB JOBNAMES ARE SET TO THE JOBNAME OF THE
+*   BATCH JOB RUNNING THIS PROGRAM. THIS IS SO JES2 CAN QUEUE 
+*   DUPLICATE JOBNAMES UNTIL WE HAVE FINISHED TO ENSURE WE HAVE
+*   FINISHED WRITING THE BACKUP LISTING BEFORE ANY BACKUP JOBS
+*   NEED TO REFERENCE THE LISTING FILE.
+*   --- RE ABOVE NOTE, BECAUSE EACH BACKUP TAPE WILL HAVE AS
+*   FILE POSITION 001 THE BACKUP LISTING, A BACKUP TAPE WITHOUT
+*   A CONTENTS LIST WOULD BE A BIT POINTLESS.
+*   --- THAT MEANS THE BKPLIST DD MUST REFER TO A FILE, IT CANNOT
+*   BE JES2 SYSOUT (BUT IT MAY BE A PDS MEMBER). LRECL=80.
+*
+* --------------------------------------------------------------------
+*
+* BUGS
+*    IT WILL REPORT THAT VSAM DATASPACES AND ANY
+*    TEMPORARY FILES USED BY JOBS ARE UNCATALOGUED.
+*    BUT THATS NOT A BUG, IT IS CORRECT. JUST ANNOYING.
+*
+*    THE BIT TEST TO SEE IF A FILE IS UNSTRUCTURED IS NOT
+*    WORKING CORRECTLY. A WORKAROUND HAS BEEN PUT INTO
+*    THE ZAPSEROS STEP WHERE IF THE LRECL IS FOUND TO BE
+*    00000 THEN THE REPORT LISTING IS CORRECTLY ADJUSTED 
+*    TO U (FROM F) AT THAT TIME. 
+*    THIS I STILL NEED TO LOOK INTO AND FIX.
+*
+* --------------------------------------------------------------------
+*
+* CHANGES
+*   2013/04/15 = ADDED TEST TO SKIP BACKING UP THE 'PASSWORD' FILE AS
+*                THAT PROMPTS FOR A READ PASSWORD IF INCLUDED IN THE
+*                BACKUP JOB.
+*              = ALSO ADDED THE DATE AND TIME TO THE
+*                BACKUP LISTING HEADER (YOU WILL HAVE TO COMMENT OUT
+*                REFERENCES TO UDATEMAC AND UDATEVAR AND THE BIT OF
+*                CODE UNDER UDATEMAC THAT FORMATS THE DATE ..IF.. YOU
+*                DO NOT HAVE MY DATE UTILITY... OR YOU COULD DOWNLOAD
+*                THAT FROM THE SAME PLACE YOU GOT THIS.
+*              = REPLACED ALL MVI/CLI OF C' ' WITH MVC/CLC OF BLNKCHAR
+*                AND SHRUNK WTO STATEMENTS BE REMOVING JOBNAME FROM THE
+*                START OF EACH MSG AS ABOVE CHANGES HAD BLOWN OUT THE
+*                SYMBOL TABLE AND I DON'T REALLY WANT TO USE TWO
+*                REGSISTERS FOR ADDRESSING YET. STILL HAVE TO KEEP
+*                THE JOBNAME CODE THO AS ITS USED FOR THE BACKUP JOBS
+*   2013/05/03 = TOTALLY CHANGED THE DATE LIBRARY, UPDATED THIS TO USE
+*                THE NEW DATE PROGRAM (MACROS AND DATA AREA CHANGED SO
+*                FIELDS CAN BE REFERENCED BY NAME INSTEAD OF OFFSET
+*   2013/07/25 = OK, DATE LIBRARY CHANGED AGAIN. HAVE HAD TO FINALLY  
+*                USE TWO BASE REGISTERS IN THIS CODE NOW.
+*   2013/08/08 = CHANGED 'USING *,12,11' TO 'USING BKBYVTOC,12,11' TO
+*                STOP IT ABENDING WITH SOC1 AT INITIALISATION.
+*
+* --------------------------------------------------------------------
+*
+* SAMPLE JCL...
+* //BKBYVTOC EXEC PGM=BKBYVTOC,COND=(0,NE)
+* //STEPLIB  DD   DSN=MARK.LIB.LOAD,DISP=SHR
+* //DD1      DD   UNIT=3330,VOL=SER=TSO001,DISP=OLD
+* //DD2      DD   UNIT=3350,VOL=SER=SYS002,DISP=OLD
+* //DDnn     DD   ...etc...as many as you want
+* //SKIPLIST DD   SYSOUT=*
+* //JCLOUT   DD   SYSOUT=(A,INTRDR)    SUBMIT THE JOB(S)
+* //TEMPLATE DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC(TEMPLAT1)
+* //BKPLIST  DD   DISP=(NEW,CATLG,DELETE), --> MUST BE A DISK FILE <--
+* // DCB=(DSORG=PS,RECFM=FB,LRECL=80,BLKSIZE=80),
+* // SPACE=(TRK,(1,1),RLSE),
+* // DSN=MARK.BACKUP.LIST
+*
+* ********************************************************************
+         EJECT
+* MY CUSTOM MACROS I HAVE IN-LINED SO THIS CAN BE ASSEMBLED BY OTHERS.
+         MACRO
+&NAME    SPACEOUT &A
+.* ...................................................................
+.* PUT SPACES INTO A VARIABLE FOR THE LENGTH OF THE VARIABLE.
+.* ...................................................................
+         MVC   &A(1),BLNKCHAR
+         MVC   &A+1(L'&A-1),&A
+         MEND
+*
+         MACRO
+&NAME    GETJNAME &DATA=
+.* ...................................................................
+.*
+.*   GETJNAME: GET THE JOBNAME OF THIS BATCH JOB
+.*
+.*   INVOKE WITH
+.*        GETJNAME DATA=xxxx
+.*             DATA= MUST BE THE NAME OF A DATA AREA WHERE AT LEAST
+.*             EIGHT BYTES CAN SAFELY BE STORED.
+.*
+.*   REGISTERS MODIFIED
+.*      R1 IS USED BY THE MACRO, SO WE SAVE AND RESTORE IT WHEN DONE.
+.*
+.* ...................................................................
+         AIF   ('&DATA' EQ '').GJNERR1
+         AIF   (L'&DATA LT 8).GJNERR1
+         B     *+8                 SKIP REGISTER SAVE WORD
+GNJ&SYSNDX DS F
+         ST    1,GNJ&SYSNDX        SAVE R1, WE USE IT
+         LA    1,16                ADDR OF CVT POINTER
+         L     1,0(1)              ADDR OF CVT
+         L     1,0(1)              ADDR OF TCBS
+         L     1,4(1)              ADDR OF 2ND TCB
+         L     1,180(1)            ADDR OF JSCB
+         L     1,260(1)            ADDR OF JCT PREFIX
+         LA    1,24(1)             ADDR OF JOBNAME IN JCT
+         MVC   &DATA.(8),0(1)      STORE JOB NAME
+         L     1,GNJ&SYSNDX        RESTORE R1 TO WHAT IT WAS
+         MEXIT
+.GJNERR1 MNOTE 12,'**** DATA= MUST PROVIDE AN 8 BYTE DATA AREA ****'
+         MEND
+         EJECT
+BKBYVTOC CSECT
+         STM   14,12,12(13)             HOUSEKEEPING
+         LR    12,15                    ADDR OF ENTRY POINT
+         USING BKBYVTOC,12,11           ADDR USING 12 AND 11
+         LA    11,SAVEAREA              R11 = our save area
+         ST    13,SAVEAREA+4     save pointer to callers save area
+         ST    11,8(13)          save ptr to our save area in callers
+         LR    13,11                    r13 addr of our save area
+         LA    11,4095(12)              r11 will be...
+         LA    11,1(11)                 ...second base register
+*
+         LA    4,0          INITIALISE COUNTERS TO 0
+         ST    4,POSCOUNT
+         ST    4,JOBCOUNT
+         GETJNAME DATA=JOBNAME   GET THIS BATCH JOBS NAME
+* Get the current date and time. If the UDATE001 program is
+* not in the linklist we will leave spaces at the end of    
+* header line 1, otherwise we move in the date.
+         UDATEMAC DATA=UDATEVAR,ERROR=NODATE
+         MVC   BKPLSTH1+56(4),D370YEAR
+         MVI   BKPLSTH1+60,C'/'
+         MVC   BKPLSTH1+61(2),D370MMDD
+         MVI   BKPLSTH1+63,C'/'
+         MVC   BKPLSTH1+64(2),D370MMDD+2
+         MVC   BKPLSTH1+67(2),D370TIME
+         MVI   BKPLSTH1+69,C':'
+         MVC   BKPLSTH1+70(2),D370TIME+2
+NODATE   EQU   *
+*
+* ---------------------------------------------------------------
+*        GET THE FILENAME OF BKPLIST, MAKE SURE IT IS A DISK
+*        FILE AND NOT SPOOL. NEEDS TO BE A DISK FILE SO THE
+*        JOBS WE SUBMIT CAN STUFF IT ON THE TAPE AT FILE POS 001.
+* ---------------------------------------------------------------
+         RDJFCB BKPLIST                GET THE BKPLIST DATASET NAME
+         CLC   JFCBDSNM(6),=CL6'JES2.J'  if a JES2 spool file crash
+         BNE   CONTINUE
+         WTO   'BKPLIST DD MUST BE DISK FILE'
+         ABEND 100
+CONTINUE MVC   SYSPNAME(44),JFCBDSNM   THE DATASET NAME
+         TM    JFCBIND1,JFCPDS         IS IT A PDS
+         BNO   HAVEFNAM                NOT PDS, HAVE THE FULL NAME
+* YES, find and append the member name to the filename
+         CLC   JFCBELNM(8),=CL8'        '  if spaces no member name !
+         BNE   GETMBR
+         WTO   'NO MEMBER NAME ON BKPLIST DD'
+         ABEND 100 
+GETMBR   LA    6,SYSPNAME+44          USE R6 TO FIND LAST NONBLANK
+         BAL   4,BLNKLOOP
+         MVI   1(6),C'('                 open ( goes here
+         MVC   2(8,6),JFCBELNM           member name
+         LA    6,SYSPNAME+L'SYSPNAME
+         BAL   4,BLNKLOOP
+         MVI   1(6),C')'                 close ) goes here
+*
+* Find the length of the filename needed for the EX commands
+HAVEFNAM LA    6,SYSPNAME+L'SYSPNAME
+         BAL   4,BLNKLOOP
+         LA    7,SYSPNAME
+         SR    6,7
+         ST    6,SYSPNLEN
+*
+* SYSPNAME has the filename
+* SYSPNLEN has the length of the filename
+* ---------------------------------------------------------------
+*        And we have it now.
+*           SYSPNAME has the filename
+*           SYSPNLEN has the length of the filename
+* ---------------------------------------------------------------
+*
+         OPEN  (SKIPLIST,(OUTPUT))
+         OPEN  (BKPLIST,(OUTPUT),JCLOUT,(OUTPUT))
+         L     3,16                  CVT ADDR
+         L     3,0(3)                TCB HEAD ADDR
+         L     3,4(3)                TCB ACTIVE ADDR
+         L     3,12(3)               TIOT ADDR
+         LA    3,24(3)               TIOELNGH DD ENTRY LENGTH FIELD
+         PUT   SKIPLIST,HEADLNE1     PRINT HEADINGS
+         PUT   SKIPLIST,HEADLNE2
+         PUT   SKIPLIST,HEADLNE3
+         B     CHECKDD               CHECK WHICH DD THIS IS
+         LTORG
+NEXTDD   SR    0,0                   ZERO REG 0
+         IC    0,0(3)                MOVE TIOELNGH TO REG 0
+         AR    3,0                   ADD TIOELNGH TO REG 3
+CHECKDD  CLI   0(3),X'00'            IS LENGTH FIELD ZERO?
+         BE    EOJ                   GET OUT IF LAST DD
+         CLC   =C'DD',4(3)           IS THIS A "DD" DD STMNT?
+         BNE   NEXTDD                NO, GET ANOTHER
+         MVC   SYSLIB+40(8),4(3)     USE DDNAME FROM TIOT
+         RDJFCB SYSLIB               READ THE JFCB
+         MVI   JFCB,X'04'            SET JFCB BYTE-1 TO X'04'
+         MVC   JFCB+1(43),JFCB       PERPETUATE THROUGH DSN FIELD
+         MVC   JFCB+44(8),=8X'40'    SET MEMBER NAME TO BLANKS
+         XC    JFCB+52(27),JFCB+52   ZERO OUT MISC DATA-MNGMT FIELDS
+         XC    JFCB+86(31),JFCB+86
+         XC    JFCB+148(26),JFCB+148
+         OI    JFCB+52,8             SET MISC DATA-MNGMT FIELDS
+         OI    JFCB+66,2
+         OI    JFCB+87,X'48'
+         OPEN  SYSLIB,TYPE=J         OPEN WITH MODIFIED JFCB
+READ     READ  DECB1,SF,SYSLIB,DSCB,'S'   START READ FOR VTOC
+         CHECK DECB1                 WAIT FOR READ TO COMPLETE
+         CLI   DSCB+44,C'1'          FORMAT 1 DSCB?
+         BNE   READ                  NO, SO LOOP
+         LOCATE CATLG                IS IT CATALOGUED?
+         LTR   15,15                 CHECK RETURN CODE
+         BNZ   NOTCAT                IF NOT, PRINT IT
+         MVC   VOLSER1(6),JFCB+X'76' SAVE VOLSER BEING PROCESSED
+         CLC   VOLSER1(6),VOLLST+6   IS IT CATALOGUED TO THIS PACK?
+         BE    DOBACKUP              IF YES, BACK IT UP
+         LA    9,VOLLST+6            PRIME REG 9 IN CASE OF MULTIVOL
+         CLC   VOLLST(2),=X'0001'    IS IT SINGLE VOLUME?
+         BE    WRONGVOL              IF YES, GO PROCESS
+MULTIVOL CLC   VOLSER1(6),0(9)       IS IT CATALOGUED TO THIS PACK?
+         BE    READ                  IF YES, CONTINUE
+         LA    9,12(9)               ADDRESS NEXT VOLUME
+         CLC   0(6,9),=X'000000000000' IS THAT ALL THE VOLUMES?
+         BE    WRONGVOL              IF YES, IT'S NOT CATALOGUED HERE
+         B     MULTIVOL              GO CHECK THIS PACK
+         LTORG
+WRONGVOL MVC   LINE1+2(6),=CL6'VOLERR'
+         BAL   4,NOTINBKP
+         B     READ                  GO GET ANOTHER DSNAME
+         LTORG
+NOTCAT   CLC   =C'SYS1.VTOC',DSCB    IS THIS INDEXED VTOC?
+         BE    READ                  IF YES, BYPASS
+         MVC   LINE1+2(6),=CL6'NOTCAT'
+         CLC   =C'Z999',DSCB
+         BNE   NOTCAT2
+         MVC   LINE1+16(7),=CL7'OK-VSAM'
+NOTCAT2  BAL   4,NOTINBKP
+         B     READ                  GO GET ANOTHER DSNAME
+EOF      CLOSE SYSLIB                CLOSE DOWN THIS PACK
+         B     NEXTDD                GO GET ANOTHER PACK
+         LTORG
+*
+EOJ      CLOSE (SKIPLIST)   CLOSE FILES
+         CLOSE (BKPLIST,,JCLOUT)
+         L     13,SAVEAREA+4         RELOAD CALLERS SAVE AREA
+         LM    14,12,12(13)          RELOAD CALLERS REGISTERS
+         LA    15,0                  ZERO RETURN CODE
+         BR    14                    GO BACK TO CALLER
+         EJECT
+         LTORG
+* ************************************************************
+* THIS SECTION IS RESPONSIBLE FOR POPULATING THE BKPLIST
+* (BACKUP LISTING DETAILS) AND JCLOUT (PROC EXECUTION STEPS)
+* CALLED DIRECTLY. SECTION ENDS WHEN WE BRANCH BACK TO
+* READ THE NEXT ENTRY.
+* ************************************************************
+DOBACKUP CNOP  0,4
+*        * ---------------------------------------------------
+*        * the next two lines were added to skip the PASSWORD
+*        * file when backing up MVSRES as that file prompts
+*        * for a password to read the file, which causes the 
+*        * job to fail (when it is not replied to).
+*        * ---------------------------------------------------
+         CLC   DS1DSNAM(9),=CL9'PASSWORD '
+         BE    READ
+         ST    4,MIDSTR4                     SAVE R4, WE USE IT
+         ST    6,MIDSTR6                     ALSO R6
+         L     4,POSCOUNT
+         C     4,FULLZERO    IF 0 NEED THE JOB HEADERS
+         BNE   DOB00
+         BAL   4,JOBSTART      JOB CARD AND TEMPLATE DETAILS
+         BAL   4,FILE001       FILE 001 DETAILS
+         L     4,POSCOUNT    RELOAD, WE JUST BAL'ED USING R4
+         A     4,FULLONE       AND NO LONGER ON 0
+         ST    4,POSCOUNT
+DOB00    CNOP  0,4
+         SPACEOUT FILEDETL
+         MVC   FILEDETL+5(6),DS1DSSN         VOLSER
+         CLI   DS1DSORG,DS1DSGPS             SEQUENTIAL PS ?
+         BNE   DOB1
+         MVC   FILEDETL+12(2),=CL2'PS'         LISTING
+         MVC   JCLLINE1+24(2),=CL2'PS'         JCL CARD
+         B     DOB3
+DOB1     CLI   DS1DSORG,DS1DSGPO             PARTITIONED PO ?
+         BE    DOB2
+*  NOT PO OR PS, WE WON'T BACK THIS UP
+         MVC   LINE1(6),=CL6'FMTERR'
+         BAL   4,NOTINBKP
+         B     READ                  BACK TO READ NEXT ENTRY
+DOB2     MVC   FILEDETL+12(2),=CL2'PO'         LISTING
+         MVC   JCLLINE1+24(2),=CL2'PO'         JCL CARD
+DOB3     L     4,POSCOUNT   RELOAD, WE MAY HAVE BAL WITH THIS ABOVE
+         A     4,FULLONE             INCR AND SAVE NEW TAPE FILEPOS
+         ST    4,POSCOUNT
+         CVD   4,PACKFLD
+         UNPK  NUMBRFLD,PACKFLD
+         MVZ   NUMBRFLD+7(1),=X'F0'         ZERO ZONE BIT
+         MVC   FILEDETL+1(3),NUMBRFLD+5
+         MVC   JCLLINE1+6(3),NUMBRFLD+5
+         MVC   JCLLINE1+33(3),NUMBRFLD+5
+         TM    DS1RECFM,B'10010000'          FIXED BLOCKED
+         BNO   DB04
+         MVC   FILEDETL+16(2),=CL2'FB'
+         B     DB09
+DB04     TM    DS1RECFM,B'10001000'          FIXED BLOCKED2 ?
+         BNO   DB05
+         MVC   FILEDETL+16(2),=CL2'FB'
+         B     DB09
+DB05     TM    DS1RECFM,B'10000000'          FIXED
+         BNO   DB06
+         MVC   FILEDETL+16(2),=CL2'F '
+         B     DB09
+DB06     TM    DS1RECFM,B'11000000'          UNDEFINED
+         BNO   DB07
+         MVC   FILEDETL+16(2),=CL2'U '
+         B     DB09
+DB07     TM    DS1RECFM,B'01010000'          VARIABLE BLOCKED
+         BNO   DB08
+         MVC   FILEDETL+16(2),=CL2'VB'
+         B     DB09
+DB08     TM    DS1RECFM,B'01000000'          VARIABLE
+         BNO   DB08B
+         MVC   FILEDETL+16(2),=CL2'V '
+         B     DB09
+DB08B    MVC   FILEDETL+16(2),=CL2'??'
+* 10...... fixed
+* 01...... variable len
+* 11...... undefined length
+* ..1..... track overflow
+* ...1.... blocked
+* ....1... fixed len blocked, or variable len spanned
+* don't care about the rest
+DB09     CNOP  0,4                          ALIGN OR LOAD FAILS
+         SLR   4,4
+         ICM   4,B'0011',DS1BLKL 
+         CVD   4,PACKFLD
+         UNPK  NUMBRFLD,PACKFLD
+         OI    NUMBRFLD+7,X'F0'            ZERO ZONE BIT
+         MVC   FILEDETL+21(7),NUMBRFLD+1
+         SLR   4,4
+         ICM   4,B'0011',DS1LRECL
+         CVD   4,PACKFLD
+         UNPK  NUMBRFLD,PACKFLD
+         OI    NUMBRFLD+7,X'F0'            ZERO ZONE BIT
+         MVC   FILEDETL+29(5),NUMBRFLD+3
+         MVC   FILEDETL+35(L'DS1DSNAM),DS1DSNAM
+         BAL   4,ZAPZEROS
+         PUT   BKPLIST,FILEDETL
+* --- JCl STUFF ---
+*   DSNAME NEEDS TO HAVE THE CLOSE ' ADDED
+         SPACEOUT JCLLINEX
+         MVC   JCLLINEX(7),JCLLINE2
+         MVC   JCLLINEX+6(L'DS1DSNAM),DS1DSNAM    FILENAME
+         LA    6,JCLLINEX+L'JCLLINEX  FIND LAST BLANK FOR '
+         BAL   4,BLNKLOOP
+DOBJ02   MVI   1(6),C''''
+         PUT   JCLOUT,JCLLINE1
+         PUT   JCLOUT,JCLLINEX
+*
+         L     4,POSCOUNT            MAX 255 JOB STEPS 
+         C     4,=F'250'                BREAK AT 250
+         BL    DOBJ03
+         LA    4,0
+         ST    4,POSCOUNT
+DOBJ03   L     4,MIDSTR4             RESTORE R4
+         L     4,MIDSTR6             RESTORE R6
+         B     READ                  BACK TO READ NEXT ENTRY
+         EJECT
+         LTORG
+* ************************************************************
+* OPEN JOB TEMPLATE, COPY IT TO JCLOUT, CLOSE TEMPLATE
+* CALLED WITH BAL R4,XXX... RETURN TO R4
+* ************************************************************
+* OPEN JOB TEMPLATE, COPY IT TO JCLOUT, CLOSE TEMPLATE
+JOBSTART ST    1,JOBSTSAV            WE WILl TRASH R1, SAVE IT
+         L     1,JOBCOUNT               USED TO INCR COUTER AND
+         A     1,FULLONE                FOR THE FILE IO BUFFER
+         ST    1,JOBCOUNT
+         OPEN  (TEMPLATE,(INPUT))
+* FIRST CARD IS THE JOBCARD, TREATED DIFFERENTLY AS WE REPLACE
+* JOBNAME WITH OUT JOB NAME TO ENSURE JOBS QUEUE ON US.
+         GET   TEMPLATE              MUST ADJUST JOBCARD LINE
+         MVC   JCLLINEX(L'JCLLINEX),0(1)
+         MVC   JCLLINEX+2(8),JOBNAME
+         PUT   JCLOUT,JCLLINEX
+* AND THEN WE JUST SUBMIT THE REST OF THE JOB TEMPLATE AS IS
+JOBNCARD GET   TEMPLATE
+         MVC   JCLLINEX(L'JCLLINEX),0(1)
+         PUT   JCLOUT,JCLLINEX
+         B     JOBNCARD              LOOP FOR ALL CARDS
+ENDSTJOB CLOSE (TEMPLATE)
+         L     1,JOBSTSAV
+         BR    4
+         EJECT
+* ************************************************************
+* FILE 001 OF EACH TAPE SHOULD BE THE BACKUP LISTING.
+* CALLED WITH BAL R4,XXX... RETURN TO R4
+* ************************************************************
+* ------------------------------------------------------------------
+* This block is added for special handling for file 001 of each tape
+* We want the backup listing to be on file 001 of each tape.
+* It is seperate from the JOBSTART routine as that only modifies
+* the jobcard before loading the rest of the template file.
+* This piece of code must be done AFTER the template has been loaded
+* as we need the BKPPS procudeure defined.
+* ------------------------------------------------------------------
+FILE001  L     6,JOBCOUNT       IF NOT ON JOB1 TAPE HAS CHANGED
+         C     6,FULLONE 
+         BE   FILE001A          SHOULD BE BRANCH LOW, DIDNT EQU THAT 
+         SPACEOUT FILEDETL
+         MVC   FILEDETL(23),=CL17'---TAPE CHANGE---'
+         PUT   BKPLIST,BKPLSTH1
+         PUT   BKPLIST,BKPLSTH2
+         B     FILE001B
+FILE001A PUT   BKPLIST,BKPLSTH1
+         PUT   BKPLIST,BKPLSTH2
+FILE001B CNOP 0,4
+         SPACEOUT FILEDETL
+         MVC   FILEDETL+1(3),TEXT001
+         MVC   FILEDETL+5(4),=CL4'TAPE'
+         MVI   FILEDETL+16,C'F'
+         MVC   FILEDETL+26(2),=CL2'80'
+         MVC   FILEDETL+32(2),=CL2'80'
+         MVC   FILEDETL+35(L'DS1DSNAM),DS1DSNAM  
+         MVC   FILEDETL+12(2),=CL2'PS'         LISTING
+         L     6,SYSPNLEN
+         EX    6,EXFILE1
+         PUT   BKPLIST,FILEDETL
+         MVC   JCLLINE1+6(3),TEXT001
+         MVC   JCLLINE1+33(3),TEXT001
+         MVC   JCLLINE1+24(2),=CL2'PS'         JCL CARD
+         SPACEOUT JCLLINEX
+         MVC   JCLLINEX(7),JCLLINE2
+         L     6,SYSPNLEN
+         EX    6,EXFILE2
+         LA    6,JCLLINEX+6
+         A     6,SYSPNLEN
+         MVI   1(6),C''''
+         PUT   JCLOUT,JCLLINE1
+         PUT   JCLOUT,JCLLINEX
+         BR    4
+         LTORG
+* ------------------------------------------------------------------
+* End of handling for file 001, carry on as per normal now
+* ------------------------------------------------------------------
+         EJECT
+* ************************************************************
+* AT START R6 IS AT THE END OF THE BUFFER, SCAN BACK THROUGH
+* THE BUFFER FOR THE LAST NON-BLANK CHARACTER POSITION. AT
+* END R6 IS THE LAST NON-BLANK CHAR ADDRESS
+* CALLED WITH BAL R4,XXX... RETURN TO R4
+* ************************************************************
+BLNKLOOP BCTR  6,0                       subtract 1
+         CLC   0(1,6),BLNKCHAR
+         BE    BLNKLOOP
+         BR    4
+         LTORG
+*
+* ************************************************************
+* THIS IS JUST A CLEANUP FOR THE BACKUP LISTING, IT WILL
+* REPLACE LEADING ZEROS WITH SPACES SO SOMETHING LIKE
+* 000080 IS 80 WHICH IS MORE READABLE.
+* IT IS HARD CODED TO WHAT WE EXPECT TO BE IN FILEDETL SO
+* IF THAT EVER CHANGES CHAGE THIS !!!!.
+* ************************************************************
+ZAPZEROS LA    6,FILEDETL+29
+ZAPZERO1 CLI   0(6),C'0'
+         BNE   ZAPZERO2
+         MVC   0(1,6),BLNKCHAR
+         A     6,FULLONE
+         B     ZAPZERO1
+ZAPZERO2 LA    6,FILEDETL+21
+ZAPZERO3 CLI   0(6),C'0'
+         BNE   ZAPZERO4
+         MVC   0(1,6),BLNKCHAR
+         A     6,FULLONE
+         B     ZAPZERO3
+* BUG WORKAROUND
+* UNSTRUCTURED FLAG IS NOT BEING DETECTED IN MY JFCB TESTS
+* SO WE TRAP IT HERE. IF THE LRECL HAS BEEN SPACED FROM
+* 00000 TO SPACES WE KNOW LRECL WAS 0 SO IT IS AN UNSTRUCTURED
+* FILE. SO CORRECT THE BACKUP LISTING LINE HERE.
+ZAPZERO4 CLC   FILEDETL+33(1),BLNKCHAR
+         BNE   ZAPZERO5
+         MVI   FILEDETL+33,C'0'
+         MVC   FILEDETL+16(2),=CL2'U '
+ZAPZERO5 BR    4
+         EJECT
+* ************************************************************
+* CALLED TO LIST THE FILES WE ARE NOT BACKING UP
+* CALLED WITH BAL R4,XXX... RETURN TO R4
+* ************************************************************
+NOTINBKP CNOP  0,4
+         MVC   LINE1+9(6),JFCB+X'76' VOLSER BEING PROCESSED
+         MVC   LINE1+24(44),DSCB
+         PUT   SKIPLIST,LINE1
+         SPACEOUT LINE1
+         BR    4
+         EJECT
+* ************************************************************
+* THE JOLLY DATA AREA.
+* ************************************************************
+         LTORG
+SAVEAREA DS    18F                   ENVIRONMENT SAVE AREA
+JOBNAME  DS    CL8                   THIS JOBS NAME
+SYSPNLEN DC    F'0'                  BKPLIST FILENAME LEN
+* 44 byte filename, plus 8 byte member name and associated ()
+* if its a PDS with a member name needed.
+SYSPNAME DC    CL54' '               BKPLIST FILENAME
+DOBD0WRK DC    D'0'                  USING DEC3 FOR NOW
+MIDSTR4  DS    1F                    REGISTER SAVE
+MIDSTR6  DS    1F                    REGISTER SAVE
+JOBSTSAV DS    1F                    REGISTER SAVE
+POSCOUNT DS    1F                    POSITION COUNT
+JOBCOUNT DS    1F                    JOBS BUILT COUNT
+         DS    0D                    ALIGN
+PACKFLD  DS    PL8                   PACKED DECIMAL WORK
+NUMBRFLD DS    CL8                   TEXT NUMBER WORK
+SCRDSN   DS    CL44
+         UDATEVAR DSECT=NO           DATA AREA FOR DATE UTILITY
+FULLZERO DC    F'0'                  KEEP IN ONE PLACE, USED A LOT
+FULLONE  DC    F'1'                  KEEP IN ONE PLACE, USED A LOT
+TEXT001  DC    CL3'001'              KEEP IN ONE PLACE, USED A LOT
+BLNKCHAR DC    CL1' '                KEEP IN ONE PLACE, USED A LOT
+         LTORG
+HEADLNE1 DC    CL80'1 FOLLOWING DATASETS WERE SKIPPED FROM THE BACKUP'
+HEADLNE2 DC    CL80'  REASON VOLSER NOTES   DATASET NAME'
+HEADLNE3 DC    CL80'  ------ ------ ------- ------------'
+FILEDETL DC    CL80' '
+BKPLSTH1 DC    CL80' POS VOLSER ORG RECF BLKSIZE LRECL FILENAME'
+BKPLSTH2 DC    CL80' --- ------ --- ---- ------- ----- --------'
+JCLLINE1 DC    CL80'//STEPnnn  EXEC PROC=BKPPO,LABEL=nnn,'
+JCLLINE2 DC    CL7'// D='' '
+JCLLINEX DS    CL80
+EXFILE1  MVC   FILEDETL+35(0),SYSPNAME
+EXFILE2  MVC   JCLLINEX+6(0),SYSPNAME
+         LTORG
+LINE1    DC    CL80' '
+VOLSER1  DC    CL6' ' 
+         DS    0D
+DSCB     DS    CL144
+         ORG   DSCB
+         IECSDSL1 1
+CATLG    CAMLST NAME,DSCB,,VOLLST
+VOLLST   DS    0D,265C
+SKIPLIST DCB   DDNAME=SKIPLIST,DSORG=PS,MACRF=PM,                      X
+               BLKSIZE=80,RECFM=FBA,LRECL=80
+BKPLIST  DCB   DDNAME=BKPLIST,DSORG=PS,MACRF=(PM),                     X
+               BLKSIZE=80,RECFM=FBA,LRECL=80,EXLST=EXLSTBKL
+JCLOUT   DCB   DDNAME=JCLOUT,DSORG=PS,MACRF=PM,                        X
+               BLKSIZE=80,RECFM=F,LRECL=80
+TEMPLATE DCB   DDNAME=TEMPLATE,DSORG=PS,MACRF=(GL),EODAD=ENDSTJOB
+SYSLIB   DCB   DDNAME=DDXX,DSORG=PS,MACRF=R,RECFM=F,BLKSIZE=96,        X
+               EXLST=EXLST,KEYLEN=44,EODAD=EOF
+         LTORG
+EXLST    DC    0F'0',X'87',AL3(JFCB)
+JFCB     DS    CL176
+         DS    0F
+EXLSTBKL DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DC    176X'00'                 JFCB AREA
+         ORG   JFCBAREA
+         IEFJFCBN              map the jfcbarea
+         LTORG
+         END
+ZZ
+//LKED1B  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD(BKBYVTOC),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2B  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
+//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(BKBYVTOC)
+ ENTRY BKBYVTOC
+ NAME BKBYVTOC(R)
+/*
+//
+./ ADD NAME=TESTJOB
+//MARKTEST JOB (0),'TEST BKBYVTOC',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//* ===================================================
+//* TEST THE PROGRAM.
+//* ...USING SAMPLE TEMPLATE FROM THIS FILE
+//* ===================================================
+//TESTPROG EXEC PGM=BKBYVTOC,COND=(0,NE)
+//STEPLIB  DD   DSN=MARK.LIB.LOAD,DISP=SHR
+//* USE ALL THE CBT VOLUMES, MORE THAN ENOUGH FILES
+//* ON THOSE TO TEST GENERATION OF MULTIPLE JOBS
+//* AT THE 250 STEP LIMIT I HAVE IMPOSED.
+//DD1      DD   UNIT=3350,VOL=SER=CBTCAT,DISP=OLD
+//DD2      DD   UNIT=3350,VOL=SER=CBT000,DISP=OLD
+//DD3      DD   UNIT=3350,VOL=SER=CBT001,DISP=OLD
+//DD4      DD   UNIT=3350,VOL=SER=CBT002,DISP=OLD
+//SKIPLIST DD   SYSOUT=*
+//BKPLIST  DD   DISP=(NEW,CATLG,DELETE),
+// DSN=MARK.TEST.BKBYVTOC,
+// UNIT=3380,VOL=SER=PUB002,
+// DCB=(DSORG=PS,RECFM=FB,LRECL=80,BLKSIZE=8000),
+// SPACE=(CYL,(2,1))
+//JCLOUT   DD   SYSOUT=*             FOR TESTING
+//*JCLOUT   DD   SYSOUT=(A,INTRDR)   FOR LIVE RUN
+//TEMPLATE DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC(TEMPLAT1)
+//
+./ ADD NAME=TEMPLAT1
+//XXXXXXXX JOB (0),CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
+//* ---------------------------------------------------------------
+//* TEMPLATE JOB FILE FOR USE WITH THE BKBYVTOC PROGRAM
+//*
+//* Defines the two required procedures - BKPPS and BKPPO
+//*
+//* One key thing to note is that in order to use referbacks
+//* in the procedures, something has to get the tape up first.
+//* The REPORT1 step does that, it has no other purpose.
+//* ---------------------------------------------------------------
+//BKPPO    PROC D=,LABEL=
+//BACKUPPO EXEC PGM=IEBCOPY,REGION=1024K,COND=(0,NE)
+//SYSPRINT DD  SYSOUT=*
+//SYSUT1   DD DSN=&D,DISP=SHR
+//SYSUT2   DD  DISP=(NEW,KEEP),UNIT=TAPE,
+//        VOL=(,RETAIN,,,REF=*.REPORT1.SYSUT2),LABEL=(&LABEL,SL),
+//        DSN=&D,
+//        DCB=*.SYSUT1
+//SYSUT3   DD  UNIT=WORK,SPACE=(CYL,(15,15))
+//SYSUT4   DD  UNIT=WORK,SPACE=(CYL,(15,15))
+//SYSIN    DD  DSN=INSTALL.UTILS.BKBTVTOC(IEBCOPY),DISP=SHR
+//         PEND
+//BKPPS    PROC D=,LABEL=
+//BACKUPPS EXEC PGM=IEBGENER,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DSN=&D,DISP=SHR
+//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=TAPE,
+//        VOL=(,RETAIN,,,REF=*.REPORT1.SYSUT2),LABEL=(&LABEL,SL),
+//        DSN=&D,
+//        DCB=*.SYSUT1
+//SYSIN    DD   DUMMY
+//         PEND
+//*
+//* DUMMY STEP TO MOUNT THE TAPE
+//REPORT1  EXEC PGM=IEBGENER
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,DSN=SYS1.PROCLIB(JES2)    ANY FILE
+//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=TAPE,
+//        VOL=(,RETAIN),LABEL=(1,SL),   USE ANY SCRATCH
+//        DSN=DELME,
+//        DCB=(DSORG=PS,RECFM=F,LRECL=80,BLKSIZE=80)
+//SYSIN    DD   DUMMY
+./ ADD NAME=IEBCOPY
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+./ ADD NAME=$$DOC
+$$DOC    - this documentation member
+BKBYVTOC - the job to assemble the program itself(see sample jcl below)
+IEBCOPY  - sysin control member used by sample template TEMPLAT1
+TEMPLAT1 - example template used by the TESTJOB
+TESTJOB  - job to test BKBYVTOC, used template TEMPLAT1
+
+SAMPLE JCL FOR BKBYVTOC... refer to the comments at the
+                           start of the program source code 
+                           for more detail on requirements
+                           for each DD card.
+
+//BKBYVTOC EXEC PGM=BKBYVTOC,COND=(0,NE)
+//STEPLIB  DD   DSN=MARK.LIB.LOAD,DISP=SHR
+//DD1      DD   UNIT=3330,VOL=SER=TSO001,DISP=OLD
+//DD2      DD   UNIT=3350,VOL=SER=SYS002,DISP=OLD
+//DDnn     DD   ...etc...as many as you want
+//SKIPLIST DD   SYSOUT=*
+//JCLOUT   DD   SYSOUT=(A,INTRDR)    SUBMIT THE JOB(S)
+//TEMPLATE DD   DISP=SHR,DSN=SYS9.CONTROL(TEMPLAT1)   PROC TEMPLATES
+//*   now I have implemented checking for PDS usage both the below
+//*   are valid for BKPLIST. Up to you whether you use a flat file
+//*   or a PDS member for your jobs. 
+//* --- BKPLIST MUST BE A DISK FILE OR PDS MEMBER --- it cannot
+//*     be spooled output; it needs to be a file that can be
+//*     backed up to the backup tape.
+//BKPLIST  DD   DISP=SHR,DSN=MARK.BKPLISTS(MONDAY)    BKP LISTING
+//*BKPLIST  DD   DISP=(NEW,CATLG,DELETE),
+//* DCB=(DSORG=PS,RECFM=FB,LRECL=80,BLKSIZE=80),
+//* SPACE=(TRK,(1,1),RLSE),
+//* DSN=MARK.BACKUP.LIST.MONDAY
+//
+./ ENDUP
+AA
+//

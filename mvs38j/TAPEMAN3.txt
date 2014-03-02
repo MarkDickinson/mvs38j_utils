@@ -1,0 +1,4567 @@
+//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=A
+//* **************************************************************
+//*
+//*         INSTALLATION JOB FOR TAPEMAN3
+//*
+//*
+//* R E A D     T H E     I N S T R U C T I O N S     H E R E
+//*
+//*    B E F O R E     R U N N I N G     T H I S     J O B
+//*
+//*
+//* THE FOLLOWING CHANGES ARE REQUIRED TO GET THIS JCL TO RUN
+//* ON YOUR SYSTEM. THE JOB OBLY CREATES THE INSTALLATION
+//* LIBRARIES AND ASSEMBLES THE MODULES FROM SOURCE INTO AN
+//* INSTALL LINKLIB. IT DOES NOT TOUCH YOU SYSTEM DATASETS.
+//*
+//* THE MAIN REASON FOR THAT IS THAT YOU WILL HAVE TO CUSTOMISE
+//* THE DATASET PREFIXES USED IN THE JOBS THAT CREATE/USE THE
+//* VSAM DATABASE FILE AND ALSO THE JOBS THAT WILL COPY FROM
+//* THE INSTALL DATASETS TO YOUR SYSTEM LIBRARIES.
+//*
+//* REFER TO THE XXXX.TAPEMAN3.INSTALL DATASET THAT
+//* IS CREATED AS PART OF THIS JOB ON HOW TO MIGRATE FROM
+//* THE INSTALL LIBRARIES INTO AN ACTIVE ENVIRONMENT.
+//*
+//*  Y O U     M U S T    C U S T O M I S E    A S    B E L O W
+//*
+//* 
+//* -----  ALL USERS Globally change -----
+//* 
+//*  (1)
+//*    UNIT=3350,VOL=SER=SRCMD1         to a 3350 pack you can use
+//*       it does need to be a 3350 or larger as some of the programs
+//*       need to be copied to your system libraries after they are
+//*       assembled and you cannot copy from a 2314 to a 3350 load
+//*       library.
+//* 
+//*  (2)
+//*    INSTALL.TAPEMAN3        to XXXX.TAPEMAN3
+//*       where XXXX is a prefix you use for 3rd party software.
+//*       Datasets with this prefix are where everything will be
+//*       installed and programs assembled into.
+//* 
+//*
+//* ----- ADDITIONAL STEPS FOR TURNKEY3 USERS -----
+//*   This may be relevant for other users also, but I have
+//*   put this in specifically for TK3 users as this is what I had
+//*   to do to get this job to run on a TK3 system.
+//* 
+//*  (3)
+//*   globally change 3330 to 3350, there are no 3330 packs on a
+//*   TK3 system and they are used as work packs in my supplied JCL.
+//*   If you don't do that you will be asked to mount a 3330 pack.
+//* 
+//*  (4)
+//*   Search for job MARKASM1, then for DD OBJLIB.
+//*   Change the TRK,(2,2) to TRK,(10,5) for that one occurence
+//*   to avoid a SB37 abend when the assembly is done
+//*
+//*
+//* --- after that is done you can run this job ---
+//*
+//* After this job is run all the install libraries will have
+//* been created and loaded, plus all the programs assembled
+//* into the install load library ready for you to copy to
+//* your system load libraries.
+//*
+//* **************************************************************
+//*
+//CREATDDS EXEC PGM=IEFBR14
+//DD2 DD DSN=INSTALL.TAPEMAN3.CONTROL,
+//     DISP=(NEW,CATLG,DELETE),
+//     UNIT=3350,VOL=SER=SRCMD1,
+//     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
+//     SPACE=(TRK,(1,1,5))
+//DD3 DD DSN=INSTALL.TAPEMAN3.DOC,
+//     DISP=(NEW,CATLG,DELETE),
+//     UNIT=3350,VOL=SER=SRCMD1,
+//     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
+//     SPACE=(TRK,(6,1,5))
+//DD4 DD DSN=INSTALL.TAPEMAN3.INSTALL,
+//     DISP=(NEW,CATLG,DELETE),
+//     UNIT=3350,VOL=SER=SRCMD1,
+//     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
+//     SPACE=(TRK,(2,1,5))
+//DD5 DD DSN=INSTALL.TAPEMAN3.SAMPLIB,
+//     DISP=(NEW,CATLG,DELETE),
+//     UNIT=3350,VOL=SER=SRCMD1,
+//     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
+//     SPACE=(TRK,(8,1,5))
+//DD6 DD DSN=INSTALL.TAPEMAN3.SRC,
+//     DISP=(NEW,CATLG,DELETE),
+//     UNIT=3350,VOL=SER=SRCMD1,
+//     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
+//     SPACE=(TRK,(50,5,5))
+//DD6 DD DSN=INSTALL.TAPEMAN3.LINKLIB,
+//     DISP=(NEW,CATLG,DELETE),
+//     UNIT=3350,VOL=SER=SRCMD1,
+//     DCB=SYS1.LINKLIB,
+//     SPACE=(TRK,(30,1,5))
+//ASMLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSIN DD DATA,DLM=QQ
+./ ADD NAME=DBREC
+         MACRO
+&NAME    DBREC
+.* ------------------------------------------------------------------
+.* This is the VSAM database record definition I use in all the
+.* programs. Keeping it as a seperate macro just makes database
+.* changes easier.
+.* ------------------------------------------------------------------
+         DS    0F
+RECTMPL  DC    CL6' '         VOLSER         (6)
+         DC    CL1' '                        (7)
+         DC    CL8'--------'  JOBNAME        (15)
+         DC    CL1' '                        (16)
+         DC    CL5'00000'     EXP-DATE YYDDD (21)
+         DC    CL1' '                        (22)
+         DC    CL44' '        DESC-BKPFILENAM(66)
+         DC    CL66' '        RESERVED       (132)
+DBSLEN   EQU   *-RECTMPL
+         MEND
+./ ADD NAME=TAPEMAN3
+//MARKASM  JOB (0),'TAPEMAN',CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  DATA,DLM=ZZ
+**********************************************************************
+*                                                                    *
+* TAPEMAN : Mark Dickinson, December 2008                            *
+*                                                                    *
+* T A P E M A N     T O O L K I T                                    *
+*     Tapeman - Version 3.03 - June 2012                             *
+* T A P E M A N     T O O L K I T                                    *
+*                                                                    *
+*                                                                    *
+* Version 3 is not compatible with version 2. Specifically the entire*
+* message can no longer be passed to TAPEMAN so unless you want to   *
+* put one hell of a lot of message parsing into your IEECVXIT just   *
+* don't use it.                                                      *
+* Version 3 is designed to be                                        *
+* triggered from my MMPF message processing tool which can do all    *
+* the message parsing required; so all message parsing has been      *
+* removed from version 3 itself.                                     *
+*                                                                    *
+* Credits:  With code blocks copied from Jay Moseleys cobol/vsam     *
+*           interface code to get the vsam file access, as I don't   *
+*           fully understand vsam yet. Updates to follow when I do.  *
+*                                                                    *
+* Desc: automate Tape mounts on a MVS3.8J Hercules system            *
+*                                                                    *
+* Requires : My MMPF message automation tool                         *
+*            HERCCMD program to issue the DIAG8 commands             *
+*            DIAG8CMD ENABLE set in the hercules config file         *
+*            My TAPEMAN programs                                     *
+* See installation documentation.                                    *
+*                                                                    *
+* Automatically mount .AWS tapes for both mount requests for a       *
+* specific volser, and also for scratch tapes (volser=PRIVAT).       *
+*                                                                    *
+* This is invoked from my MMPF console message processing tool, which*
+* will parse the mount messages and pass to TAPEMAN the parm field   *
+*  -- normally    'MSGNUMID CUU VOLSER JOBNAME'                      *
+*  -- for IEC701D 'MSGNUMID CUU VOLSER RR' where RR is the IEHINIT   *
+*     reply number we must reply to, the only message that needs a   *
+*     reply and it has no jobname value in the message.              *
+* It then builds and executes the DIAG8 command to mount the tape    *
+* and updates the scratch status of any tape used.                   *
+*                                                                    *
+* One DD CARD is needed to be added to the MMPF proc,                *
+* TAPEVOLS - indexes VSAM cluster, records 132 bytes, key bytes 0-5  *
+*   The database of tape VOLSERS to be used for automation.          *
+*   Currently contains fields VOLSER, Jobname that used it, and the  *
+*   expiry date as YYDDD. Scratch tapes available for use have an    *
+*   expiry field of 00000. Record layout is member DBREC.            *
+*                                                                    *
+*  Sample procedure is provided in the                               *
+*    INSTALL.TAPEMAN3.CONTROL file                                   *
+*  (no trailing * above is deliberate, global filename changes       *
+*   done in the install steps cause a compile fail if the * gets     *
+*   pushed due to a longer name, I must remember that)               *
+*                                                                    *
+**********************************************************************
+         EJECT    
+**********************************************************************
+*                                                                    *
+* HOW DOES IT WORK (WHAT DOES IT DO) ?                               *
+*                                                                    *
+* OPERATION WHEN TRIGGERED FOR A TAPE MOUNT MESSAGE                  *
+*      For a scratch tape or a named volser ?                        *
+*    1.   Scratch mount...                                           *
+*            Scan through TAPEVOLS for a scratch tape                *
+*            ? Scratch tape found                                    *
+*            No  - (recoverable)                                     *
+*                  WTO that there are no scratch tapes left in DBS   *
+*                  WTOR operator to enter a volser to be used        *
+*                  ? operator replied cancel                         *
+*                  No  - Use the volser entered by operator even if  *
+*                        not one we have catalogued (may have been   *
+*                        created manually by op for this onetime fix)*
+*                        --- GOTO 3. ---                             *
+*                  Yes - exit, do nothing, mount stays outstanding   *
+*            Yes - Use that scratch volser found                     *
+*                        --- GOTO 3. ---                             *
+*                                                                    *
+*    2.   Named volser mount...                                      *
+*            Is it in our catalogue ?                                *
+*               No - WTO we will not automount it (could be anywhere)*
+*               Yes - use volser in mount message, --- GOTO 3. ---   *
+*                                                                    *
+*         ...Now we have a volser...                                 *
+*    3.   Use the HERCCMD program to issue via DIAG8 to the HMC      *
+*            'devinit CUU tapes/VOLSER.aws'                          *
+*                 CUU is the unit from the IEF233A mount message     *
+*                 VOLSER is the tape volser we worked out            *
+*         Update the volser entry in TAPEVOLS with an expiry of +14  *
+*         Exit                                                       *
+*                                                                    *
+**********************************************************************
+         EJECT    
+**********************************************************************
+*                                                                    *
+*                                                                    *
+* WHY A STARTED TASK PROC ?                                          *
+* Because IEECVXIT cannot do any disk IO (any IO) so it needs to be  *
+* offloaded, kicking off a started task seems the easiest.           *
+*                                                                    *
+* KNOWN BUGS                                                         *
+*    1.  With the OS. If this is triggered                           *
+*        by a job trying to backup any tapeman files even if the     *
+*        backup job and this job open them disp=shr there is still   *
+*        a waiting for dataset contention against both jobs so the   *
+*        backup has to be cancelled. This occurs for backups not     *
+*        automated by this also (ie: backing up SYS1 files with a    *
+*        disp=shr tends to wait on datasets until tso and vtam are   *
+*        shutdown, dunno why as all have them share) so not much I   *
+*        can do about it. For ordinary user backups and restores this*
+*        works just fine.                                            *
+*        See change history 2006/03 for a workaround.                *
+*    2.  Recovery if the VSAM file wasn't closed properly.           *
+*        If there is an error on the VSAM file open it is retried.   *
+*        This gets around the problem where the file may not have    *
+*        been closed properly and TAPEMAN works correctly but will   *
+*        end with an ABEND SC03. It won't happen next time as the    *
+*        file will have been closed correctly and no action is       *
+*        required.                                                   *
+*                                                                    *
+* Other references                                                   *
+*  - See TAPEMUTL to list/add/delete tapes in the TAPEVOLS file      *
+*  - See TAPEMSCR which is the program you should run daily to seek  *
+*    out tapes that have expired and return them to the scratch state*
+*                                                                    *
+**********************************************************************
+         EJECT   
+**********************************************************************
+*                                                                    *
+* AUTHOR                                                             *
+*    Mark Dickinson - December 2008 created version 3                *
+*                     Replaces Jan 2006 version 2                    *
+*                                                                    *
+*        Desc: created to automate my Tape mounts on my MVS3.8J      *
+*              hercules system.                                      *
+*                                                                    *
+* TODO                                                               *
+*    Maybe add a field in the TAPEVOLS record to allow people to     *
+*    specify a HET|AWS volser type as some people may want it. Or    *
+*    maybe not as I only use AWS at the moment. Later, when I need   *
+*    it pherhaps.                                                    *
+*                                                                    *
+* CHANGE HISTORY                                                     *
+*    2005/12 - created and started using it, yippee my backups don't *
+*              abend with timeouts when I'm not there.               *
+*    2006/01 - updated to allow variable length volser and jobnames  *
+*              by implementing parsing of the message to extract the *
+*              fields, and then the newly necessary volser length    *
+*              scan to determine at what point to actually add .aws  *
+*              onto the link to herccmd.                             *
+*    2006/01 - broke it. after abends the vsam file is not closed    *
+*              properly so the next open fails. To allow for that    *
+*              I now retry the vsam open once if the first open      *
+*              fails as we do NEED this to run or tape mounts will   *
+*              be left hanging. I don't check if the vsam return     *
+*              code is one that should be retried, I'm too close to  *
+*              the 4K program limit for additional code.             *
+*    2006/02 - changed to only automate for tapes that are in the    *
+*              vsam catalogue. removed the tapedevs dd and functions *
+*              changed the exit to pass 45 bytes of the message as   *
+*              needed to correctly handle a IEC501A message.         *
+*    2006/03 - added a test for a parm of MOUNTSCRATCH as a workaround
+*              for Bug1. This allows a batch job that knows it will  *
+*              need a scratch tape while automation is turned off to *
+*              manually load a scratch tape from within the job. THIS*
+*              THIS SHOULD NOT BE USED WHILE AUTOMATION IS ACTIVE    *
+*              or the automation will also mount/allocate another tape
+*              ISSUE: preloading the tape in step1 of a job does not *
+*              work as when step2 starts the OS unloads the preloaded*
+*              tape and issues a new mount request.                  *
+*              RESOLUTION: do not invoke TAPEMAN with the mountscratch
+*              parm, instead use TAPEMCUU (see TAPEMCUU) which will  *
+*              invoke TAPEMAN with the correct parms in the background
+*              so the main job can continue (the background task(this)
+*              will sleep 30 seconds while the main job triggers the *
+*              mount request, then we wake to satisfy it.            *
+*    2007/02 - Added IEC701D (iehinitt mount request)                *
+*    2007/11 - Making changes blew addressing/ltorg space, lots of   *
+*              cleanup, *+nn branching added instead of using labels,*
+*              truncates lots of WTOs to smaller strings, moved as   *
+*              many =CL'xx' as practical to data fields.             *
+*              Still not enough so added a second addressing register*
+*              for the program, now uses R12 (standard) PLUS R11 for *
+*              addressing.                                           *
+*    2007/11 - And the change needed was, add additional IEC701D     *
+*              processing to handle when it is called from MMPF      *
+*              instead of IEECVXIT as when invoked from MMPF we MUST *
+*              reply to the associated WTOR within the 15sec MMPF    *
+*              window or MMPF will try the mount again, and again... *
+*              so if triggered from MMPF (if it has the message Rnn  *
+*              number prefixed to the message is MMPF) then TAPEMAN  *
+*              will sleep for 5 seconds, then reply M to the WTOR    *
+*              and we pray the tape has been mounted in time.        *
+* ------- Version 3.00 -------                                       *
+*    2008/12 - Removed all message parsing code from the program.    *
+*              Consolidated message processing functions, in V2 each *
+*              message has to be parsed uniquely which is no longer  *
+*              now MMPF has done the parsing.                        *
+*              Updated comments with the requirement to add the DD   *
+*              TAPEVOLS to the MMPF stc proc (needed for LNK use     *
+*              from MMPF, not needed if CMD S TAPEMAN stil used).    *
+*              Changed handling of getting parms passed, V2 linked   *
+*              back through callers to find the master jobs parm area*
+*              which would give us the MMPF parm area, wheras we     *
+*              want know the parm area provided in the LINK command  *
+* ------- Version 3.01 -------                                       *
+*    2009/03 - Minor tweak                                           *
+*              Changed TAP005W message to a TAP005A message desc=2,  *
+*              it is now a NRD to stop it scrolling off the screen   *
+*              as MMPF will DOM the origional mount message as I     *
+*              have implemented the MMPF rules.                      *
+*              Changed that message to include the unit now also as  *
+*              the origional mount message that had it will have     *
+*              scrolled off.                                         *
+* ------- Version 3.02 -------                                       *
+*    2009/09 - Minor tweak                                           *
+*              If there are no spare scratch tapes for a mount and   *
+*              the operator replies cancel instead of selecting a    *
+*              tape volser we now try to cancel the job requesting   *
+*              the mount from tapeman instead of making the operator *
+*              do it manually. As I do this with a 'C JOBNAME' it    *
+*              will not work if there are multiple jobs of the same  *
+*              name on the input queue, but will be fine normally.   *
+*              Needed because... (a) we have already DOMed the mount *
+*              message so ops won't know it is still outstanding     *
+*              unless they check, (b) they replied cancel, so lets   *
+*              cancel the job.                                       *
+* ------- Version 3.03 -------                                       *
+*    2012/06 - Minor tweak needed for my public system               *
+*              Minor change, change the not automated message to     *
+*              include the jobname in the message, so my automation  *
+*              can cancel a job asking for a non-automated volser.   *
+* OLD MSG : TAP005A NOT AUTOMATED, MANUALLY MOUNT vvvvvv ON cuu      *
+* NEW MSG : TAP005A MANUALLY MOUNT vvvvvv ON cuu, JOB JJJJJJJJ       *
+*                                                                    *
+**********************************************************************
+         EJECT   
+TAPEMAN3 CSECT
+* WE NEED MORE THAN ONE BASE REGISTER, REPLACED BELOW WITH
+*        STM   R14,R12,12(13)
+*        BALR  R12,R0
+*        USING *,R12
+*        LA    R15,SAVEAREA
+*        ST    R15,8(R13)
+*        ST    R13,4(R15)
+*        LR    R13,R15
+*
+* THIS
+         STM   R14,R12,12(R13)    SAVE REGISTERS
+         LR    R12,R15            R12 = ADDR OF ENTRY POINT
+         USING TAPEMAN3,R12,R11   ADDRESABILITY TO CSECT
+         LA    R11,SAVEAREA       R11 = ADDR OF OUR SAVE AREA
+         ST    R13,SAVEAREA+4     SAVE POINTER TO CALLERS SAVE AREA
+         ST    R11,8(R13)         SAVE PTR TO OUR SAVE AREA IN CALLER'S
+         LR    R13,R11            R13 = ADDR OF OUR SAVE AREA
+         LA    R11,4095(R12)      R11 WILL BE
+         LA    R11,1(R11)         SECOND BASE REGISTER
+* END REPLACEMENT
+         SPACE 5
+*        --- GET THE PARM FIELD PASSED ---
+*        WE ONLY EXPECT ONE PARM SO NO NEED TO CHECK FOR MORE
+         LTR   R1,R1
+         BZ    NOPARM
+         LR    R2,R1               ADDRESS OF ADDR LIST TO R2
+         L     R5,0(,R2)           R5 TO ADDRESS DATA FIELD
+* OK, SAVE THE PARM TO RECDATA
+         SR    R3,R3               LEN OF PARM TO R3
+         LH    R3,0(R5)
+         LA    R4,L'RECDATA        MAX FIELD LEN ALLOWED IN R4
+         CR    R3,R4               WILL PARM FIT ?
+         BNH   PARMOK                 YES, OK
+         LA    R3,L'RECDATA           NO, TRUNCATE TO MAX LEN
+PARMOK   EX    R3,EXPRMSAV         MOVE FOR LEN DETERMINED
+         B     STRTOPEN
+EXPRMSAV MVC   RECDATA(0),2(R5)  SAVE PARM1 DATA FROM +2
+         SPACE 1
+*  --- NO PARM OR BAD PARM PROVIDED, FATAL ERROR
+NOPARM   WTO   'TAP001E NO PARM DATA PROVIDED'
+         B     EXIT1     --- SO EXIT OUT
+         EJECT
+* OPEN THE VSAM TAPE VOLSER DATABASE
+STRTOPEN BAL   R4,OPENKSDS
+         LTR   R15,R15
+         BZ    OPENEDOK
+* VSAM DATASET OPEN FAILED, MAYBE A PREVIOUS JOB ABENDED
+* SO WE RETRY THE OPEN. 
+         CNOP 0,4
+         BAL   R4,OPENKSDS
+         LTR   R15,R15
+         BZ    OPENEDOK
+* RETRY FAILED, NOW WE HAVE NO CHOICE BUT TO EXIT         
+         WTO   'OPEN ERROR DD TAPEVOLS, NO RETRY'
+         B     EXIT1
+         SPACE 2
+OPENEDOK DS    0F
+* NOW FIND OUT WHAT WE NEED TO DO
+         CLC   RECDATA(8),MIEF233A       Tape mount request message
+         BNE   *+8
+         B     IEF233A
+         CLC   RECDATA(8),MIEC501A       Tape mount request message
+         BNE   *+8
+         B     IEC501A
+         CLC   RECDATA(12),=CL12'MOUNTSCRATCH'        2006/03 change
+         BNE   *+8
+         B     BATCHMNT
+         CLC   RECDATA(8),MIEC701D                    2007/02 change
+         BNE   *+8
+         B     IEC701D
+         SPACE 1
+* IF WE FALL THROUGH IT IS NOT A MESSAGE WE HANDLE
+         MVC   ERRNOAUT+16(8),RECDATA
+ERRNOAUT WTO   'TAP002W ........ IS NOT AN AUTOMATED MESSAGE'
+*        B     EXIT                  DONE NOW
+         SPACE 1
+* -----------------------------------------------------------
+*         All good things must come to an end.
+* -----------------------------------------------------------
+EXIT     CNOP  0,4
+         LA    R7,EXIT1             SET VSAM AFTER RECOVER PTR
+         ST    R7,RECOVRPL          TO THE EXIT1 SO IF ERRORS ON
+*                                   CLOSE WE DON'T START LOOPING
+         LA    R2,IFGACB            CLOSE THE VSAM DATASET
+         CLOSE ((R2))
+*        B     EXIT1
+*
+EXIT1    CNOP  0,4                  ALIGN, COULD BE CALLED FROM VSAM
+         L     R13,4(R13)           ERROR HANDLER
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+* -----------------------------------------------------------
+* A mount tape on device XXX message
+*
+* IEF233A M 310,VVVVVV,,JJJJJJJJ,RESTORE     <-- to read
+* IEF233A M 311,PRIVAT,SL,JJJJJJJJ,REPORT1   <-- to write
+* IEC501A M 311,VVVVVV,SL,6250 BPI,JJJJJJJJ,STEP1 <-- to write
+*
+* Get the jobname and volser required. If the volser is
+* PRIVAT then find a free scratch tape to use as the volser.
+* When we have the jobname and volser populated call HERCCMD
+*
+* RECDATA WILL CONTAIN -  MSGNUMID CUU VOLSER JOBNAME
+* -----------------------------------------------------------
+         DS    0F
+IEF233A  EQU   *
+IEC501A  EQU   *
+         MVC   DEVICE(3),RECDATA+8
+         MVC   VOLSER(6),RECDATA+12
+         MVC   JOBNAME(8),RECDATA+19
+         CLC   VOLSER(L'VOLSER),PRIVAT  <-- SCRATCH TAPE RQST
+         BNE   HERCCMD                  EXACT TAPE NEEDED, CARRY ON
+*        -- FIND ANY SCRATCH TAPE TO USE
+         MVI   VSOPCODE,C'S'            WE ARE SEARCHING FOR A SPARE
+         CNOP  0,4                      IF THIS IS NOT HERE WE SOC1
+         BAL   R4,GETSPARE
+         B     HERCCMD                  ISSUE THE DEVINIT COMMAND
+         EJECT     
+* -----------------------------------------------------------
+* IEHINITT message
+*
+* IEC701D M 312,VOLUME TO BE LABELED VVVVVV
+*
+* Get the unit and volser required, then mount it via herccmd
+* We then need to reply to the WTOR (RR number passed in the
+* jobname position by MMPF
+* -----------------------------------------------------------
+         DS    0F
+IEC701D  MVC   DEVICE(3),RECDATA+8
+         MVC   VOLSER(6),RECDATA+12
+         MVC   JOBNAME(8),=CL8'IEHINITT' HARD CODE FOR THIS
+         BAL   R4,UPDATVOL
+         CNOP  0,4                     AVOID SOC1
+         BAL   R4,GETVOLSZ             GET VOLSER SIZE
+         MVC   CMDDVINI+10(3),DEVICE
+         MVC   CMDDVINI+20(6),VOLSER
+         LA    R4,CMDDVINI+20
+         A     R4,VOLSERL
+         MVC   0(4,R4),=CL4'.aws'
+         LINK  EP=HERCCMD,PARAM=CMDDVINI,ERRET=LINKERR
+         SPACE 1
+* WAIT A FEW SECONDS AND REPLY TO THE WTOR FOR IEC701D
+         STIMER WAIT,,DINTVL=SECS6      6 secs
+         MVC   CMD701D+6(2),RECDATA+19  THE NN REPLY NUMBER
+         STM   R0,R1,SAVESVCR
+* LOG WHAT WE ARE ISSUING, THE USE OF DOTS IS A DEBUGGING AID,
+* IF THEY ARE NOT OVERWRITTEM WITH THE EXPECTED REPLY, OOPSIE
+         MVC   WTO701D+19(6),CMD701D+4
+WTO701D  WTO   '>>TAPEMAN3 ......     ',DESC=(5)   WTO TO LOG ONLY
+* GO ISSUE THE COMMAND VIA SVC 34 NOW
+         MODESET KEY=ZERO,MODE=SUP
+         SR   R1,R1
+         LA   R1,CMD701D
+         SR   R0,R0
+         SVC  34          ISSUE COMMAND SPECIFIED
+         MODESET KEY=NZERO,MODE=PROB
+         LM    R0,R1,SAVESVCR
+         B     EXIT
+         EJECT
+* -----------------------------------------------------------
+* This is called if the parm was MOUNTSCRATCH. This should
+* should only ever be called from a batch job when automation
+* has been shut down. The CUU to mount the tape on must be
+* provided, it is not sanity checked so use with caution.
+* It MUST be called from a batch job, we don't check for this
+* being invoked from a TSO session (as we are out of space
+* in this code block now).
+*
+* MOUNTSCRATCH cuu jobnamef
+*
+* Get the CUU device to be used from the parm field, we
+* do not sanity check it.
+* Get the jobname from the parm field, do not sanitycheck it
+* Call HERCCMD to mount the tape.
+* -----------------------------------------------------------
+SECS30   DC      CL8'00003000'       * THIRTY  SECONDS
+BATCHMNT MVC   DEVICE(3),RECDATA+13
+         MVC   JOBNAME(8),RECDATA+17
+*        -- SLEEP, GIVE TIME FOR A MOUNT TO BE ISSUED
+         STIMER WAIT,,DINTVL=SECS30
+*        -- FIND ANY SCRATCH TAPE TO USE
+         MVI   VSOPCODE,C'S'      WE ARE SEARCHING FOR A SPARE
+         CNOP  0,4                IF THIS IS NOT HERE WE SOC1
+         BAL   R4,GETSPARE
+         B     HERCCMD            ISSUE THE DEVINIT COMMAND
+         EJECT     
+* -----------------------------------------------------------
+* HERCCMD
+*   1 - update the volume entry, expiry to be +14 days from now
+*       if the update fails, then not a volume we manage so
+*       just exit out (or a vsam error, still exit out).
+*   2 - issue the DIAG8 to mount (devinit) the tape file.
+*
+* NOTES: 
+*   I used to have the update last with the view to always
+*   mounting a named tape if requested even if there were
+*   vsam errors, to allow automatic mounting of tapes by
+*   name even if they are not in the catalogue. But then
+*   I thought, what happens if the tape doesn't physically
+*   exist.
+*    *IEF233A M 310,FRED99,,MARKREST,RESTORE
+*   - TAP006I ALLOCATED FRED99 TO 310.
+*   - HERCCMD - CMD  : DEVINIT 310 tapes/FRED99.aws
+*     IEA000I 310,EQC,07,0E00,,,FRED99,MARKREST,07.11.00
+*     IEA000I 310,,,,5022000000C003600000000000800100010000FFFF000000
+*     IGF500I  SWAP 310 TO 311 - I/O ERROR
+*    *02 IGF500D  REPLY 'YES', DEVICE, OR 'NO'
+*   So now we only automate mounts of tape volumes we manage
+*   explicitly from out tape catalogue, so do the update of
+*   the catalogue entry first; any vsam errors (ie: tape volser
+*   not found) will then exit us out before the automatic
+*   mount is issued. For an external tape the devinit must
+*   be manually performed as per the non-automated life.
+* EXCEPTION:
+*   The one exception is in the case of no scratch tapes
+*   available, where the operator has entered a volser
+*   in response to the WTOR. This volser will be used
+*   even if it is not found in the database on the assumption
+*   that one has been created specially.
+* -----------------------------------------------------------
+         DS    0F
+HERCCMD  CNOP  0,4                     AVOID SOC1
+         BAL   R4,UPDATVOL
+         CNOP  0,4                     AVOID SOC1
+* IF WE ARE STILL HERE THE TAPE IS IN THE VSAM CATALOG
+         MVC   HERCWTO+26(6),VOLSER    WTO WHAT WE ARE USING
+         MVC   HERCWTO+36(3),DEVICE
+HERCWTO  WTO   'TAP006I ALLOCATED vvvvvv TO ddd. '
+         SPACE 1
+* ISSUE THE DIAG 8 COMMAND, THE ACTUAL VOLSER LENGTH   
+* MAY NOW BE LESS THAN 6 SO WE HAVE TO DETERMINE IT
+* SO WE KNOW WHERE TO PUT THE .aws PART OF THE COMMAND
+         BAL   R4,GETVOLSZ         SO GET VOLSER SIZE
+         MVC   CMDDVINI+10(3),DEVICE
+         MVC   CMDDVINI+20(6),VOLSER
+         LA    R4,CMDDVINI+20
+         A     R4,VOLSERL
+         MVC   0(4,R4),=CL4'.aws'
+         LINK  EP=HERCCMD,PARAM=CMDDVINI,ERRET=LINKERR
+         SPACE 1
+         B     EXIT                WE ARE FINISHED
+         SPACE 2
+* -----------------------------------------------------------
+* LINKERR: triggered when the LINK command fails
+* -----------------------------------------------------------
+LINKERR  CNOP  0,4 
+         WTO   'TAP004E PROGRAM HERCCMD NOT FOUND'
+         B     EXIT
+         EJECT
+* -----------------------------------------------------------
+* GET THE DATESTAMP NOW AS YYDDD FOR A LAST USED REFERENCE
+* DATE IN THE TAPEVOLS FILE, AND THE DATESTAMP IN 14 DAYS
+* TIME AS YYDDD AS AN EXPIRY DATE IN CASE WE ARE ALLOCATING
+* A NEW SCRATCH TAPE FOR THIS EXECUTION.
+* -----------------------------------------------------------
+DATESTMP DS    0F
+         STM   R0,R4,DATESAVA
+*   R0 has the time, we ignore but it is used so we save the register
+*   R1 has the date, save the register
+*   R2-R4 used in calculations, save those registers
+         TIME  DEC                        GET SYSTEM TIME AND DATE
+         ST    R1,PDAT                    STORE PACKED DATE
+         ST    R1,PDAT                    STORE PACKED DATE
+         STCM  R1,4,YEAREND+1             SAVE 'YY' PART OF DATE
+         ED    CURDMSK(7),PDAT+1          UNPACK DATE
+         SLR   R2,R2                      R2 = 0
+         CVB   R3,PDATDBL                 R3 = YYDDD IN BINARY
+         D     R2,FULL1000                R3 = YY,  R2 = DDD
+         LR    R4,R3                      KEEP YEARS FOR LATER
+         SRL   R4,2                       R4 = R4 / 4
+         SLL   R4,2                       R4 = R4 * 4
+         CR    R3,R4                      ARE YEARS EQUAL ?
+         BNE   DATNLEAP                   NO ->
+         L     R4,LEAPDAYS                LEAP YEARS HAVE 366 DAYS
+         ST    R4,YEAREND
+DATNLEAP EQU   *
+         UNPK  TXTDAT,PDAT            X'00YYDDDF' TO C'YYDDD'
+         MVC   DATENOW(5),TXTDAT
+         A     R2,EXPAMNT
+         CL    R2,YEAREND
+         BL    DATNROLL
+         S     R2,YEAREND                 ROLL BACK DAYS BY 36X
+         A     R3,FULLONE                 ADD 1 TO YEAR
+DATNROLL CVD   R3,DECIMWRK                CONVERT BINARY YY TO C'0YY'
+         UNPK  DECIMWRK(3),DECIMWRK+6(2)
+         OI    DECIMWRK+2,C'0' 
+         MVC   DATEEXP(2),DECIMWRK+1      SAVE THE YY BIT
+         CVD   R2,DECIMWRK                CONVERT BINARY DDD TO C'DDD'
+         UNPK  DECIMWRK(3),DECIMWRK+6(2)
+         OI    DECIMWRK+2,C'0' 
+         MVC   DATEEXP+2(3),DECIMWRK      AND THE DDD BIT
+         LM    R0,R4,DATESAVA
+         BR    R4
+DATESAVA DS    5F
+         EJECT
+* -----------------------------------------------------------
+* UPDATVOL: Update the VOLSER entry in the database to 
+*           indicate it has been allocated.
+* -----------------------------------------------------------
+UPDATVOL DS    0F
+         STM   R4,R7,UPVSAV
+         SR    R7,R7            CLEAR RECOVERY FLAG BY DEFAULT
+         ST    R7,RECOVRPL
+         CLI   VSOPCODE,C'M'    IF VOLSER WAS ENTERED MANUALLY BY
+         BNE   UPDATVO1         OPERATOR WE WILL CONTINUE MOUNT EVEN
+         LA    R7,UPDATXIT      IF A VSAM ERROR AS THE TAPE MAY NOT
+         ST    R7,RECOVRPL      BE IN OUT DATABASE BUT BE ONE JUST
+*                               MANUALLY CREATED FOR THIS INSTANCE.
+*                               SO RECOVRPL TO NORMAL UPDATVOL EXIT
+         SPACE 1
+* SEEK TO AND READ EXACT RECORD
+UPDATVO1 CNOP  0,4
+* KEYPOSITION
+         BAL   R14,MODIFY
+         MVC   $IOAREA(L'VOLSER),VOLSER   THE KEY
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         POINT RPL=(R2)
+         MODCB RPL=(R2),OPTCD=(KEQ)
+* READ
+         CNOP  0,4
+         BAL   R14,MODIFY
+         GET   RPL=(R2)
+         SHOWCB RPL=(R2),FIELDS=RECLEN,AREA=FEEDBACK,LENGTH=4
+         L     R7,FEEDBACK
+         STH   R7,$RECLEN                LENGTH ACTUALLY READ
+* NOW UPDATE THE FIELDS IN THE RECORD
+         CNOP  0,4
+         BAL   R4,DATESTMP                        GET DATESTAMPS
+         MVC   $IOAREA+16(5),DATEEXP              EXPIRY DATE
+         MVC   $IOAREA+7(8),JOBNAME               JOBNAME
+* THEN REWRITE THE RECORD
+         CNOP  0,4
+         BAL   R14,MODIFY
+         LA    R2,IFGRPL
+         SR    R3,R3          CLEAR R3 TO LOAD
+         LH    R3,$RECLEN     LENGTH THAT WAS READ
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10)
+         PUT   RPL=(R2)
+* DONE
+UPDATXIT CNOP  0,4
+         SR    R7,R7            CLEAR RECOVERY FLAG IS SET
+         ST    R7,RECOVRPL     
+         LM    R4,R7,UPVSAV
+         BR    R4
+UPVSAV   DS    4F
+         SPACE 2
+* -----------------------------------------------------------
+* GETSPARE: Find the next available scratch volser to use.
+*  note: also modifies R7 and R14 but we don't need to 
+*        save those.
+* Will try to find a spare tape in the TAPVOLS file, if it
+* can we will update the record in the VSAM file and return
+* the volser found. If we cannot the VSAM EOF exit will take
+* the program to VSEOF which will WTOR for a volser to use.
+* -----------------------------------------------------------
+GETSPARE ST    R4,GSSAVER4
+* SEEK TO THE START OF THE FILE
+         MVC   $IOAREA(6),SPACES6         NULL VOLSER
+         BAL   R14,MODIFY
+         MODCB RPL=(R2),OPTCD=(KGE)
+         LA    R7,WTORONER    GO TO MANUAL PROMPT IF I-O ERR
+         ST    R7,RECOVRPL
+         POINT RPL=(R2)
+* START READING
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         BAL   R14,MODIFY
+         GET   RPL=(R2)
+         CLC   $IOAREA+16(5),SPAREFLG  # EXP-DATE FIELD
+         BE    GETSPAR2
+GETSPAR1 BAL   R14,MODIFY    LOOP FOR THE REST
+         GET   RPL=(R2)
+         CLC   $IOAREA+16(5),SPAREFLG
+         BNE   GETSPAR1
+* WE FOUND A SCRATCH VOLSER, PASS IT BACK 
+GETSPAR2 EQU   *                                                 
+         MVC   VOLSER(L'VOLSER),$IOAREA
+         L     R4,GSSAVER4
+         BR    R4
+GSSAVER4 DS    1F
+         EJECT
+*-----------------------------------------------------------*
+* OPENKSDS                                                  *
+* OPEN THE VSAM FILE FOR KSDS, INPUT/OUTPUT                 *
+*-----------------------------------------------------------*
+OPENKSDS DS    0F
+         ST    R4,SAVER4
+* RESET FIELDS USED FOR STATUS INFORMATION
+         XC    $RC,$RC             CLEAR RETURN CODE
+         XC    $VSRC,$VSRC         CLEAR VSAM RETURN CODE
+         XC    $VSFUNC,$VSFUNC     CLEAR VSAM FUNCTION CODE
+         XC    $VSREAS,$VSREAS     CLEAR VSAM REASON CODE
+         L     R10,=A($IOAREA)     THE IO BUFFER AREA
+         SR    R7,R7               CLEAR ADDR FOR STORE
+         ST    R7,RECOVRPL         NO RPL FIXUPS NEEDED YET
+         LA    R7,DBSLEN           SET RECLEN VALUE
+         STH   R7,$RECLEN
+         LA    R7,VOLSRLEN         SET KEYLEN VALUE (VOLSER)
+         STH   R7,$KEYLEN
+         SR    R7,R7               CLEAR AGAIN
+* BUILD ACCESS CONTROL BLOCK USING MODEL
+         MVC   IFGACB($ACBLEN),ACBMODEL
+         LA    R2,IFGACB
+         MODCB ACB=(R2),DDNAME=(*,$DDNAME)
+* BUILD REQUEST PARAMETER LIST USING MODEL
+         MVC   IFGRPL($RPLLEN),RPLMODEL
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),ACB=(S,IFGACB)
+* ACCESS MODE TO BE USED, KSDS, IN R7
+         SR    R7,R7
+         LA    R7,18
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(KEY)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(KEY)
+* USE DYNAMIC ACCESS FOR THE VSAM FILE
+         LA    R7,6(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(SEQ,DIR)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(SEQ)
+* FILE TO BE OPENED FOR INPUT/OUTPUT
+         LA    R7,2(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(OUT)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+* DO THE REST OF THE REQUIRED RPL MODS AND OPEN THE DS
+         BAL   R14,MODIFY
+         LA    R2,IFGACB
+         OPEN  ((R2))
+*        R15 IS CHECKED BY THE CALLER FOR SUCCESS
+* OK, DONE HERE
+OPENKSDX L     R4,SAVER4
+         BR    R4
+         EJECT
+*-----------------------------------------------------------*
+* CALLED TO SET ALL THE DEFAULT ACB/RPL VALUES. SHOULD BE   *
+* CALLED PRIOR TO EACH VSAM REQUEST.                        *
+*-----------------------------------------------------------*
+MODIFY   DS    0F
+         ST    R14,SAVER14       SAVE RETURN ADDRESS
+         LA    R2,IFGRPL         ADDRESS GENERATED BY RPL
+         SR    R3,R3             CLEAR R3 TO LOAD
+*         LA    R3,DBSLEN    MAY BE CHANGED BY THE READ, USE BELOW
+*                            SO WE UPDATE ONLY WHAT WE READ
+         SR    R3,R3
+         LH    R3,$RECLEN        LENGTH OF RECORD
+         SR    R4,R4             CLEAR R4 FOR KEY ADDRESS
+         SR    R5,R5             CLEAR R5 FOR KEY LENGTH
+         LA    R4,$RRN           ADDRESS RELATIVE RECORD NUM
+         LH    R4,$RKP           LOAD KEY OFFSET
+         AR    R4,R10            ADD RECORD ADDRESS
+         LH    R5,$KEYLEN        LOAD KEY LENGTH
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10),           X
+               ARG=(R4),KEYLEN=(R5)
+         L     R14,SAVER14       RELOAD RETURN ADDRESS
+         BR    R14
+SAVER14  DS    1F                SAVE LOCAL RETURN ADDRESS
+         SPACE 2
+         EJECT
+*-----------------------------------------------------------*
+* ERROR DURING VSAM PROCESSING. THE EXLST BROUGHT US HERE.  *
+*-----------------------------------------------------------*
+VSERROR  DS    0F
+         CLI   VSOPCODE,C'M'    IF A MANUAL VOLSER ENTERED THEN THE
+*                               MOST LIKELY CAUSE OF COMING HERE IS
+*                               THAT THE VOLSER IS NOT IN THE FILE
+*                               OF TAPES WE MANAGE, SO IF OPCODE=M
+*                               JUST LEAVE HERE AS AN OPERATOR
+*                               OVERRIDE IS NOT AN ERROR.
+         BE    VSERRORX
+         SPACE 1
+         LA    R2,IFGRPL
+         SHOWCB RPL=(R2),FIELDS=FDBK,AREA=FEEDBACK,LENGTH=4
+         ICM   R5,B'1111',FEEDBACK RETRIEVE FEEDBACK CODES
+         STCM  R5,B'0100',$VSRC+1   AND VSAM RETURN CODE
+         STCM  R5,B'0010',$VSFUNC+1 AND VSAM FUNCTION CODE
+         STCM  R5,B'0001',$VSREAS+1 AND VSAM REASON CODE
+         SPACE 1
+* WTO OUT THE ERROR WE GOT, ONLY THE REASON CODE
+         STM   R5,R6,VSERSAV2
+         XR    R5,R5
+         LH    R5,$VSREAS          Reason= bit
+         C     R5,=F'16'           RECORD NOT FOUND ACCEPTABLE,
+         BNE   VSERRWT1            ANYTHING ELSE SKIP TO ERROR WTO
+*        IF NOT FOUND THEN A TAPE WE DON'T MANAGE
+         MVC   VSERRNF+31(6),VOLSER
+         MVC   VSERRNF+41(3),DEVICE
+         MVC   VSERRNF+50(8),JOBNAME
+VSERRNF  WTO   'TAP005A MANUALLY MOUNT vvvvvv ON cuu, JOB JJJJJJJJ',   X
+               DESC=(2)
+         B     EXIT                JUST EXIT FROM HERE   
+VSERRWT1 CVD   R5,DECIMWRK
+         UNPK  DECIMWRK(3),DECIMWRK+6(2)
+         OI    DECIMWRK+2,C'0' 
+         MVC   VSERRWTO+34(3),DECIMWRK
+VSERRWTO WTO   'VSAM I-O ERR, REASON CODE=nnn.'
+VSERRWSK LM    R5,R6,VSERSAV2
+         SPACE 1
+* YES WE NEED THE CHECKS BELOW, OR WE COULD AT A MINIMUM 
+* GO INTO AN ENDLESS LOOP TRYING TO CLOSE THE FILE IS WE
+* GET ERRORS ON THAT (RECOVRPL WILL JUMP TO EXIT1 IN THAT CASE)
+VSERRORX L     R7,RECOVRPL   ANY ERROR HANDLER ADDR TO GO TO ?
+         LTR   R7,R7
+         BZ    EXIT          NO, JUST EXIT
+         SR    R4,R4         YES, CLEAR ADDR TO AVOID LOOPS AND JUMP
+         ST    R4,RECOVRPL
+         BR    R7           
+         SPACE 1
+VSERSAV2 DS    2F
+         SPACE 2   
+*-----------------------------------------------------------*
+* EOF ON VSAM FILE, NO SCRATCH TAPES WERE FOUND ?           *
+*-----------------------------------------------------------*
+VSEOF    DS    0F
+         CLI   VSOPCODE,C'S'       SEARCHING FOR SCRATCH ?
+         BE    WTORPROC            YES, NO SCRATCH TAPES 
+*                                  FOUND SO WTOR FOR ONE
+         B     EXIT                ELSE JUST EXIT 
+         EJECT
+* -----------------------------------------------------------
+* GETVOLSZ
+* Added now we can have a variable volser size. Called to
+* determine the exact length so we know where to append 
+* any file extension to.
+* -----------------------------------------------------------
+GETVOLSZ DS    0F
+         STM   R4,R5,GETVOLSA
+         LA    R4,VOLSER
+         SR    R5,R5    
+GETVOLZ1 CLI   0(R4),C' '
+         BE    GETVOLZ2
+         A     R5,FULLONE
+         C     R5,=F'6'    CAN ONLY BE 6 BYTES MAX                   
+         BNL   GETVOLZ2
+         A     R4,FULLONE
+         B     GETVOLZ1
+GETVOLZ2 ST    R5,VOLSERL
+         LM    R4,R5,GETVOLSA
+         BR    R4
+GETVOLSA DS    2F
+         EJECT
+         LTORG
+* -----------------------------------------------------------
+* DATA AREAS
+* -----------------------------------------------------------
+SAVEAREA DS    18F
+SAVER4   DS    1F
+SAVESVCR DS    2F       SAVE AREA WHEN I NEED SVC34 
+FULL128  DC    F'128'
+VSOPCODE DC    C'-'     ANYTHING BUT S TO START WITH
+PRIVAT   DC    CL6'PRIVAT'    VOLSER OS USES FOR SCRATCH RQST
+RECDATA  DC    CL27' '  PARM FIELD SAVED, EXPECT 27 BYTES
+DEVREC   DS    CL80' '
+         SPACE 1
+VOLSER   DC    CL6' '   DC - START AS SPACES, WE MAY UPDATE LESS
+SPACES6  DC    CL6'      '  USED FOR NULL VOLSER CHECKS
+DEVICE   DS    CL3      DS - WE UPDATE THE FULL FIELD
+JOBNAME  DC    CL8' '   DC - START AS SPACES, WE MAY UPDATE LESS
+DEVFOUND DS    CL1
+ZERO     DC    CL1'0'
+ONE      DC    CL1'1'
+SPAREFLG DC    CL5'00000'  ZEROS INDICATES A SPARE TAPE
+FULLZERO DC    F'0'
+VOLSERL  DC    F'6'        DEFAULT, REPLACE WITH PARSED LEN
+CANCEL   DC    CL6'CANCEL' USED IN WTOR REPLY TEST     
+SECS6    DC    CL8'00000600'    SIX SECONDS, FOR STIMER
+*
+         SPACE 2
+* MESSAGE NUMBERS HERE AS LTORG POOL IS BLOWING OUT
+*     RR IEC701D M CUU,VOLUME TO BE LABELED VVVVVV (from MMPF)
+MIEC701D DC    CL8'IEC701D '
+*     IEC501A M CUU,VVVVVV,SL,6250 BPI,JJJJJJJJ,STEPNAME
+MIEC501A DC    CL8'IEC501A '
+* IEF233A M CUU,VVVVVV,,JJJJJJJJ,STEPNAME    <-- to read
+* IEF233A M CUU,PRIVAT,SL,JJJJJJJJ,STEPNAME  <-- to write
+MIEF233A DC    CL8'IEF233A '
+*
+         SPACE 2
+* USED IN THE SVC34 COMMAND TO REPLY TO A TAPE LABEL WTOR
+CMD701D  DC 0D'0',XL2'0C',XL2'00',C'R nn,M    ' 
+         SPACE 2
+* USED IN THE SVC34 COMMAND TO CANCEl A JOB IF NO SCRATCH CARTS ARE
+* AVAILABLE FOR IT AND THE OPERATOR REPLIED CANCLEL TO THE SELECT
+* TAPE VOLUME PROMPT
+CMDCANCL DC 0D'0',XL2'0F',XL2'00',C'C jjjjjjjj  ' 
+         SPACE 2
+* -----------------------------------------------------------
+* USED BY THE DATE OBTAIN AND ADD CODE
+* -----------------------------------------------------------
+DECIMWRK DC    D'0'
+TXTDAT   DS    CL5                        - - - added
+FULL1000 DC    F'1000'                    CONSTANT
+FULL14   DC    F'14'
+FULLONE  DC    F'1'
+         DS    0D                         ALIGNMENT
+PDATDBL  DC    XL4'0'
+PDAT     DC    PL4'0'                     PACKED DATE FORMAT 00YYDDDF
+CURDMSK  DC    CL1'0'                     FILL CHAR
+CURDAT   DC    XL6'21204B202020'          CURRENT DATE   (YY.DDD)
+YEAREND  DC    F'365'                     END OF YEAR
+LEAPDAYS DC    F'366'                     NO OF DAYS IN A LEAP YEAR
+DATENOW  DS    CL5                        YYDDD
+DATEEXP  DS    CL5                        YYDDD, as above +14 days
+EXPAMNT  DC    F'14'                      AMOUNT (DAYS) TO + TO EXPIRE
+         SPACE 2
+*
+* DIAG8 BLOCKS
+*
+         LTORG
+CMDDVINI DS    0F
+         DC    AL2(33)      33 BYTES IN COMMAND
+         DC    CL34'DEVINIT xxx tapes/           ' pad to even num
+*                                     xxxxxx.aws inserted after /
+         SPACE 2
+         PRINT NOGEN
+*
+* FILE DCB'S AND ACB'S
+*
+*-----------------------------------------------------------*
+* VSAM DATA AREAS USED                                      *
+*-----------------------------------------------------------*
+         LTORG
+ACBMODEL ACB  DDNAME=VSAMDD,EXLST=EXL001
+RPLMODEL RPL  ACB=ACBMODEL
+EXL001   EXLST LERAD=VSERROR,SYNAD=VSERROR,EODAD=VSEOF
+         SPACE 2
+         LTORG
+VOLSRLEN EQU  6
+FEEDBACK DS   0F
+RECOVRPL DS   0F
+$RC      DS   H
+$VSRC    DS   H
+$VSFUNC  DS   H
+$VSREAS  DS   H
+$DDNAME  DC   CL8'TAPEVOLS'        DDNAME USED
+$RECLEN  DS   H
+$RKP     DS   H
+$KEYLEN  DS   H
+$RRN     EQU  $RKP
+         PRINT GEN
+         DBREC
+         PRINT NOGEN
+         SPACE 2
+* THE ACTUAL ACB AND RPL USED                              
+         IFGACB DSECT=NO
+$ACBLEN  EQU    (*-IFGACB)
+         IFGRPL DSECT=NO
+$RPLLEN  EQU    (*-IFGRPL)
+         SPACE 1
+* THE IO RECORD/DATA AREA, ADDRESS USING R10
+$IOAREA  DS   CL200' '  OUR VSAM FILE ONLY HAS 132 BYTE RECORDS
+*                       BUT WE NEED A LARGER BUFFER AREA
+         SPACE 2
+* -----------------------------------------------------------
+*           START OF WTOR SPECIFIC STUFF
+* If no scratch tapes were found in the VSAM file then we
+* must prompt the operators for one to use.
+* If the operator replies witha volser we continue on and
+* use it. 
+* If the operator replies cancel, we attampt to cancel the
+* job that wanted the tape before we exit, that will probably
+* fail if there are multiple jobs with the same name on the
+* input queue but should work fine normally.
+* -----------------------------------------------------------
+SAVEWTOR DS    1F
+WTORECB  DS    1F
+WTORREPL DC    CL6' '
+WTORONER WTO   'VSAM I-O ERROR'
+WTORPROC WTO   'TAP096W *** NO SCRATCH TAPES ARE AVAILABLE ***'
+         MVC   WTORTEXT+57(8),JOBNAME    
+         XC    WTORECB,WTORECB
+WTORTEXT WTOR  'TAP097A ENTER TAPE VOLSER TO USE FOR JOB xxxxxxxx',    X
+               WTORREPL,L'WTORREPL,WTORECB
+         WAIT  1,ECB=WTORECB
+         CLC   WTORREPL(6),CANCEL         IF NOT CANCEL THEN CONTINUE
+         BNE   WTORCONT
+         MVC   CMDCANCL+6(8),JOBNAME      THE JOBNAME TO CANCEL
+         STM   R0,R1,SAVESVCR             SAVE REGS AND ISSUE CANCEL
+         MODESET KEY=ZERO,MODE=SUP
+         SR   R1,R1
+         LA   R1,CMDCANCL
+         SR   R0,R0
+         SVC  34          ISSUE COMMAND SPECIFIED
+         MODESET KEY=NZERO,MODE=PROB
+         MVC   WTOCAN+30(8),JOBNAME
+WTOCAN   WTO   'TAP007I CANCELLED JOB jjjjjjjj'
+         LM    R0,R1,SAVESVCR
+         B     EXIT                       CANCELLED, WE ARE DONE
+WTORCONT MVC   VOLSER(6),SPACES6          SPACE OVER THE PRIVAT
+         MVC   VOLSER(L'VOLSER),WTORREPL  SAVE THE VOLSER FOR MAINLINE
+         MVC   WTORTAPE+27(6),VOLSER      DEBUGGING, BUT LEAVE IN
+WTORTAPE WTO   'TAP008I USING TAPE vvvvvv'
+         MVI   VSOPCODE,C'M'       MANUAL FLAG, DONT ERROR IF LATER 
+*                                  VSAM FILE UPDATE FAILS AS THIS TAPE
+*                                  MAY NOT BE IN OUR DBS.
+         B     HERCCMD         USE THIS VOLSER FOR MOUNT AND UPDATE
+* -----------------------------------------------------------
+*              END OF WTOR SPECIFIC STUFF
+* -----------------------------------------------------------
+         EJECT
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+         END
+ZZ
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB(TAPEMAN3),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ SETCODE AC(1)
+ INCLUDE SYSLMOD(TAPEMAN3)
+ ENTRY TAPEMAN3
+ NAME TAPEMAN3(R)
+/*
+//
+./ ADD NAME=TAPEMCUU
+//MARKASM  JOB (0),'TAPEMCUU',CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  DATA,DLM=ZZ
+* -------------------------------------------------------------------
+*
+* TAPEMCUU:
+*
+* A simple interface to allow a batch job to request a scratch tape
+* mount on a specific device. Origionally issued a 'S TAPEMAN' with
+* the mountscratch data but that proc was obsoleted in TAPEMAN3 so
+* this needs to be run outside the batch job so the step to request
+* the tape starts running and asks for the tape mount before TAPEMCUU
+* performs the tape mount... see the example below.
+*
+* The program (via tapeman3) aloocates a scratch tape, waits 30
+* seconds, and then mounts the tape on the drive selected.
+*
+* ONLY TO BE USED WHEN AUTOMATION HAS BEEN SHUTDOWN. Intended use
+* is only to backup system libraries when the system is in a fairly
+* quiesced state (ie: no automation running to do the mount so the
+* batch job needs to do it itself this way).
+* WARNING: IF RUN WITH AUTOMATION RUNNING THEN AUTOMATION WILL
+*          DO A MOUNT WHILE THE DRIVE IS IN USE, CAUSING ALL SORTS
+*          OF PROBLEMS...try it, master console goes into a
+*          hardware recovery screen instead of being a console.
+*
+* You are expected to customise the section that checks for valid
+* tape unit CUU entries. The sloppy check provided allows CUU of 48x.
+*
+* Example: using unit 487, note the use of unit=CUU rather than
+*          unit=tape in step2.
+*          you must change the tapevols dd dataset name to the
+*          name of your tape database of course.
+*
+*          //DEMOJOB  JOB  (0),'DEMO TAPEMCUU',CLASS=A,MSGCLASS=A
+*          //*
+*          //* OOPS, SEE 
+*          //* WE MUST RUN TAPEMCUU OUTSIDE THE CURENT BATCH JOB
+*          //* NOW THAE WE HAVE OBSOLETED THE TAPEMAN PROC AND
+*          //* LINK TO TAPEMAN3 DIRECTLY
+*          //*
+*          //STEP1    EXEC PGM=IEBGENER
+*          //SYSIN    DD   DUMMY
+*          //SYSPRINT DD   SYSOUT=*
+*          //SYSUT2   DD   SYSOUT=(A,INTRDR)
+*          //SYSUT1   DD   DATA,DLM=ZZ
+*          //TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=A
+*          //STEPMCUU EXEC PGM=TAPEMCUU,PARM='487'
+*          //TAPEVOLS DD DISP=OLD,
+*          //          DSN=VSAM.INSTALL.TAPEMAN33.VVDS.VOLSERS
+*          //
+*          ZZ
+*          //*
+*          //* RUN THE NEXT STEP IMMEDIATELY TO REQUEST THE
+*          //* TAPE MOUNT, THEN WHEN THE TAPEMCUU 30SEC TIMER
+*          //* EXPIRES AND MOUNTS THE TAPE WE WILL USE IT
+*          //*
+*          //STEP2 EXEC PGM=IEBCOPY
+*          //SYSPRINT DD SYSOUT=*
+*          //SYSUT1   DD DISP=SHR,DSN=SYSPROG.LIB.USERCAT.JCL
+*          //SYSUT2   DD  DISP=(NEW,KEEP),UNIT=487,LABEL=(1,SL),
+*          //       DSN=SYSPROG.LIB.USERCAT.JCL,
+*          //       DCB=*.SYSUT1
+*          //SYSIN    DD  *
+*           COPY INDD=SYSUT1,OUTDD=SYSUT2
+*          /*
+*
+* Known Bugs.
+*   (1) The WTO messages from herccmd (which is invoked by tapeman3)
+*       generated to the console contain rubbish in the tape name
+*       field... however a correct scratch tape has been selected
+*       and mounted as shown in the herccmd command issued WTO and
+*       verified by a fuser against the tape file (as mvs38j will
+*       not show the volser as mounted simply because a tape is put
+*       into the drive can't check what mvs thinks.
+*       But functionally it works as intended so not an important
+*       bug. Documented simply as all bugs should be.
+*   (2) See 2012/05/06 changes/comments in change history below.
+*
+* Changes.
+* MID: 2013/03/24 - Replaced code that used to SVC34 a 's tapeman'
+*                   request with code to link directly to TAPEMAN3
+*                   as the tapeman task hasn't been available since
+*                   version3 was released.
+*      2012/05/06   OOPS... ALSO IS BAD. Because now we link
+*                   directly to TAPEMAN3 it is not a seperate task
+*                   sleeping for 30secs, it is us... so the tape
+*                   gets mounted before the next step starts, so the
+*                   next step unloads the premounted tape and we get
+*                   another mount request.
+*                   So you can still use this but it has to be sent
+*                   to intrdr to run as a seperate job so step2 can
+*                   start before step1 (tapemcuu) expires its timer.
+*                   The example above has been updated to show that.
+*
+* -------------------------------------------------------------------
+TAPEMCUU CSECT   
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA          
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15  
+*
+* ---- ENSURE WE HAVE A PARM, SAVE FIRST THREE BYTES AS THE CUU
+         L     R1,0(,R1)           POINT TO PARM
+         LH    R0,0(,R1)           GET LENGTH OF PARM
+         LTR   R0,R0               IF ZERO THEN NO PARM
+         BZ    NOPARM
+         CH    R0,=H'3'            IS PARM LONG ENOUGH FOR CUU?
+         BL    BADPARM             NO, NOT A VALID PARM
+         LA    R1,2(,R1)           POINT TO PARM DATA
+*
+* ------------- >>>>>> CUSTOMISE <<<<<< -------------------------
+         CLC   0(2,R1),=CL2'48'   ALL TK3 TAPE DRIVES ARE CUU=48u
+* ------------- >>>>>> END CUSTOM <<<<<< -------------------------
+         BNE   BADCUU               NOT A TAPE VALID DRIVE CUU
+         MVC   SYSCMDTX+13(3),0(R1) PUT CUU FROM THE PARM IN PARMFLD
+* ---- GET THE BATCH JOB NAME FROM THE TASK CONTROL BLOCK
+         LA    R5,16              ADDR OF CVT POINTER
+         L     R6,0(R5)           ADDR OF CVT
+         L     R5,0(R6)           ADDR OF TCBS
+         L     R6,4(R5)           ADDR OF 2ND TCB
+         L     R5,180(R6)         ADDR OF JSCB
+         L     R6,260(R5)         ADDR OF JCT PREFIX
+         LA    R6,24(R6)          ADDR OF JOBNAME IN JCT
+         MVC   SYSCMDTX+17(8),0(R6) STORE THE JOBNAME IN PARMFLD
+         MVC   LNKPRME2+16(8),0(R6) AND IN ERROR MSG IF NEEDED
+         L     R6,=F'25'          SET LENGTH OR PARMFLD
+         STH   R6,SYSCMDLN
+* --- fidling to setup registers for a safe link, and do the link
+         L     R6,SAVEAREA+4       -- save pointer to caller savearea
+         ST    R6,R13CALLR         -- ...
+         ST    R13,SAVEAREA+4          STORE OUR R13 IN SAVE AREA
+         LA    R13,SAVEAREA            AND LINKED MODULE IS TO USE OURS
+         LINK  EPLOC=LNKPROG,ERRET=LNKPRME1,PARAM=(SYSCMD),VL=1
+         L     R13,SAVEAREA+4          GET OURS BACK
+* --- get our R13 back or we will abend
+         L     R6,R13CALLR         -- restore origional pointer
+         ST    R6,SAVEAREA+4       -- ...
+         B     ENDMOUNT            -- DONE, EXIT NOW --
+LNKPRME1 MVC   LNKPRME2+37(8),LNKPROG
+LNKPRME2 WTO 'MID006E ........:LINK ERROR, ........ NOT FOUND'
+         B     ENDMOUNT            -- DONE, EXIT NOW --
+R13CALLR DS    F                   TO SAVE R13 FROM SAVE AREA WHEN I
+*                                    NEED TO ALTER IT DURING LINK
+LNKPROG  DC    CL8'TAPEMAN3'
+SYSCMD   EQU   *
+SYSCMDLN DC    CL2'  '                            PARMLEN, 2 BYTES
+SYSCMDTX DC    CL25'MOUNTSCRATCH xxx jjjjjjjj'    PARM TEXT
+ENDMOUNT CNOP  0,4
+* **************************************************************
+* END OF CHANGED FOR TAPEMAN3
+* **************************************************************
+* EXIT NOW
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+* ---- BAD PARAMETER ABENDS ALL HERE        
+NOPARM   WTO   'NO PARM FIELD PROVIDED TO TAPEMCUU'
+         B     ABEND100
+BADPARM  WTO   'TAPEMCUU:PARM PROVIDED TO TAPEMCUU TO SHORT FOR A CUU'
+         B     ABEND100
+BADCUU   MVC   BADCUU1+17(3),0(R1)                                      
+BADCUU1  WTO   'TAPEMCUU:cuu IS NOT AN AUTHORISED TAPE UNIT'
+ABEND100 ABEND 100
+         EJECT
+         LTORG
+SAVEAREA DS    18F                SAVEAREA FOR MAIN PROGRAM
+JOBNAME  DC    CL8'        '
+DEVICE   DC    CL3'CUU'
+*
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+ZZ
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB(TAPEMCUU),
+//    DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ SETCODE AC(1)
+ INCLUDE SYSLMOD(TAPEMCUU)
+ ENTRY TAPEMCUU
+ NAME TAPEMCUU(R)
+/*
+//
+./ ADD NAME=TAPEMDES
+//MARKASM  JOB (0),'TAPEMDES',CLASS=A,MSGCLASS=A,        
+//   MSGLEVEL=(1,1)                                               
+//ASM     EXEC PGM=IFOX00,                                         
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)                                       
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB                             
+//         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330                         
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330                         
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330                         
+//SYSTERM  DD  SYSOUT=*                                             
+//SYSPRINT DD  SYSOUT=*                                             
+//SYSIN    DD  *                                                    
+         PRINT NOGEN
+* ********************************************************************
+*                                                                    *
+* TAPEMDES - TAPEMAN UTILITY                                         *
+*                                                                    *
+* USED TO SLAP A DESCRIPTION INTO THE VSAM RECORD ENTRY              *
+* FOR A TAPE VOLSER.                                                 *
+*                                                                    *
+* THIS IS DESIGNED TO BE CALLED FROM THE BATCH JOB DOING             *
+* THE TAPE BACKUP AND EXPECTS TO GET ITS TAPE VOLUME VOLSER FROM     *
+* READING THE FCB OF THE DD 'INPUT', THIS WOULD NORMALLY BE A        *
+* REFERBACK TO THE STEP THAT ACTUALLY ALLOCATED THE TAPE AND DID     *
+* THE BACKUP.                                                        *
+* THE DESCRIPTION IS FREE-FORM 44 BYTES (FILENAME SIZE), PROVIDED    *
+* IN THE SYSIN FILE. I USE IT IN MY BACKUP JOBS TO SET THE           *
+* DESCRIPTION TO THE NAME OF THE FILE (GDG) THAT HAS THE BACKUP      *
+* LISTING FOR THE TAPE (SEE THE SAMPLE BACKUP JOB PROVIDED FOR       *
+* HOW I DO THAT).                                                    *
+*                                                                    *
+* IT MAY BE RUN WITHOUT A PHYSICAL TAPE IF NEEDED BY OMITTING        *
+* THE INPUT DD AND PROVIDING A VOLSER IN THE PARM FIELD INSTEAD.     *
+* THIS CAN BE USED TO CUSTOMISE DESCRIPTIONS AS NEEDED.              *
+*                                                                    *
+* JCL REQUIRED...                                                    *
+*   //STEPX    EXEC PGM=TAPEMDES                                     *
+*   //TAPEVOLS DD   DISP=SHR,DSN=...what you called it...            *
+*   //INPUT    DD   UNIT=TAPE,VOL=REF=earlierstep,DISP=OLD           *
+*   //SYSIN    DD   *                                                *
+*   NEW DESCRIPTION                                                  *
+*   /*                                                               *
+* OR to avoid mounting the tape if you know what the volser is       *
+*   //STEPX    EXEC PGM=TAPEMDES,PARM='vvvvvv'                       *
+*   //TAPEVOLS DD   DISP=SHR,DSN=...what you called it...            *
+*   //SYSIN    DD   *                                                *
+*   NEW DESCRIPTION                                                  *
+*   /*                                                               *
+*                                                                    *
+* CHANGE HISTORY                                                     *
+*   2006/07/27 - Created to be used to populate the new description  *
+*                field just added to the database. I will use this   *
+*                to record the disk based dataset name that holds    *
+*                the backup listing for the tape.                    *
+*                Why?, so I have an easy way of finding the backup   *
+*                listing for a specific tape (and I will be using    *
+*                this info in an automated restore clist, yes this   *
+*                change is to make my life easier.                   *
+*                                                                    *
+* ********************************************************************
+TAPEMDES CSECT                                                 
+         STM   R14,R12,12(13)         , standard program entry 
+         BALR  R12,R0        
+         USING *,R12         
+         LA    R15,SAVEAREA  
+         ST    R15,8(R13)    
+         ST    R13,4(R15)    
+         LR    R13,R15       
+*
+* SEE IF THERE IS A PARM FIRST, BEFORE WE START TRASHING ANY
+* OF THE REGISTERS IN ANY SYSTEM CALLS
+* LOTS OF MUCKING ABOUT, I MAY BE CALLING THIS AS AN EMBEDDED
+* MODULE AT SOME POINT.
+*
+         L     15,4(13)  GET ADDRESS OF THE PREVIOUS SAVE AREA    
+PARMPREV L     14,4(15)  GET ADDRESS OF THE NEXTPREVIOUS SAVE AREA
+         LTR   14,14     ARE WE IN THE O/S SAVEAREA?      
+         BZ    PARMTEST  YES GO TEST PARM                 
+         LR    15,14   NO, MAKE 15 = 14 AND BE READY FOR NEXT TEST
+         B     PARMPREV      BRANCH BACK TO THE LOOP    
+PARMTEST L     14,24(15)  WE ARE NOW IN O/S. GOODY GOODY 
+         L     14,0(14)   LOAD IN THE ADDRESS OF THE ADDRESS
+         SR    1,1                      
+         SR    15,15                    
+         LH    15,0(14)   PUT COUNT OF PARM INTO R15
+         LTR   15,15   IS COUNT OF PARM= 0?
+         BZ    CHKTAPE    NO PARM, CARRY ON
+         MVI   PRMAVAIL,C'Y'    YES, AVAILABLE IF NEEDED
+         LA    1,2(14)            
+         MVC   PRMVALU(6),0(R1) VALUE SAVED HERE
+         EJECT
+*
+* SEE IF A TAPE VOLUME IS MOUNTED, AND OBTAIN THE VOLSER OFF
+* THE TAPE IF IT IS MOUNTED.
+*
+CHKTAPE  RDJFCB (INPUT)                READ INPUT TAPE'S JFCB
+         LTR   R15,R15                 SEE IF DD STATEMENT THERE
+         BNE   USEPARM                 NOT THERE, CHECK PARM
+         MVC   TVOLSER,JFCBIN+JFCBVOLS ELSE USE VOLSER ON TAPE
+         MVC   JFCLTSV,JFCBIN+JFCBLTYP SAVE INPUT TAPE'S LABEL TYPE
+         TM    JFCLTSV,X'01'           SEE IF NL OR LTM SPECIFIED
+         BO    NLERROR                 YES, WHATS GOING ON
+         CLI   JFCLTSV,X'10'           SEE IF BLP SPECIFIED
+         BO    NLERROR                 YES, WHATS GOING ON
+         B     FROMFCB
+NLERROR  WTO   'TAPM001E TAPE ALLOCATED TO INPUT IS NL/BLP'
+         WTO   'TAPM002E NO DESCRIPTION UPDATE PERFORMED'
+         B     EXIT00                  NOT FATAL, JUST NO UPDATE
+*
+* IF NO TAPE VOLUME WAS MOUNTED, HAVE TO CHECK THE PARM
+* FIELD TO SEE IF ANYTHING IS PRESENT THERE.
+*
+USEPARM  CLI   PRMAVAIL,C'Y'
+         BNE   NOPARM
+         MVC   TVOLSER,PRMVALU
+         B     PROCEED
+NOPARM   WTO   'TAPM004E FATAL, NO TAPE MOUNTED AND NO PARM'
+         WTO   'TAPM005E NO VOLSER SELECTED TO UPDATE'
+         B     EXIT00                  NOT FATAL, JUST NO UPDATE
+FROMFCB  CLI   PRMAVAIL,C'Y'
+         BNE   PROCEED
+         WTO   'TAPM003W PARM IGNORED, USING VOLSER FROM FCB'
+*
+* WE HAVE A TAPE VOLSER NOW, WHETHER FROM THE RDJFCB OR IF NO
+* TAPE ALLOCATED TO THE DD THEN FROM THE PARM FIELD. THE NEXT
+* STEP IS TO GRAB THE DESCRIPTION FROM THE SYSIN FILE.
+*
+PROCEED  EQU   *
+         OPEN  (SYSIN,(INPUT))
+         GET   SYSIN
+         MVC   SYSINCRD,0(R1)    WE ONLY EXPECT ONE CARD
+EOFSYSIN CLOSE (SYSIN)
+         EJECT
+*
+* OK, WE HAVE A TAPE VOLSER AND A NEW DESCRIPTION, SO
+* WE NOW NEED TO UPDATE THE VSAM FILE ENTRY.
+*
+*-----------------------------------------------------------*
+* OPEN OUR VSAM FILE, WE WANT TO UPDATE IT                  *
+*-----------------------------------------------------------*
+         LA    R7,EXIT00            SET VSAM ERROR HANDLING TO EXIT
+         ST    R7,RECOVRPL          THIS PROGRAM ON AN ERROR       
+* RESET FIELDS USED FOR STATUS INFORMATION
+         XC    $RC,$RC             CLEAR RETURN CODE
+         XC    $VSRC,$VSRC         CLEAR VSAM RETURN CODE
+         XC    $VSFUNC,$VSFUNC     CLEAR VSAM FUNCTION CODE
+         XC    $VSREAS,$VSREAS     CLEAR VSAM REASON CODE
+         L     R10,=A($IOAREA)     THE IO BUFFER AREA
+         LA    R7,DBSLEN           SET RECLEN VALUE, ITS AN EQU VALUE
+*                                  SO LA IS OK, L GIVES ALIGNMENT ERR
+*
+         STH   R7,$RECLEN
+         LA    R7,VOLSRLEN         SET KEYLEN VALUE (VOLSER)
+         STH   R7,$KEYLEN
+         SR    R7,R7               CLEAR AGAIN
+* BUILD ACCESS CONTROL BLOCK USING MODEL
+         MVC   IFGACB($ACBLEN),ACBMODEL
+         LA    R2,IFGACB
+         MODCB ACB=(R2),DDNAME=(*,$DDNAME)
+* BUILD REQUEST PARAMETER LIST USING MODEL
+         MVC   IFGRPL($RPLLEN),RPLMODEL
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),ACB=(S,IFGACB)
+* ACCESS MODE TO BE USED, KSDS, IN R7
+         SR    R7,R7
+         LA    R7,18
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(KEY)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(KEY)
+* USE DYNAMIC ACCESS FOR THE VSAM FILE
+         LA    R7,6(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(SEQ,DIR)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(SEQ)
+* FILE TO BE OPENED FOR INPUT/OUTPUT
+         LA    R7,2(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(OUT)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+* DO THE REST OF THE REQUIRED RPL MODS AND OPEN THE DS
+         BAL   R14,MODIFY
+         LA    R2,IFGACB
+         OPEN  ((R2))
+*        R15 HAS WHETHER WE MANAGED TO OPEN IT OR NOT
+         LTR   R15,R15
+         BZ    OPENEDOK
+         WTO   'TAPEM001E *ERROR* CANNOT OPEN CATALOG'
+         B     EXIT00
+*-----------------------------------------------------------*
+* WAS OPENED OK, READ THE RECORD USING THE EXACT KEY
+*-----------------------------------------------------------*
+OPENEDOK LA    R7,EXITV             SET VSAM ERROR HANDLING TO
+         ST    R7,RECOVRPL          JUMP TO CLOSING THE FILE     
+         MVC   $IOAREA(VOLSRLEN),TVOLSER
+         BAL   R14,MODIFY
+* KEYPOSITION
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         POINT RPL=(R2)
+         MODCB RPL=(R2),OPTCD=(KEQ)
+* READ, ANY ERRORS ARE HANDLED BY THE ERROR HANDLER
+         BAL   R14,MODIFY
+         GET   RPL=(R2)
+         SHOWCB RPL=(R2),FIELDS=RECLEN,AREA=FEEDBACK,LENGTH=4
+         L     R7,FEEDBACK
+         STH   R7,$RECLEN     LENGTH ACTUALLY READ
+*-----------------------------------------------------------*
+* IF WE GET HERE THE RECORD WAS READ, SO LETS UPDATE IT     *
+*-----------------------------------------------------------*
+         MVC   $IOAREA+22(44),SYSINCRD
+         MVC   $IOAREA(VOLSRLEN),TVOLSER   OK, I'M PARANOID, SET KEY
+         BAL   R14,MODIFY
+         LA    R2,IFGRPL
+         SR    R3,R3          CLEAR R3 TO LOAD
+         LH    R3,$RECLEN     LENGTH THAT WAS READ
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10)
+         PUT   RPL=(R2)
+         B     EXITV                DONE, CLOSE FILE AND EXIT
+EXITVE   DS    0F
+         MVC   EXITVEW+29(6),TVOLSER
+EXITVEW  WTO   'TAPM001E TAPE VOLUME vvvvvv NOT FOUND, NOT UPDATED'
+EXITV    LA    R7,EXIT00            SET VSAM ERROR HANDLING TO JUST 
+         ST    R7,RECOVRPL          EXIT ON ERROR SO IF ERRORS ON
+*                                   CLOSE WE DON'T START LOOPING
+         LA    R2,IFGACB            TRYING TO CLOSE THE VSAM DATASET
+         CLOSE ((R2))
+         B     EXIT00
+         EJECT
+*-----------------------------------------------------------*
+* CALLED TO SET ALL THE DEFAULT ACB/RPL VALUES. SHOULD BE   *
+* CALLED PRIOR TO EACH VSAM REQUEST.                        *
+*-----------------------------------------------------------*
+MODIFY   DS    0F
+         ST    R14,SAVER14       SAVE RETURN ADDRESS
+         LA    R2,IFGRPL         ADDRESS GENERATED BY RPL
+         SR    R3,R3             CLEAR R3 TO LOAD
+*         LA    R3,DBSLEN    MAY BE CHANGED BY IO, USE BELOW
+         LH    R3,$RECLEN        LENGTH OF RECORD
+         SR    R4,R4             CLEAR R4 FOR KEY ADDRESS
+         SR    R5,R5             CLEAR R5 FOR KEY LENGTH
+         LA    R4,$RRN           ADDRESS RELATIVE RECORD NUM
+         LH    R4,$RKP           LOAD KEY OFFSET
+         AR    R4,R10            ADD RECORD ADDRESS
+         LH    R5,$KEYLEN        LOAD KEY LENGTH
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10),           X
+               ARG=(R4),KEYLEN=(R5)
+         L     R14,SAVER14       RELOAD RETURN ADDRESS
+         BR    R14
+SAVER14  DS    1F                SAVE LOCAL RETURN ADDRESS
+         EJECT  
+*-----------------------------------------------------------*
+* ERROR DURING VSAM PROCESSING. THE EXLST BROUGHT US HERE.  *
+*-----------------------------------------------------------*
+VSERROR  DS    0F
+         LA    R2,IFGRPL
+         SHOWCB RPL=(R2),FIELDS=FDBK,AREA=FEEDBACK,LENGTH=4
+         ICM   R5,B'1111',FEEDBACK RETRIEVE FEEDBACK CODES
+         STCM  R5,B'0100',$VSRC+1   AND VSAM RETURN CODE
+         STCM  R5,B'0010',$VSFUNC+1 AND VSAM FUNCTION CODE
+         STCM  R5,B'0001',$VSREAS+1 AND VSAM REASON CODE
+         MVI   SYSINCRD,C' '
+         MVC   SYSINCRD+1(L'SYSINCRD-1),SYSINCRD
+         XR    R5,R5
+         LH    R5,$VSREAS          Reason= bit
+         CL    R5,=F'16'           RECORD NOT FOUND
+         BE    EXITVE              YES, SO THIS EXIT POINT
+* ELSE WTO THE ERROR
+         MVC   SYSINCRD(36),=CL36'VSAM RC=nnn, FC=nnn, REASON CODE=nnn'
+         STM   R5,R6,VSERSAV2
+         LH    R5,$VSRC            RC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSINCRD+8(3),NUMBUF
+         LH    R5,$VSFUNC          FC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSINCRD+16(3),NUMBUF
+         LH    R5,$VSREAS          Reason= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSINCRD+33(3),NUMBUF
+         MVC   VSERRWTO+8(36),SYSINCRD
+         LM    R5,R6,VSERSAV2
+VSERRWTO WTO   '....+....1....+....2....+....3....+.  '
+         L     R7,RECOVRPL     DO WE HAVE A SPECIFIC EXIT POINT
+         C     R7,=F'0'        IF NOT JUST
+         BE    EXITV              EXIT OUT AND CLOSE THE FILE
+         BR    R7              IF SO, JUMP TO IT
+VSERSAV2 DS    2F
+         EJECT
+EXIT00   L     R13,4(R13)                                      
+         LM    R14,R12,12(R13)                                 
+         SLR   R15,R15                                         
+         BR    R14                                             
+         EJECT                                                 
+VOLSRLEN EQU   6                  LENGTH OF A TAPE VOLUME NAME
+SAVEAREA DS    15F
+JFCBLTYP EQU   66                 LABEL TYPE (AL, LTM, ETC.)
+JFCBFLSQ EQU   68                 FILE SEQUENCE NUMBER, 0 OR 1 =1ST
+JFCBVOLS EQU   118                1ST BYTE OF JFCB VOLUME LIST 
+JFCLTSV  DS    CL1                CHECKING TAPE TYPE HERE
+PRMAVAIL DS    CL1                FLAG TO INDICATE IF PARM PASSED
+PRMVALU  DS    CL6                PARM VALUE IF IT WAS PASSED
+TVOLSER  DS    CL6                TAPE VOLSER FROM READJFCB (OR PARM)
+SYSINCRD DC    CL80' '       SYSIN CARD INPUT LINE, DEFAULT SPACES
+NUMBUF   DC    D'0'
+*
+INPUT    DCB   DDNAME=INPUT,MACRF=RC,DSORG=PS,RECFM=U,DEVD=TA,         +
+               BLKSIZE=32760,EXLST=EXITLIST,EODAD=USEPARM
+EXITLIST DS    0F                 INPUT DCB EXIT LIST FOR RDJFCB
+         DC    X'87'              LAST ENTRY AND RDJFCB           
+         DC    AL3(JFCBIN)        BUFFER FOR INPUT TAPE'S JFCB  
+JFCBIN   DS    22D                176 BYTES     
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,EODAD=EOFSYSIN
+         SPACE 2
+*-----------------------------------------------------------*
+* THIS ACCESS CONTROL BLOCK IS USED AS A MODEL TO BUILD     *
+* VSAM ACB'S DYNAMICALLY.                                   *
+*-----------------------------------------------------------*
+ACBMODEL ACB  DDNAME=VSAMDD,EXLST=EXL001
+         SPACE 1
+*-----------------------------------------------------------*
+* THE REQUEST PARAMETER BLOCK HERE IS USED AS A MODEL TO    *
+* BUILD REQUESTS DYNAMICALLY AS NEEDED.                     *
+*-----------------------------------------------------------*
+RPLMODEL RPL  ACB=ACBMODEL
+         SPACE 1
+*-----------------------------------------------------------*
+*-----------------------------------------------------------*
+EXL001   EXLST LERAD=VSERROR,SYNAD=VSERROR,EODAD=EXITVE
+         SPACE 2
+*-----------------------------------------------------------*
+* DATA AREAS USED                                           *
+*-----------------------------------------------------------*
+FEEDBACK DS   0F
+RECOVRPL DS   0F
+$RC      DS   H
+$VSRC    DS   H
+$VSFUNC  DS   H
+$VSREAS  DS   H
+$DDNAME  DC   CL8'TAPEVOLS'        DDNAME USED
+$RECLEN  DS   H
+$RKP     DS   H
+$KEYLEN  DS   H
+$RRN     EQU  $RKP
+         SPACE 2
+*-----------------------------------------------------------*
+* THE ACTUAL ACB AND RPL USED                               *
+*-----------------------------------------------------------*
+         IFGACB DSECT=NO
+$ACBLEN  EQU    (*-IFGACB)
+         IFGRPL DSECT=NO
+$RPLLEN  EQU    (*-IFGRPL)
+         SPACE 2
+*-----------------------------------------------------------*
+* THE IO RECORD/DATA AREA, ADDRESS USING R10                *
+*-----------------------------------------------------------*
+$IOAREA  DS   CL200' '      RECORD IS 132 BYTES, NEED MORE
+* THE VSAM FIELD RECORD LAYOUT
+         PRINT GEN
+         DBREC
+         PRINT NOGEN
+         EJECT
+* REGISTER EQUATES
+R0       EQU   0  
+R1       EQU   1  
+R2       EQU   2  
+R3       EQU   3  
+R4       EQU   4  
+R5       EQU   5  
+R6       EQU   6  
+R7       EQU   7  
+R8       EQU   8  
+R9       EQU   9  
+R10      EQU   10 
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+/*                                                           
+//SYSPUNCH DD  SYSOUT=*                                      
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,            
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))                         
+//LKED1   EXEC PGM=IEWL,                                     
+//             PARM='XREF,LIST,LET,TEST,AC=0',               
+//             REGION=1024K,COND=(0,NE)                      
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB(TAPEMDES),DISP=SHR  
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)           
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))                  
+//SYSPRINT DD  SYSOUT=*                                      
+//LKED2   EXEC PGM=IEWL,                                     
+//             PARM='XREF,LIST,LET,TEST,AC=0',               
+//             REGION=1024K,COND=(0,NE)                      
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR            
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))      
+//SYSPRINT DD  SYSOUT=*    
+//SYSLIN   DD  *           
+ INCLUDE SYSLMOD(TAPEMDES) 
+ ENTRY TAPEMDES    
+ NAME TAPEMDES(R)          
+/*                         
+//                   
+./ ADD NAME=TAPEMEXP
+//MARKASM  JOB (0),'TAPEMEXP',CLASS=A,MSGCLASS=A,
+//   MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN
+//         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+         PRINT NOGEN
+* ********************************************************************
+*                                                                    *
+* TAPEMEXP - TAPEMAN UTILITY                                         *
+*                                                                    *
+* PURPOSE: PROVIDE A BATCH INTERFACE TO MANUALLY ALTER THE EXPIRY    *
+*          DATE OF VOLSERS. THIS IS USED ONLY FOR TESTING THE        *
+*          AUTOMATED EXPIRY HANDLING.                                *
+*                                                                    *
+* JCL REQUIRED...                                                    *
+*   //STEPX    EXEC PGM=TAPEMEXP                                     *
+*   //TAPEVOLS DD   DISP=SHR,DSN=...what you called it...            *
+*   //SYSPRINT DD   SYSOUT=*                                         *
+*   //SYSIN    DD   *                                                *
+*   control cards, see below                                         *
+*   /*                                                               *
+*                                                                    *
+* SYSIN DATA CARDS ALLOWED...all start in column 1                   *
+*   vvvvvv nnnnn          - volser new-expiry                        *
+*                                                                    *
+* CREDITS                                                            *
+*   All the VSAM code here has been extracted/butchered from the     *
+*   cobol vsam interface library provided to the hercules community  *
+*   by Jay Moseley. I just needed to get native use rather than      *
+*   calling it from cobol.                                           *
+*                                                                    *
+* ********************************************************************
+         MACRO
+&NAME    SPACEOUT &A,&B
+* ********************************************************************
+* SPACE FILL THE DATA AREA 'A' FOR THE LENGTH OF THE DATA FIELD.     *
+* OR THE OPTIONAL LENGTH PROVIDED IN PARM B                          *
+*     SPACEOUT FIELDNAME OR SPACEOUT FIELDNAME,LEN                   *
+* ********************************************************************
+         AIF   ('&A' EQ '').NOPARM
+         AIF   ('&B' NE '').HAVLEN
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEXIT
+.HAVLEN  MVI   &A,C' '
+         MVC   &A+1(&B-1),&A
+         MEXIT
+.NOPARM  MNOTE 12,'*** DATA AREA NAME MUST BE PROVIDED ***'
+         MEND
+*
+TAPEMEXP CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 2
+         OPEN  (SYSPRINT,(OUTPUT))
+         LTR   R15,R15
+         BZ    OPEN2
+         WTO   'CANNOT OPEN SYSPRINT'
+         B     EXIT99
+OPEN2    OPEN  (SYSIN,(INPUT))
+         LTR   R15,R15
+         BZ    OPEN3
+         MVC   SYSPRLIN(L'ERSYSIN),ERSYSIN
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXIT 51
+OPEN3    BAL   R4,OPENKSDS
+         LTR   R15,R15
+         BZ    OPENEDOK
+         MVC   SYSPRLIN(L'ERTAPVOL),ERTAPVOL
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXIT50
+OPENEDOK DS    0F
+         SPACE 2
+READCARD DS    0F
+         SPACEOUT SYSPRLIN              SPACE SEPERATE RPT OUTPUT
+         PUT   SYSPRINT,SYSPRLIN
+         GET   SYSIN                 READ A LINE FROM FILE
+         MVC   CARDLINE(L'CARDLINE),0(R1)    SAVE THE LINE
+         MVC   SYSPRLIN(L'CARDLINE),CARDLINE AND SYSPRINT IT
+         PUT   SYSPRINT,SYSPRLIN
+         MVI   SYSPRLIN,C' '
+         MVC   SYSPRLIN+1(L'SYSPRLIN-1),SYSPRLIN
+         MVC   $IOAREA(VOLSRLEN),CARDLINE
+         BAL   R4,CHKVOLSR         CHECK VOLSER ON INSERTS
+         BAL   R4,READEXCT         IF OK, READ EXACT
+         MVC   $IOAREA+16(5),CARDLINE+7    EXPDATE FROM CARD
+         BAL   R4,UPDATE
+         BAL   R4,SUCCESSM
+         B     READCARD             ONTO THE NEXT CARD
+         SPACE 2
+EXIT     LA    R7,EXIT50            SET VSAM AFTER RECOVER PTR
+         ST    R7,RECOVRPL          TO THE EXIT50 SO IF ERRORS ON
+*                                   CLOSE WE DON'T START LOOPING
+         LA    R2,IFGACB            CLOSE THE VSAM DATASET
+         CLOSE ((R2))
+EXIT50   CLOSE (SYSIN)              CLOSE SYSIN
+EXIT51   CLOSE (SYSPRINT)           CLOSE SYSPRINT
+         SPACE 1
+EXIT99   L     R13,4(R13)           STANDARD EXIT CODE
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         LTORG
+         EJECT
+*===========================================================*
+*           START OF VSAM IO CODE BLOCK                     *
+*===========================================================*
+         SPACE 1
+*-----------------------------------------------------------*
+* OPENKSDS                                                  *
+* OPEN THE VSAM FILE FOR KSDS, INPUT/OUTPUT                 *
+*-----------------------------------------------------------*
+OPENKSDS DS    0F
+         ST    R4,SAVER4
+* RESET FIELDS USED FOR STATUS INFORMATION
+         XC    $RC,$RC             CLEAR RETURN CODE
+         XC    $VSRC,$VSRC         CLEAR VSAM RETURN CODE
+         XC    $VSFUNC,$VSFUNC     CLEAR VSAM FUNCTION CODE
+         XC    $VSREAS,$VSREAS     CLEAR VSAM REASON CODE
+         L     R10,=A($IOAREA)     THE IO BUFFER AREA
+         SR    R7,R7               CLEAR ADDR FOR STORE
+         ST    R7,RECOVRPL         NO RPL FIXUPS NEEDED YET
+         LA    R7,DBSLEN           SET RECLEN VALUE, ITS AN EQU VALUE
+*                                  SO LA IS OK, L GIVES ALIGNMENT ERR
+*
+         STH   R7,$RECLEN
+         LA    R7,VOLSRLEN         SET KEYLEN VALUE (VOLSER)
+         STH   R7,$KEYLEN
+         SR    R7,R7               CLEAR AGAIN
+* BUILD ACCESS CONTROL BLOCK USING MODEL
+         MVC   IFGACB($ACBLEN),ACBMODEL
+         LA    R2,IFGACB
+         MODCB ACB=(R2),DDNAME=(*,$DDNAME)
+* BUILD REQUEST PARAMETER LIST USING MODEL
+         MVC   IFGRPL($RPLLEN),RPLMODEL
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),ACB=(S,IFGACB)
+* ACCESS MODE TO BE USED, KSDS, IN R7
+         SR    R7,R7
+         LA    R7,18
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(KEY)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(KEY)
+* USE DYNAMIC ACCESS FOR THE VSAM FILE
+         LA    R7,6(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(SEQ,DIR)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(SEQ)
+* FILE TO BE OPENED FOR INPUT/OUTPUT
+         LA    R7,2(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(OUT)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+* DO THE REST OF THE REQUIRED RPL MODS AND OPEN THE DS
+         BAL   R14,MODIFY
+         LA    R2,IFGACB
+         OPEN  ((R2))
+*        R15 IS CHECKED BY THE CALLER FOR SUCCESS
+* OK, DONE HERE
+OPENKSDX L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* READ EXACT                                                *
+*-----------------------------------------------------------*
+READEXCT DS    0F       READ EXACT
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+         SR    R7,R7          NO NEED TO RESTORE DEFAULT
+         ST    R7,RECOVRPL
+* KEYPOSITION
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         POINT RPL=(R2)
+         MODCB RPL=(R2),OPTCD=(KEQ)
+* READ
+         BAL   R14,MODIFY
+         GET   RPL=(R2)
+         SHOWCB RPL=(R2),FIELDS=RECLEN,AREA=FEEDBACK,LENGTH=4
+         L     R7,FEEDBACK
+         STH   R7,$RECLEN     LENGTH ACTUALLY READ
+* DONE
+         L     R4,SAVER4
+         BR    R4
+         SPACE 2
+@STARTRS SR    R7,R7          TO AVOID LOOPING IF ERROR ON MODCB
+         ST    R7,RECOVRPL
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         B     READCARD    <-- startrs is if an error ocurred
+*                               but we just get next sysin
+*                               card and process it
+         SPACE 2
+@WRITERS DS    0H
+         SR    R7,R7          TO AVOID LOOPING ON MODCB ERROR
+         ST    R7,RECOVRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+         B     READCARD    <--- writors run on modcb error
+*                               but we just get next sysin
+*                               card and process it
+         SPACE 2
+*-----------------------------------------------------------*
+* UPDATE AN EXISTING RECORD                                 *
+* A READ EXACT SHOULD HAVE BEEN DONE PRIOR.                 *
+* WILL UPDATE THE LAST RECORD READ !.                       *
+*-----------------------------------------------------------*
+UPDATE   DS    0F
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+         LA    R7,@WRITERS    ADDRESS TO RESTORE DEFAULT
+         ST    R7,RECOVRPL
+         LA    R2,IFGRPL
+*
+         SR    R3,R3          CLEAR R3 TO LOAD
+         LH    R3,$RECLEN     LENGTH THAT WAS READ
+*        LA    R3,DBSLEN      USE KNOWN RECORD LENGTH, FIX? NO WORK
+*
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10)
+         PUT   RPL=(R2)
+         L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* CALLED TO SET ALL THE DEFAULT ACB/RPL VALUES. SHOULD BE   *
+* CALLED PRIOR TO EACH VSAM REQUEST.                        *
+*-----------------------------------------------------------*
+MODIFY   DS    0F
+         ST    R14,SAVER14       SAVE RETURN ADDRESS
+         LA    R2,IFGRPL         ADDRESS GENERATED BY RPL
+         SR    R3,R3             CLEAR R3 TO LOAD
+*         LA    R3,DBSLEN    MAY BE CHANGED BY IO, USE BELOW
+         LH    R3,$RECLEN        LENGTH OF RECORD
+         SR    R4,R4             CLEAR R4 FOR KEY ADDRESS
+         SR    R5,R5             CLEAR R5 FOR KEY LENGTH
+         LA    R4,$RRN           ADDRESS RELATIVE RECORD NUM
+         LH    R4,$RKP           LOAD KEY OFFSET
+         AR    R4,R10            ADD RECORD ADDRESS
+         LH    R5,$KEYLEN        LOAD KEY LENGTH
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10),           X
+               ARG=(R4),KEYLEN=(R5)
+         L     R14,SAVER14       RELOAD RETURN ADDRESS
+         BR    R14
+SAVER14  DS    1F                SAVE LOCAL RETURN ADDRESS
+         SPACE 2
+*-----------------------------------------------------------*
+* ERROR DURING VSAM PROCESSING. THE EXLST BROUGHT US HERE.  *
+*-----------------------------------------------------------*
+VSERROR  DS    0F
+         LA    R2,IFGRPL
+         SHOWCB RPL=(R2),FIELDS=FDBK,AREA=FEEDBACK,LENGTH=4
+         ICM   R5,B'1111',FEEDBACK RETRIEVE FEEDBACK CODES
+         STCM  R5,B'0100',$VSRC+1   AND VSAM RETURN CODE
+         STCM  R5,B'0010',$VSFUNC+1 AND VSAM FUNCTION CODE
+         STCM  R5,B'0001',$VSREAS+1 AND VSAM REASON CODE
+         SPACEOUT SYSPRLIN
+         XR    R5,R5
+         LH    R5,$VSREAS          Reason= bit
+*         CL    R5,=F'08'           DUPLICATE KEY
+*         BE    VSERRTX1
+*        CL    R5,=F'12'           SEQUENCE CHECK
+*        BE    VSERRTX2
+         CL    R5,=F'16'           RECORD NOT FOUND
+         BE    VSERRTX3
+         MVC  SYSPRLIN(36),ERRDUMP VSAM RC=nnn, FC=nnn, REASON CODE=nnn
+         STM   R5,R6,VSERSAV2
+         LH    R5,$VSRC            RC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+8(3),NUMBUF
+         LH    R5,$VSFUNC          FC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+16(3),NUMBUF
+         LH    R5,$VSREAS          Reason= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+33(3),NUMBUF
+         PUT   SYSPRINT,SYSPRLIN
+         SPACEOUT SYSPRLIN
+         B     VSERROR0
+*VSERRTX1 MVC   SYSPRLIN(L'ERDUPKEY),ERDUPKEY
+*         PUT   SYSPRINT,SYSPRLIN
+*         B     VSERROR0
+VSERRTX3 MVC   SYSPRLIN(L'ERNOKEY),ERNOKEY
+         PUT   SYSPRINT,SYSPRLIN
+*        B     VSERROR0
+VSERROR0 LM    R5,R6,VSERSAV2
+* **** IF WE WERE DOING A STARTGE OR WRITE THEN THE
+*      RPL WAS MODIFIED AND WE NEED TO SET IT BACK
+         L     R7,RECOVRPL  RECOVERY ACTION ADDRESS
+         LTR   R7,R7
+         BZ    VSERROR1    NO ACTION NEEDED
+         XR    R4,R4       CLEAR RECOVERY ADDR TO OREVENT ANY
+         ST    R4,RECOVRPL  CHANCE OF RECURSION
+         BR    R7          ELSE DO IT
+VSERROR1 B     READCARD    ERROR HANDLED, GET NEXT SYSIN CARD
+VSERSAV2 DS    2F
+         SPACE 2
+*-----------------------------------------------------------*
+* EOF ON VSAM FILE, REQUESTED RECORD NOT FOUND ?, BUT NO    *
+* ERROR MESSAGE AS THIS MAY JUST BE EOF FROM A LIST/ALL     *
+*-----------------------------------------------------------*
+VSEOF    DS    0F
+         B     READCARD    AND GET NEXT SYSIN CARD
+         EJECT
+*-----------------------------------------------------------*
+* CHECK THE VOLSER THAT IS BEING USED TO ENSURE IT IS SIX   *
+* BYTES WITH NO SPACES.                                     *
+*-----------------------------------------------------------*
+CHKVOLSR DS    0F
+         STM   R4,R5,CHKSAVE2
+         LA    R4,$IOAREA
+         L     R5,ZERO           COUNTER ZERO
+CHKVOLS0 CLI   0(R4),C' '        IS BYTE N A SPACE ?
+         BE    CHKVOLS1          YES, BAD VOLSER
+         A     R5,ONE            ADD 1 TO COUNTER
+         CL    R5,FIVE           NO, HAVE WE CHECKED 6 BYTES ?
+         BE    CHKVOLS2          YES, DONE
+         A     R4,ONE            ADD 1 TO ADDR BEING CHECKED
+         B     CHKVOLS0          AND CHECK THE NEXT ADDR
+CHKVOLS1 DS    0F
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'ERVOLLEN),ERVOLLEN
+         MVC   SYSPRLIN(VOLSRLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+         LM    R4,R5,CHKSAVE2
+         B     READCARD       JUST GO GET NEXT CARD
+CHKVOLS2 LM    R4,R5,CHKSAVE2
+         BR    R4             RETURN TO CALLER, WE CONTINUE
+CHKSAVE2 DS    2F
+         EJECT
+SUCCESSM DS    0F
+         ST    R4,SAVER4
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'SUCCESS),SUCCESS
+         PUT   SYSPRINT,SYSPRLIN
+         L     R4,SAVER4
+         BR    R4
+         LTORG
+*-----------------------------------------------------------*
+* THIS ACCESS CONTROL BLOCK IS USED AS A MODEL TO BUILD     *
+* VSAM ACB'S DYNAMICALLY.                                   *
+*-----------------------------------------------------------*
+ACBMODEL ACB  DDNAME=VSAMDD,EXLST=EXL001
+         SPACE 1
+*-----------------------------------------------------------*
+* THE REQUEST PARAMETER BLOCK HERE IS USED AS A MODEL TO    *
+* BUILD REQUESTS DYNAMICALLY AS NEEDED.                     *
+*-----------------------------------------------------------*
+RPLMODEL RPL  ACB=ACBMODEL
+         SPACE 1
+*-----------------------------------------------------------*
+*-----------------------------------------------------------*
+EXL001   EXLST LERAD=VSERROR,SYNAD=VSERROR,EODAD=VSEOF
+         SPACE 2
+         LTORG
+*-----------------------------------------------------------*
+* DATA AREAS USED                                           *
+*-----------------------------------------------------------*
+FEEDBACK DS   0F
+RECOVRPL DS   0F
+$RC      DS   H
+$VSRC    DS   H
+$VSFUNC  DS   H
+$VSREAS  DS   H
+$DDNAME  DC   CL8'TAPEVOLS'        DDNAME USED
+$RECLEN  DS   H
+$RKP     DS   H
+$KEYLEN  DS   H
+$RRN     EQU  $RKP
+         SPACE 2
+         LTORG
+*-----------------------------------------------------------*
+* THE ACTUAL ACB AND RPL USED                               *
+*-----------------------------------------------------------*
+         IFGACB DSECT=NO
+$ACBLEN  EQU    (*-IFGACB)
+         IFGRPL DSECT=NO
+$RPLLEN  EQU    (*-IFGRPL)
+         SPACE 2
+*-----------------------------------------------------------*
+* THE IO RECORD/DATA AREA, ADDRESS USING R10                *
+*-----------------------------------------------------------*
+$IOAREA  DS   CL150' '   RECORD IS 132 BYTES, ALLOW MORE
+*                        AT LEAST 50 MORE IF POSSIBLE
+         SPACE 1
+*===========================================================*
+*            END OF VSAM IO CODE BLOCK                      *
+*===========================================================*
+         SPACE 2
+         LTORG
+SAVEAREA DS    18F
+SAVER4   DS    1F
+         SPACE 2
+         LTORG
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=(PM),DSORG=PS,RECFM=F,            X
+               LRECL=132,BLKSIZE=132
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,EODAD=EXIT
+         SPACE 2
+         LTORG
+CARDLINE DC    CL80' '
+SYSPRLIN DC    CL132' '
+ERVOLLEN DC    CL27'vvvvvv IS AN INVALID VOLSER'
+ERNOKEY  DC    CL18'NO MATCHING RECORD'
+ERSYSIN  DC    CL21'I-O ERROR ON DD SYSIN'
+ERTAPVOL DC    CL24'I-O ERROR ON DD TAPEVOLS'
+ERRDUMP  DC    CL36'VSAM RC=nnn, FC=nnn, REASON CODE=nnn'
+SUCCESS  DC    CL7'SUCCESS'
+         LTORG
+ZERO     DC    F'0'
+ONE      DC    F'1'
+FIVE     DC    F'5'
+NUMBUF   DC    D'0'
+         SPACE 2
+         LTORG
+* THE VSAM FIELD RECORD LAYOUT
+VOLSRLEN EQU 6     FOR LA STATEMENTS TO CLEAR THE KEY
+*                  AND FOR MOVING INTO MESSAGES
+         PRINT GEN
+         DBREC
+         PRINT NOGEN
+         EJECT
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB(TAPEMEXP),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(TAPEMEXP)
+ ENTRY TAPEMEXP
+ NAME TAPEMEXP(R)
+/*
+//
+./ ADD NAME=TAPEMSCR
+//MARKASM  JOB (0),'TAPEMSCR',CLASS=A,MSGCLASS=A,
+//   MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+         PRINT NOGEN
+* ********************************************************************
+*                                                                    *
+* TAPEMSCR - TAPEMAN DAILY SCRATCH PROGRAM                           *
+*                                                                    *
+* PURPOSE: RUN DAILY TO RETURN ANY EXPIRED TAPES TO SCRATCH STATUS   *
+*          WITHIN THE VSAM DATABASE.                                 *
+*                                                                    *
+* JCL REQUIRED...                                                    *
+*   //STEPX    EXEC PGM=TAPEMSCR                                     *
+*   //TAPEVOLS DD   DISP=SHR,DSN=...what you called it...            *
+*   //SYSPRINT DD   SYSOUT=*                                         *
+*                                                                    *
+* ********************************************************************
+         MACRO
+&NAME    SPACEOUT &A
+* ********************************************************************
+* SPACE FILL THE DATA AREA 'A' FOR THE LENGTH OF THE DATA FIELD.     *
+* ********************************************************************
+         AIF   ('&A' EQ '').NOPARM
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEXIT
+.NOPARM  MNOTE 12,'*** DATA AREA NAME MUST BE PROVIDED ***'
+         MEND
+*
+TAPEMSCR CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 2
+         OPEN  (SYSPRINT,(OUTPUT))
+         LTR   R15,R15
+         BZ    OPEN2
+         WTO   'CANNOT OPEN SYSPRINT'
+         B     EXIT99
+OPEN2    BAL   R4,OPENKSDS
+         LTR   R15,R15
+         BZ    OPENEDOK
+         MVC   SYSPRLIN(L'ERTAPVOL),ERTAPVOL
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXIT50         EXIT, NO CLOSE ON VSAM FILE THOUGH
+OPENEDOK DS    0F
+         SPACE 1
+*                                   GET DATESTAMP OF TODAY
+         BAL   R4,DATESTMP          DO NOW, JUST DO IT ONCE
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'LOGINIT),LOGINIT
+         MVC   SYSPRLIN+17(5),DATENOW     
+         PUT   SYSPRINT,SYSPRLIN   
+         SPACE 1
+* SEEK TO THE START OF THE VSAM FILE
+* KEYPOSITION
+         BAL   R14,MODIFY
+         MVC   $IOAREA(6),SPACES6   # NULL VOLSER
+         MODCB RPL=(R2),OPTCD=(KGE)
+         POINT RPL=(R2)
+         MODCB RPL=(R2),OPTCD=(KEQ)
+* READ SEQUENTIALLY THROUGH THE FILE AND EXPIRE ANY
+* RECORDS THAT HAVE AN EXPDATE LESS THAN THE 
+* CURRENT DATE.
+READNEXT LA    R7,DBSLEN                  ALWAYS TRY FOR MAX LEN
+         STH   R7,$RECLEN
+         BAL   R14,MODIFY
+*READNEXT BAL   R14,MODIFY
+         GET   RPL=(R2)
+         CLC   $IOAREA+16(5),=CL5'00000'  IS IT ALREADY SCRATCH ?
+         BE    READNEXT                     YES DO NOTHING
+         CLC   $IOAREA+16(5),DATENOW      IS EXP-DATE < TODAY ?
+         BNL   READNEXT                     NO DO NOTHING
+*
+* WAS LOW, SO NEEDS TO BE EXPIRED
+         SHOWCB RPL=(R2),FIELDS=RECLEN,AREA=FEEDBACK,LENGTH=4
+         L     R7,FEEDBACK
+         STH   R7,$RECLEN     LENGTH ACTUALLY READ
+         MVC   $IOAREA+7(8),=CL8'        '  ERASE JOBNAME FIELD
+         MVC   $IOAREA+16(5),=CL5'00000'    ZERO OUT EXPDATE FIELD
+         MVC   $IOAREA+22(44),SPACES44      SPACE OUT DESCRIPTION  
+         BAL   R14,MODIFY
+         LA    R2,IFGRPL
+         SR    R3,R3          CLEAR R3 TO LOAD
+         LH    R3,$RECLEN     LENGTH THAT WAS READ
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10)
+         PUT   RPL=(R2)
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'LOGSCR),LOGSCR
+         MVC   SYSPRLIN+7(6),$IOAREA        VOLSER SCRATCHED INTO MSG
+         PUT   SYSPRINT,SYSPRLIN            RECORD IT
+         B     READNEXT                     AND CONTINUE READING
+         SPACE 2
+* WE GET HERE FROM THE VSAM ERROR HANDLER OR THE VSAM FILE EOF
+* HANDLER.
+EXIT     LA    R2,IFGACB            CLOSE THE VSAM DATASET
+         CLOSE ((R2))
+EXIT50   CLOSE (SYSPRINT)           CLOSE SYSPRINT
+         SPACE 1
+EXIT99   L     R13,4(R13)           STANDARD EXIT CODE
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+* -----------------------------------------------------------
+* GET THE DATESTAMP NOW AS YYDDD FOR A LAST USED REFERENCE
+* DATE IN THE TAPEVOLS FILE, AND THE DATESTAMP IN 14 DAYS
+* TIME AS YYDDD AS AN EXPIRY DATE IN CASE WE ARE ALLOCATING
+* A NEW SCRATCH TAPE FOR THIS EXECUTION.
+* -----------------------------------------------------------
+DATESTMP DS    0F
+         STM   R0,R1,DATESAVA
+*   R0 has the time, we ignore but it is used so we save the register
+*   R1 has the date, save the register
+*   R2-R4 used in calculations, save those registers
+         TIME  DEC                        GET SYSTEM TIME AND DATE
+         ST    R1,PDAT                    STORE PACKED DATE
+         UNPK  TXTDAT,PDAT            X'00YYDDDF' TO C'YYDDD'
+         MVC   DATENOW(5),TXTDAT
+         LM    R0,R1,DATESAVA
+         BR    R4
+DATESAVA DS    2F
+         EJECT
+*===========================================================*
+*           START OF VSAM IO CODE BLOCK                     *
+*===========================================================*
+         SPACE 1
+*-----------------------------------------------------------*
+* OPENKSDS                                                  *
+* OPEN THE VSAM FILE FOR KSDS, INPUT/OUTPUT                 *
+*-----------------------------------------------------------*
+OPENKSDS DS    0F
+         ST    R4,SAVER4
+* RESET FIELDS USED FOR STATUS INFORMATION
+         XC    $RC,$RC             CLEAR RETURN CODE
+         XC    $VSRC,$VSRC         CLEAR VSAM RETURN CODE
+         XC    $VSFUNC,$VSFUNC     CLEAR VSAM FUNCTION CODE
+         XC    $VSREAS,$VSREAS     CLEAR VSAM REASON CODE
+         L     R10,=A($IOAREA)     THE IO BUFFER AREA
+         LA    R7,DBSLEN           SET RECLEN VALUE, ITS AN EQU VALUE
+*                                  SO LA IS OK, L GIVES ALIGNMENT ERR
+*
+         STH   R7,$RECLEN
+         LA    R7,VOLSRLEN         SET KEYLEN VALUE (VOLSER)
+         STH   R7,$KEYLEN
+         SR    R7,R7               CLEAR AGAIN
+* BUILD ACCESS CONTROL BLOCK USING MODEL
+         MVC   IFGACB($ACBLEN),ACBMODEL
+         LA    R2,IFGACB
+         MODCB ACB=(R2),DDNAME=(*,$DDNAME)
+* BUILD REQUEST PARAMETER LIST USING MODEL
+         MVC   IFGRPL($RPLLEN),RPLMODEL
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),ACB=(S,IFGACB)
+* ACCESS MODE TO BE USED, KSDS, IN R7
+         SR    R7,R7
+         LA    R7,18
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(KEY)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(KEY)
+* USE DYNAMIC ACCESS FOR THE VSAM FILE
+         LA    R7,6(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(SEQ,DIR)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(SEQ)
+* FILE TO BE OPENED FOR INPUT/OUTPUT
+         LA    R7,2(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(OUT)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+* DO THE REST OF THE REQUIRED RPL MODS AND OPEN THE DS
+         BAL   R14,MODIFY
+         LA    R2,IFGACB
+         OPEN  ((R2))
+*        R15 IS CHECKED BY THE CALLER FOR SUCCESS
+* OK, DONE HERE
+OPENKSDX L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* CALLED TO SET ALL THE DEFAULT ACB/RPL VALUES. SHOULD BE   *
+* CALLED PRIOR TO EACH VSAM REQUEST.                        *
+*-----------------------------------------------------------*
+MODIFY   DS    0F
+         ST    R14,SAVER14       SAVE RETURN ADDRESS
+         LA    R2,IFGRPL         ADDRESS GENERATED BY RPL
+         SR    R3,R3             CLEAR R3 TO LOAD
+         LH    R3,$RECLEN        ACTUAL LENGTH OF RECORD READ
+         SR    R4,R4             CLEAR R4 FOR KEY ADDRESS
+         SR    R5,R5             CLEAR R5 FOR KEY LENGTH
+         LA    R4,$RRN           ADDRESS RELATIVE RECORD NUM
+         LH    R4,$RKP           LOAD KEY OFFSET
+         AR    R4,R10            ADD RECORD ADDRESS
+         LH    R5,$KEYLEN        LOAD KEY LENGTH
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10),           X
+               ARG=(R4),KEYLEN=(R5)
+         L     R14,SAVER14       RELOAD RETURN ADDRESS
+         BR    R14
+SAVER14  DS    1F                SAVE LOCAL RETURN ADDRESS
+         SPACE 2
+*-----------------------------------------------------------*
+* ERROR DURING VSAM PROCESSING. THE EXLST BROUGHT US HERE.  *
+*-----------------------------------------------------------*
+VSERROR  DS    0F
+         LA    R2,IFGRPL
+         SHOWCB RPL=(R2),FIELDS=FDBK,AREA=FEEDBACK,LENGTH=4
+         ICM   R5,B'1111',FEEDBACK RETRIEVE FEEDBACK CODES
+         STCM  R5,B'0100',$VSRC+1   AND VSAM RETURN CODE
+         STCM  R5,B'0010',$VSFUNC+1 AND VSAM FUNCTION CODE
+         STCM  R5,B'0001',$VSREAS+1 AND VSAM REASON CODE
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(36),=CL36'VSAM RC=nnn, FC=nnn, REASON CODE=nnn'
+         STM   R5,R6,VSERSAV2
+         LH    R5,$VSRC            RC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+8(3),NUMBUF
+         LH    R5,$VSFUNC          FC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+16(3),NUMBUF
+         LH    R5,$VSREAS          Reason= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+33(3),NUMBUF
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXIT         NO RECOVERY, WE JUST EXIT
+VSERSAV2 DS    2F           SAVE WORK REGS IF ERROR TRIGGERED
+         SPACE 2
+*-----------------------------------------------------------*
+* EOF ON VSAM FILE, AS WE ARE DOING SEQUENTIAL READS WE ARE *
+* FINISHED, AND CAN JUST EXIT NOW.                          *
+*-----------------------------------------------------------*
+VSEOF    DS    0F
+         B     EXIT        END OF FILE, WE EXIT NOW          
+         EJECT
+         LTORG
+*-----------------------------------------------------------*
+* THIS ACCESS CONTROL BLOCK IS USED AS A MODEL TO BUILD     *
+* VSAM ACB'S DYNAMICALLY.                                   *
+*-----------------------------------------------------------*
+ACBMODEL ACB  DDNAME=VSAMDD,EXLST=EXL001
+         SPACE 1
+*-----------------------------------------------------------*
+* THE REQUEST PARAMETER BLOCK HERE IS USED AS A MODEL TO    *
+* BUILD REQUESTS DYNAMICALLY AS NEEDED.                     *
+*-----------------------------------------------------------*
+RPLMODEL RPL  ACB=ACBMODEL
+         SPACE 1
+*-----------------------------------------------------------*
+*-----------------------------------------------------------*
+EXL001   EXLST LERAD=VSERROR,SYNAD=VSERROR,EODAD=VSEOF
+         SPACE 2
+         LTORG
+*-----------------------------------------------------------*
+* DATA AREAS USED                                           *
+*-----------------------------------------------------------*
+FEEDBACK DS   0F
+$RC      DS   H
+$VSRC    DS   H
+$VSFUNC  DS   H
+$VSREAS  DS   H
+$DDNAME  DC   CL8'TAPEVOLS'        DDNAME USED
+$RECLEN  DS   H
+$RKP     DS   H
+$KEYLEN  DS   H
+$RRN     EQU  $RKP
+         SPACE 2
+         LTORG
+*-----------------------------------------------------------*
+* THE ACTUAL ACB AND RPL USED                               *
+*-----------------------------------------------------------*
+         IFGACB DSECT=NO
+$ACBLEN  EQU    (*-IFGACB)
+         IFGRPL DSECT=NO
+$RPLLEN  EQU    (*-IFGRPL)
+         SPACE 2
+*-----------------------------------------------------------*
+* THE IO RECORD/DATA AREA, ADDRESS USING R10                *
+*-----------------------------------------------------------*
+$IOAREA  DS   CL200' '   RECORD IS 132 BYTES, ALLOW MORE
+         SPACE 1
+*===========================================================*
+*            END OF VSAM IO CODE BLOCK                      *
+*===========================================================*
+         SPACE 2
+         LTORG
+SAVEAREA DS    18F
+SAVER4   DS    1F
+         SPACE 2
+         LTORG
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=(PM),DSORG=PS,RECFM=F,            X
+               LRECL=132,BLKSIZE=132
+         SPACE 2
+         LTORG
+SYSPRLIN DS    CL132
+LOGINIT  DC    CL22'PROCESSING DATE: xxxxx'
+LOGSCR   DC    CL33'VOLSER vvvvvv RETURNED TO SCRATCH'
+ERTAPVOL DC    CL24'I-O ERROR ON DD TAPEVOLS'
+SPACES6  DC    CL6' '
+SPACES44 DC    CL44' '
+NUMBUF   DC    D'0'
+         SPACE 2
+         LTORG
+* THE VSAM FIELD RECORD LAYOUT
+VOLSRLEN EQU 6     FOR LA STATEMENTS TO CLEAR THE KEY
+*                  AND FOR MOVING INTO MESSAGES
+* NOTE: WHILE THE RECORD LAYOUT IS NOT ACTUALLY
+*       REFERENCED ANYWHERE IN THE CODE THE DBSLEN
+*       IS NEEDED SO I HAVE LEFT IT IN.
+         PRINT GEN
+         DBREC
+         PRINT NOGEN
+         SPACE 2
+* -----------------------------------------------------------
+* USED BY THE DATE OBTAIN CODE
+* -----------------------------------------------------------
+TXTDAT   DS    CL5                        - - - added
+         DS    0D                         ALIGNMENT
+PDAT     DC    PL4'0'                     PACKED DATE FORMAT 00YYDDDF
+DATENOW  DS    CL5                        YYDDD
+         EJECT
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB(TAPEMSCR),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(TAPEMSCR)
+ ENTRY TAPEMSCR
+ NAME TAPEMSCR(R)
+/*
+//
+./ ADD NAME=TAPEMUTL
+//MARKASM  JOB (0),'TAPEMUTL',CLASS=A,MSGCLASS=A,
+//   MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN
+//         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+         PRINT NOGEN
+* ********************************************************************
+*                                                                    *
+* TAPEMUTL - TAPEMAN UTILITY                                         *
+*                                                                    *
+* PURPOSE: PROVIDE A BATCH INTERFACE TO MANAGE ENTRIES IN THE VSAM   *
+*          TAPE CATALOGUE FILE USED BY THE TAPEMAN PROGRAM.          *
+*          RECORD LAYOUT IS FIXED AS PER THE TAPEMAN PROGRAM. REFER  *
+*          TO THE TAPEMAN PROGRAM FOR DETAILS.                       *
+*                                                                    *
+* JCL REQUIRED...                                                    *
+*   //STEPX    EXEC PGM=TAPEMUTL                                     *
+*   //TAPEVOLS DD   DISP=SHR,DSN=...what you called it...            *
+*   //SYSPRINT DD   SYSOUT=*                                         *
+*   //SYSIN    DD   *                                                *
+*   control cards, see below                                         *
+*   /*                                                               *
+*                                                                    *
+* SYSIN DATA CARDS ALLOWED...all start in column 1                   *
+*   DELETE vvvvvv                 - delete an existing volser        *
+*   INSERT vvvvvv                 - add a new volser                 *
+*   LIST ALL                      - list all database entries        *
+*   LIST vvvvvv                   - list status of one volser        *
+*   LIST SCRATCH                  - list all available scratch tapes *
+*   SCRATCH vvvvvv                - mark entry as available for use  *
+*                                                                    *
+* CREDITS                                                            *
+*   All the VSAM code here has been extracted/butchered from the     *
+*   cobol vsam interface library provided to the hercules community  *
+*   by Jay Moseley. I just needed to get native use rather than      *
+*   calling it from cobol.                                           *
+*                                                                    *
+* CHANGE HISTORY                                                     *
+*   2006/07/13 - Changed so SYSIN cards do NOT have a leading space, *
+*                as the CLIST code can't use a leading space.        *
+*   2008/05/27 - Increased database record size to include a 44 byte *
+*                field I can use as a description field, added a 66  *
+*                byte reserved field, recsize now 132 bytes.         *
+*   2008/06/06 - Fixed bug where sequential and random IO could not  *
+*                be mixed; list/insert/scratch/delete etc can be     *
+*                mixed in one sysin card stream now.                 *
+*  ---WARNING--- DBSLEN is now 132 bytes (the SYSPRINT DD size).     *
+*                If the record needs to be enlarges again the LIST   *
+*                processing sections will need to be changed.        *
+*                                                                    *
+* ********************************************************************
+         MACRO
+&NAME    SPACEOUT &A,&B
+* ********************************************************************
+* SPACE FILL THE DATA AREA 'A' FOR THE LENGTH OF THE DATA FIELD.     *
+* OR THE OPTIONAL LENGTH PROVIDED IN PARM B                          *
+*     SPACEOUT FIELDNAME OR SPACEOUT FIELDNAME,LEN                   *
+* ********************************************************************
+         AIF   ('&A' EQ '').NOPARM
+         AIF   ('&B' NE '').HAVLEN
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEXIT
+.HAVLEN  MVI   &A,C' '
+         MVC   &A+1(&B-1),&A
+         MEXIT
+.NOPARM  MNOTE 12,'*** DATA AREA NAME MUST BE PROVIDED ***'
+         MEND
+*
+TAPEMUTL CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+*         USING TAPEMUTL,R12,R8     NEED TWO ADDR REGISTERS
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 2
+         OPEN  (SYSPRINT,(OUTPUT))
+         LTR   R15,R15
+         BZ    OPEN2
+         WTO   'CANNOT OPEN SYSPRINT'
+         B     EXIT99
+OPEN2    OPEN  (SYSIN,(INPUT))
+         LTR   R15,R15
+         BZ    OPEN3
+         MVC   SYSPRLIN(L'ERSYSIN),ERSYSIN
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXIT 51
+OPEN3    BAL   R4,OPENKSDS
+         LTR   R15,R15
+         BZ    OPENEDOK
+         MVC   SYSPRLIN(L'ERTAPVOL),ERTAPVOL
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXIT50
+OPENEDOK DS    0F
+         SPACE 2
+READCARD DS    0F
+         SPACEOUT SYSPRLIN              SPACE SEPERATE RPT OUTPUT
+         PUT   SYSPRINT,SYSPRLIN
+         GET   SYSIN                 READ A LINE FROM FILE
+         MVC   CARDLINE(CARDLEN),0(R1)    SAVE THE LINE
+         MVC   SYSPRLIN(CARDLEN),CARDLINE AND SYSPRINT IT
+         PUT   SYSPRINT,SYSPRLIN
+         MVI   SYSPRLIN,C' '
+         MVC   SYSPRLIN+1(L'SYSPRLIN-1),SYSPRLIN
+* WHAT WERE WE ASKED TO DO
+         CLC   CARDLINE(5),ISLIST  'LIST xxx'
+         BE    EXECLIST
+         CLC   CARDLINE(7),ISINSERT 'INSERT xxx'
+         BE    EXECINS
+         CLC   CARDLINE(7),ISDELETE 'DELETE xxx'
+         BE    EXECDELT
+         CLC   CARDLINE(8),ISSCRTCH 'SCRATCH xxx'
+         BE    EXECSCRT
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'BADCARD),BADCARD
+         PUT   SYSPRINT,SYSPRLIN
+         B     READCARD             ONTO THE NEXT CARD
+         SPACE 2
+EXIT     LA    R7,EXIT50            SET VSAM AFTER RECOVER PTR
+         ST    R7,RECOVRPL          TO THE EXIT50 SO IF ERRORS ON
+*                                   CLOSE WE DON'T START LOOPING
+         LA    R2,IFGACB            CLOSE THE VSAM DATASET
+         CLOSE ((R2))
+EXIT50   CLOSE (SYSIN)              CLOSE SYSIN
+EXIT51   CLOSE (SYSPRINT)           CLOSE SYSPRINT
+         SPACE 1
+EXIT99   L     R13,4(R13)           STANDARD EXIT CODE
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         LTORG
+         EJECT
+* LIST FROM THE DATABASE
+EXECLIST DS    0F
+         CLC   CARDLINE(8),ISLIST    'LIST ALL'
+         BE    EXECL100
+         CLC   CARDLINE(12),ISLISTS  'LIST SCRATCH'
+         BE    EXECL200
+         SPACE 1
+*                                    'LIST volser'
+         MVC   $IOAREA(VOLSRLEN),CARDLINE+5 KEY TO USE IS VOLSER
+* read exact for the volser
+         BAL   R4,READEXCT
+* show results
+         MVC   SYSPRLIN(DBSLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+         B     READCARD
+         SPACE 1
+EXECL100 DS    0F            LIST ALL
+         BAL   R4,SEEKSTRT
+         MVC   SYSPRLIN(DBSLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+EXECL101 BAL   R14,MODIFY    LOOP FOR THE REST
+         GET   RPL=(R2)
+         MVC   SYSPRLIN(DBSLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXECL101      KEEP GOING UNTIL EOF
+* THE VSAM EOF HANDLER JUMPS US BACK TO READING SYSIN CARDS
+         SPACE 1
+EXECL200 DS    0F            LIST SCRATCH
+         BAL   R4,SEEKSTRT
+         CLC   $IOAREA+16(5),ZEROS5       # EXP-DATE FIELD
+         BNE   EXECL201
+         MVC   SYSPRLIN(DBSLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+EXECL201 BAL   R14,MODIFY    LOOP FOR THE REST
+         GET   RPL=(R2)
+         CLC   $IOAREA+16(5),ZEROS5
+         BNE   EXECL201
+         MVC   SYSPRLIN(DBSLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+         B     EXECL201      KEEP GOING UNTIL EOF
+* THE VSAM EOF HANDLER JUMPS US BACK TO READING SYSIN CARDS
+         SPACE 1
+         B     READCARD      SHOULD NEVER GET HERE
+         SPACE 2
+* INSERT A VOLSER
+EXECINS  DS    0F
+         MVC   $IOAREA(DBSLEN),RECTMPL
+         MVC   $IOAREA(VOLSRLEN),CARDLINE+7  PUT VOLSER INTO IT
+         BAL   R4,CHKVOLSR         CHECK VOLSER ON INSERTS
+         BAL   R4,INSERT
+         BAL   R4,SUCCESSM
+         B     READCARD
+         SPACE 2
+* DELETE A VOLSER
+EXECDELT DS    0F          DELETE RECORD
+         MVC   $IOAREA(VOLSRLEN),CARDLINE+7 KEY TO USE IS VOLSER
+         BAL   R4,READEXCT
+         BAL   R4,DELETE
+         BAL   R4,SUCCESSM
+         B     READCARD
+         SPACE 2
+* CHANGE A VOLSER ENTRY TO A SCRATCH VOLSER
+EXECSCRT DS    0F          VOLSER TO BE SCRATCH
+         MVC   $IOAREA(VOLSRLEN),CARDLINE+8 KEY TO USE IS VOLSER
+         BAL   R4,READEXCT
+         MVC   $IOAREA(DBSLEN),RECTMPL
+         MVC   $IOAREA(VOLSRLEN),CARDLINE+8 KEY TO USE IS VOLSER
+         BAL   R4,UPDATE
+         BAL   R4,SUCCESSM
+         B     READCARD
+         SPACE 2
+* SEEK TO THE START OF THE FILE
+SEEKSTRT DS    0F
+         ST    R4,SEEKRSAV
+         MVC   $IOAREA(6),SPACES6   # NULL VOLSER
+         BAL   R4,READAPRX
+         L     R4,SEEKRSAV
+         BR    R4
+SEEKRSAV DS    1F
+         LTORG
+         EJECT
+*===========================================================*
+*           START OF VSAM IO CODE BLOCK                     *
+*===========================================================*
+         SPACE 1
+*-----------------------------------------------------------*
+* OPENKSDS                                                  *
+* OPEN THE VSAM FILE FOR KSDS, INPUT/OUTPUT                 *
+*-----------------------------------------------------------*
+OPENKSDS DS    0F
+         ST    R4,SAVER4
+* RESET FIELDS USED FOR STATUS INFORMATION
+         XC    $RC,$RC             CLEAR RETURN CODE
+         XC    $VSRC,$VSRC         CLEAR VSAM RETURN CODE
+         XC    $VSFUNC,$VSFUNC     CLEAR VSAM FUNCTION CODE
+         XC    $VSREAS,$VSREAS     CLEAR VSAM REASON CODE
+         L     R10,=A($IOAREA)     THE IO BUFFER AREA
+         SR    R7,R7               CLEAR ADDR FOR STORE
+         ST    R7,RECOVRPL         NO RPL FIXUPS NEEDED YET
+         LA    R7,DBSLEN           SET RECLEN VALUE, ITS AN EQU VALUE
+*                                  SO LA IS OK, L GIVES ALIGNMENT ERR
+*
+         STH   R7,$RECLEN
+         LA    R7,VOLSRLEN         SET KEYLEN VALUE (VOLSER)
+         STH   R7,$KEYLEN
+         SR    R7,R7               CLEAR AGAIN
+* BUILD ACCESS CONTROL BLOCK USING MODEL
+         MVC   IFGACB($ACBLEN),ACBMODEL
+         LA    R2,IFGACB
+         MODCB ACB=(R2),DDNAME=(*,$DDNAME)
+* BUILD REQUEST PARAMETER LIST USING MODEL
+         MVC   IFGRPL($RPLLEN),RPLMODEL
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),ACB=(S,IFGACB)
+* ACCESS MODE TO BE USED, KSDS, IN R7
+         SR    R7,R7
+         LA    R7,18
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(KEY)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(KEY)
+* USE DYNAMIC ACCESS FOR THE VSAM FILE
+         LA    R7,6(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(SEQ,DIR)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(SEQ)
+* FILE TO BE OPENED FOR INPUT/OUTPUT
+         LA    R7,2(,R7)
+         LA    R2,IFGACB
+         MODCB ACB=(R2),MACRF=(OUT)
+         LA    R2,IFGRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+* DO THE REST OF THE REQUIRED RPL MODS AND OPEN THE DS
+         BAL   R14,MODIFY
+         LA    R2,IFGACB
+         OPEN  ((R2))
+*        R15 IS CHECKED BY THE CALLER FOR SUCCESS
+* OK, DONE HERE
+OPENKSDX L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* READ EXACT                                                *
+*-----------------------------------------------------------*
+READEXCT DS    0F       READ EXACT
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+         SR    R7,R7          NO NEED TO RESTORE DEFAULT
+         ST    R7,RECOVRPL
+* KEYPOSITION
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         POINT RPL=(R2)
+         MODCB RPL=(R2),OPTCD=(KEQ)
+* READ
+         BAL   R14,MODIFY
+         GET   RPL=(R2)
+         SHOWCB RPL=(R2),FIELDS=RECLEN,AREA=FEEDBACK,LENGTH=4
+         L     R7,FEEDBACK
+         STH   R7,$RECLEN     LENGTH ACTUALLY READ
+* DONE
+         L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* READ APROXIMATE                                           *
+*-----------------------------------------------------------*
+READAPRX DS    0F       READ APROX (GTE)
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+* KEYPOSITION
+         MODCB RPL=(R2),OPTCD=(KGE)
+         LA    R7,@STARTRS    ADDRESS TO RESTORE DEFAULT
+         ST    R7,RECOVRPL
+         POINT RPL=(R2)
+         SR    R7,R7      TO AVOID LOOPING IF ERROR ON MODCB
+         ST    R7,RECOVRPL
+         MODCB RPL=(R2),OPTCD=(KEQ)
+* READ
+         BAL   R14,MODIFY
+         GET   RPL=(R2)
+         SHOWCB RPL=(R2),FIELDS=RECLEN,AREA=FEEDBACK,LENGTH=4
+         L     R7,FEEDBACK
+         STH   R7,$RECLEN     LENGTH ACTUALL READ
+* DONE
+         L     R4,SAVER4
+         BR    R4
+         SPACE 1
+@STARTRS SR    R7,R7          TO AVOID LOOPING IF ERROR ON MODCB
+         ST    R7,RECOVRPL
+         MODCB RPL=(R2),OPTCD=(KEQ)
+         B     READCARD    <-- startrs is if an error ocurred
+*                               but we just get next sysin
+*                               card and process it
+         SPACE 2
+*-----------------------------------------------------------*
+* INSERT A NEW RECORD                                       *
+*-----------------------------------------------------------*
+INSERT   DS    0F
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+         SR    R7,R7          NO RESET ON ERROR NEEDED
+         MODCB RPL=(R2),OPTCD=(NUP)
+         LA    R7,@WRITERS    ADDRESS TO RESTORE DEFAULT
+         ST    R7,RECOVRPL
+         PUT   RPL=(R2)
+         SR    R7,R7          TO AVOID LOOPING ON MODCB ERROR
+         ST    R7,RECOVRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+         L     R4,SAVER4
+         BR    R4
+         SPACE 1
+@WRITERS DS    0H
+         SR    R7,R7          TO AVOID LOOPING ON MODCB ERROR
+         ST    R7,RECOVRPL
+         MODCB RPL=(R2),OPTCD=(UPD)
+         B     READCARD    <--- writors run on modcb error
+*                               but we just get next sysin
+*                               card and process it
+         SPACE 2
+*-----------------------------------------------------------*
+* UPDATE AN EXISTING RECORD                                 *
+* A READ EXACT SHOULD HAVE BEEN DONE PRIOR.                 *
+* WILL UPDATE THE LAST RECORD READ !.                       *
+*-----------------------------------------------------------*
+UPDATE   DS    0F
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+         LA    R7,@WRITERS    ADDRESS TO RESTORE DEFAULT
+         ST    R7,RECOVRPL
+         LA    R2,IFGRPL
+*
+         SR    R3,R3          CLEAR R3 TO LOAD
+         LH    R3,$RECLEN     LENGTH THAT WAS READ
+*        LA    R3,DBSLEN      USE KNOWN RECORD LENGTH, FIX? NO WORK
+*
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10)
+         PUT   RPL=(R2)
+         L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* DELETE AN EXISTING RECORD                                 *
+* A READ EXACT SHOULD HAVE BEEN DONE PRIOR.                 *
+* WILL DELETE THE LAST RECORD READ !.                       *
+*-----------------------------------------------------------*
+DELETE   DS    0F
+         ST    R4,SAVER4
+         BAL   R14,MODIFY
+         LA    R2,IFGRPL
+         SR    R3,R3          CLEAR R3 TO LOAD
+         LH    R3,$RECLEN     LENGTH THAT WAS READ
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10)
+         ERASE RPL=(R2)
+         L     R4,SAVER4
+         BR    R4
+         SPACE 2
+*-----------------------------------------------------------*
+* CALLED TO SET ALL THE DEFAULT ACB/RPL VALUES. SHOULD BE   *
+* CALLED PRIOR TO EACH VSAM REQUEST.                        *
+*-----------------------------------------------------------*
+MODIFY   DS    0F
+         ST    R14,SAVER14       SAVE RETURN ADDRESS
+         LA    R2,IFGRPL         ADDRESS GENERATED BY RPL
+         SR    R3,R3             CLEAR R3 TO LOAD
+*         LA    R3,DBSLEN    MAY BE CHANGED BY IO, USE BELOW
+         LH    R3,$RECLEN        LENGTH OF RECORD
+         SR    R4,R4             CLEAR R4 FOR KEY ADDRESS
+         SR    R5,R5             CLEAR R5 FOR KEY LENGTH
+         LA    R4,$RRN           ADDRESS RELATIVE RECORD NUM
+         LH    R4,$RKP           LOAD KEY OFFSET
+         AR    R4,R10            ADD RECORD ADDRESS
+         LH    R5,$KEYLEN        LOAD KEY LENGTH
+         MODCB RPL=(R2),RECLEN=(R3),AREALEN=(R3),AREA=(R10),           X
+               ARG=(R4),KEYLEN=(R5)
+         L     R14,SAVER14       RELOAD RETURN ADDRESS
+         BR    R14
+SAVER14  DS    1F                SAVE LOCAL RETURN ADDRESS
+         SPACE 2
+*-----------------------------------------------------------*
+* ERROR DURING VSAM PROCESSING. THE EXLST BROUGHT US HERE.  *
+*-----------------------------------------------------------*
+VSERROR  DS    0F
+         LA    R2,IFGRPL
+         SHOWCB RPL=(R2),FIELDS=FDBK,AREA=FEEDBACK,LENGTH=4
+         ICM   R5,B'1111',FEEDBACK RETRIEVE FEEDBACK CODES
+         STCM  R5,B'0100',$VSRC+1   AND VSAM RETURN CODE
+         STCM  R5,B'0010',$VSFUNC+1 AND VSAM FUNCTION CODE
+         STCM  R5,B'0001',$VSREAS+1 AND VSAM REASON CODE
+         SPACEOUT SYSPRLIN
+         XR    R5,R5
+         LH    R5,$VSREAS          Reason= bit
+         CL    R5,=F'08'           DUPLICATE KEY
+         BE    VSERRTX1
+*        CL    R5,=F'12'           SEQUENCE CHECK
+*        BE    VSERRTX2
+         CL    R5,=F'16'           RECORD NOT FOUND
+         BE    VSERRTX3
+         MVC  SYSPRLIN(36),ERRDUMP VSAM RC=nnn, FC=nnn, REASON CODE=nnn
+         STM   R5,R6,VSERSAV2
+         LH    R5,$VSRC            RC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+8(3),NUMBUF
+         LH    R5,$VSFUNC          FC= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+16(3),NUMBUF
+         LH    R5,$VSREAS          Reason= bit
+         CVD   R5,NUMBUF
+         UNPK  NUMBUF(3),NUMBUF+6
+         OI    NUMBUF+2,C'0'
+         MVC   SYSPRLIN+33(3),NUMBUF
+         PUT   SYSPRINT,SYSPRLIN
+         SPACEOUT SYSPRLIN
+         B     VSERROR0
+VSERRTX1 MVC   SYSPRLIN(L'ERDUPKEY),ERDUPKEY
+         PUT   SYSPRINT,SYSPRLIN
+         B     VSERROR0
+VSERRTX3 MVC   SYSPRLIN(L'ERNOKEY),ERNOKEY
+         PUT   SYSPRINT,SYSPRLIN
+*        B     VSERROR0
+VSERROR0 LM    R5,R6,VSERSAV2
+* **** IF WE WERE DOING A STARTGE OR WRITE THEN THE
+*      RPL WAS MODIFIED AND WE NEED TO SET IT BACK
+         L     R7,RECOVRPL  RECOVERY ACTION ADDRESS
+         LTR   R7,R7
+         BZ    VSERROR1    NO ACTION NEEDED
+         XR    R4,R4       CLEAR RECOVERY ADDR TO OREVENT ANY
+         ST    R4,RECOVRPL  CHANCE OF RECURSION
+         BR    R7          ELSE DO IT
+VSERROR1 B     READCARD    ERROR HANDLED, GET NEXT SYSIN CARD
+VSERSAV2 DS    2F
+         SPACE 2
+*-----------------------------------------------------------*
+* EOF ON VSAM FILE, REQUESTED RECORD NOT FOUND ?, BUT NO    *
+* ERROR MESSAGE AS THIS MAY JUST BE EOF FROM A LIST/ALL     *
+*-----------------------------------------------------------*
+VSEOF    DS    0F
+         B     READCARD    AND GET NEXT SYSIN CARD
+         EJECT
+*-----------------------------------------------------------*
+* CHECK THE VOLSER THAT IS BEING USED TO ENSURE IT IS SIX   *
+* BYTES WITH NO SPACES.                                     *
+* ONLY CALLED ON INSERTS. NOT NEEDED ELSEWHERE AS IF A CARD *
+* HAS AN ILLEGAL VOLSER FOR OTHER FUNCTIONS THE RECORD NOT  *
+* FOUND ERROR IS PERFECTLY ADEQUATE.                        *
+*-----------------------------------------------------------*
+CHKVOLSR DS    0F
+         STM   R4,R5,CHKSAVE2
+         LA    R4,$IOAREA
+         L     R5,ZERO           COUNTER ZERO
+CHKVOLS0 CLI   0(R4),C' '        IS BYTE N A SPACE ?
+         BE    CHKVOLS1          YES, BAD VOLSER
+         A     R5,ONE            ADD 1 TO COUNTER
+         CL    R5,FIVE           NO, HAVE WE CHECKED 6 BYTES ?
+         BE    CHKVOLS2          YES, DONE
+         A     R4,ONE            ADD 1 TO ADDR BEING CHECKED
+         B     CHKVOLS0          AND CHECK THE NEXT ADDR
+CHKVOLS1 DS    0F
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'ERVOLLEN),ERVOLLEN
+         MVC   SYSPRLIN(VOLSRLEN),$IOAREA
+         PUT   SYSPRINT,SYSPRLIN
+         LM    R4,R5,CHKSAVE2
+         B     READCARD       JUST GO GET NEXT CARD
+CHKVOLS2 LM    R4,R5,CHKSAVE2
+         BR    R4             RETURN TO CALLER, WE CONTINUE
+CHKSAVE2 DS    2F
+         EJECT
+SUCCESSM DS    0F
+         ST    R4,SAVER4
+         SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(L'SUCCESS),SUCCESS
+         PUT   SYSPRINT,SYSPRLIN
+         L     R4,SAVER4
+         BR    R4
+         LTORG
+*-----------------------------------------------------------*
+* THIS ACCESS CONTROL BLOCK IS USED AS A MODEL TO BUILD     *
+* VSAM ACB'S DYNAMICALLY.                                   *
+*-----------------------------------------------------------*
+ACBMODEL ACB  DDNAME=VSAMDD,EXLST=EXL001
+         SPACE 1
+*-----------------------------------------------------------*
+* THE REQUEST PARAMETER BLOCK HERE IS USED AS A MODEL TO    *
+* BUILD REQUESTS DYNAMICALLY AS NEEDED.                     *
+*-----------------------------------------------------------*
+RPLMODEL RPL  ACB=ACBMODEL
+         SPACE 1
+*-----------------------------------------------------------*
+*-----------------------------------------------------------*
+EXL001   EXLST LERAD=VSERROR,SYNAD=VSERROR,EODAD=VSEOF
+         SPACE 2
+         LTORG
+*-----------------------------------------------------------*
+* DATA AREAS USED                                           *
+*-----------------------------------------------------------*
+FEEDBACK DS   0F
+RECOVRPL DS   0F
+$RC      DS   H
+$VSRC    DS   H
+$VSFUNC  DS   H
+$VSREAS  DS   H
+$DDNAME  DC   CL8'TAPEVOLS'        DDNAME USED
+$RECLEN  DS   H
+$RKP     DS   H
+$KEYLEN  DS   H
+$RRN     EQU  $RKP
+         SPACE 2
+         LTORG
+*-----------------------------------------------------------*
+* THE ACTUAL ACB AND RPL USED                               *
+*-----------------------------------------------------------*
+         IFGACB DSECT=NO
+$ACBLEN  EQU    (*-IFGACB)
+         IFGRPL DSECT=NO
+$RPLLEN  EQU    (*-IFGRPL)
+         SPACE 2
+*-----------------------------------------------------------*
+* THE IO RECORD/DATA AREA, ADDRESS USING R10                *
+*-----------------------------------------------------------*
+$IOAREA  DS   CL150' '   RECORD IS 132 BYTES, ALLOW MORE
+*                        AT LEAST 50 MORE IF POSSIBLE
+         SPACE 1
+*===========================================================*
+*            END OF VSAM IO CODE BLOCK                      *
+*===========================================================*
+         SPACE 2
+         LTORG
+SAVEAREA DS    18F
+SAVER4   DS    1F
+         SPACE 2
+         LTORG
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=(PM),DSORG=PS,RECFM=F,            X
+               LRECL=132,BLKSIZE=132
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,EODAD=EXIT
+         SPACE 2
+         LTORG
+CARDLEN  EQU   80
+CARDLINE DS    CL80
+SYSPRLIN DC    CL132' '
+ERVOLLEN DC    CL27'vvvvvv IS AN INVALID VOLSER'
+ERDUPKEY DC    CL13'RECORD EXISTS'
+ERNOKEY  DC    CL18'NO MATCHING RECORD'
+ERSYSIN  DC    CL21'I-O ERROR ON DD SYSIN'
+ERTAPVOL DC    CL24'I-O ERROR ON DD TAPEVOLS'
+ERRDUMP  DC    CL36'VSAM RC=nnn, FC=nnn, REASON CODE=nnn'
+BADCARD  DC    CL21'INVALID CARD, IGNORED'
+SUCCESS  DC    CL7'SUCCESS'
+ISLIST   DC    CL8'LIST ALL'
+ISLISTS  DC    CL12'LIST SCRATCH'
+ISINSERT DC    CL7'INSERT '
+ISDELETE DC    CL7'DELETE '
+ISSCRTCH DC    CL8'SCRATCH '
+NULLJOB  DC    CL8'--------'  DEFAULT NO JOBNAME
+ZEROS5   DC    CL5'00000'     DEFAULT EXP-DATE YYDDD
+         LTORG
+ZERO     DC    F'0'
+ONE      DC    F'1'
+FIVE     DC    F'5'
+TEN      DC    F'10'
+SPACES6  DC    CL6' '
+NUMBUF   DC    D'0'
+         SPACE 2
+         LTORG
+* THE VSAM FIELD RECORD LAYOUT
+VOLSRLEN EQU 6     FOR LA STATEMENTS TO CLEAR THE KEY
+*                  AND FOR MOVING INTO MESSAGES
+         PRINT GEN
+         DBREC
+         PRINT NOGEN
+         EJECT
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB(TAPEMUTL),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(TAPEMUTL)
+ ENTRY TAPEMUTL
+ NAME TAPEMUTL(R)
+/*
+//
+./ ENDUP
+QQ
+//DOCLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.DOC
+//SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.DOC
+//SYSIN DD DATA,DLM=QQ
+./ ADD NAME=@ABOUT
+============================================================
+             $ABOUT.doc - TAPEMAN overview
+============================================================
+
+Provides AUTOMATION OF TAPE MOUNTS for HERCULES MVS3.8J systems.
+
+Latest version available at:
+        http://mdickinson.dyndns.org/hercules/downloads/tapeman.php
+
+SINCE VERSION3: ONLY IF THOSE SYSTEMS HAVE MY MMPF UTILITY INSTALLED
+                (MMPF is also available from my website, and a lot
+                 easier to implement than TAPEMAN3 itself; plus MMPF
+                 automates more that just tape messages, so try it;
+           http://mdickinson.dyndns.org/hercules/downloads/mmpf.php)
+
+Functional Summary
+------------------
+Maintains a catalogue of tape volser names. These volsers are
+used to provide a pool of (.aws tape files only) tapes that will
+be automatically mounted when mount requests for either named
+volsers or scratch tapes are issued by the OS.
+
+Named tapes are self explainatory, if they are in the catalogue
+they will be mounted when called for by name, and their expiry
+updated by +14 days from the current date.
+
+Scratch tape mounts have an extra step, if a scratch tape (one
+that has expired) is found in the catalogue it is mounted and
+the expiry updated (it is no longer scratch). If however no
+scratch tapes are left the operators are WTOR'ed to provide a
+volser; see details for how this is handled.
+
+
+SEE BELOW SECTIONS...
+   DETAILS     - what it actually will do for you
+   LIMITATIONS - what limitations are known
+
+
+ DETAILS
+=========
+
+NAMED VOLSER MOUNT REQUESTS
+---------------------------
+When a mount for a named tape volser XXXXXX is requested,
+
+    check to see if the tape volser is in the catalogue
+       YES - issue the 'devinit CUU tapes/XXXXX.aws' command to
+             mount it. CUU and XXXXX are taken from the mount
+             message.
+             --AND-- update expiry date on volser by +14 days from
+             the current date.
+       NO  - WTO (highlighted) that the volser is not automated
+             TAP005A MANUALLY MOUNT vvvvvv ON cuu, JOB JJJJJJJJ
+             (I use MMPF to cancel job JJJJJJJJ when that is issued
+              as I assume a 'guest' is requesting a tape they should
+              not be using, guest typo).
+
+    reasoning
+       a) you could be installing new software, the tape files for
+          that are probably somewhere other than your 'tapes'
+          directory so trying to automount would be bad.
+          If I deliberately want to mount a non-automated tape I would
+          disable the MMPF cancel rule; if you do not have MMPF you
+          will have the job sitting there waiting for a manual mount.
+       b) if you had a typo in the jcl of your job and were asking
+          for a volser that did not exist you would go into an
+          endless loop of devinits for non-existent files, resulting
+          in device switch prompts, which if answered to would repeat
+          the cycle again.., until you cancelled the job. better that
+          tapeman just WTOs and ignores it so you can sort it out.
+       c) expiry by +14 days always !. cannot tell the difference
+          between read/write requests from the mount message (and
+          cannot wait for a K(lear) message as another job may have
+          asked for a scratch, so for any mount we manage just +14
+          expiry (no probs, if a read then someone wants the files
+          anyway, so keeping longer is good).
+
+
+SCRATCH TAPE MOUNT REQUESTS
+---------------------------
+When a mount for a scratch tape is requested (where volser is PRIVAT)
+
+  scan the catalogue for any available scratch tapes
+
+  scratch tape found
+       YES - issue the 'devinit CUU tapes/XXXXX.aws' command to
+             mount it. CUU and XXXXX are taken from the mount
+             message.
+       NO  - pain in the butt, but it happens
+             (1) issue a WTO saying no scratch tapes are availabe.
+             (2) issue a WTOR asking for a tape volser or 'CANCEL'
+                 (2.1) operator replies with a volser in our
+                       catalogue. We mount it and update the
+                       expiry to +14 days from today with the new
+                       jobname that used it
+                 (2.2) EXCEPTION CASE ALLOWED
+                       operator replies with a volser NOT in our
+                       catalogue. We mount it but do not track it.
+                       this is simply because as manual action is
+                       required we trust the support staff to
+                       ensure this volser exists, presumably created
+                       as a one-off response to no existing volsers
+                       being free.
+                       Notes: if between the time the WTOR is issued
+                       and the reply givin the new tape is added to
+                       the catalogue it is treated as per 2.1 when
+                       the WTOR is finally replied to and updated
+                       with an expiry of +14 days from today.
+
+
+
+
+LIMITATIONS AT PRESENT
+======================
+  - tape files must be named XXXXXX.aws, volser then .aws ,
+    .het suffixes are not implemented as I don't use them
+  - all tapes must be in the 'tapes' directory under the path you
+    were in when you started hercules
+  - expiry times for catalog entries hard coded in TAPEMAN program,
+    currently set to +14 days
+  - when a scratch tape is used expiry is set to +14 days
+  - ...actually when any tape is used expiry is set to +14 day, as
+    a) can't trigger on the Klear message as another job may have
+       asked for a scratch and got the same tape by then, so it has
+       to be allocated at the mount request time
+    b) can't really distinguish between write.read mount requests,
+       so have to put the new expiry on any mount request
+    c) doesn't matter, it someone restores from a tape the tape is
+       still needed so probably should bump expiry anyway.
+
+MAJOR LIMITATION
+================
+  Version 3 of TAPEMAN can no longer be triggered from IEECVXIT.
+  In order to use the latest version of TAPEMAN you require my
+  MMPF message automation product.
+  http://mdickinson.dyndns.org/hercules/downloads/mmpf.php
+  
+./ ADD NAME=@BUGS
+NOT A BUG, AN ADVISORY
+======================
+I HAVE CHANGED ALL THE DSET PREFIXES FROM UTILS TO INSTALL,
+I MAY HAVE MISSED A FEW DATASETS.
+IF ANY INSTALL STEP ERRORS CHECK FOR A BAD PREFIX IN THE JOB.
+
+NOW ONTO KNOWN APLLICATION BUGS
+
+KNOWN BUGS                                                            
+==========                                                         
+THERE ARE THREE KNOWN ISSUES.                                       
+ISSUE 2. IS NOT AN ISSUE WITH THE TAPEMAN TOOLKIT BUT WITH HOW THE 
+O/S LOCKS FILES. WORKAROUND PROVIDED.                               
+
+1. (LOW) HANDLING WHEN THE VSAM DATASET WASN'T PROPERLY CLOSED       
+   AS TAPEMAN ABSULUTELY MUST RUN TO MOUNT TAPES, WHEN IT             
+   HAS AN OPEN ERROR ON THE VSAM FILE IT JUST ASSUMES THIS            
+   IS BECAUSE A PREVIOUS JOB ABENDED AND DIDN'T CLOSE IT.            
+   IT RETRIES THE OPEN ONCE, IF SUCESSFULL ON THE RETRY CARRIES ON.  
+   THE BUG HERE IS WHEN IT CARRIES ON THERE ARE A LOT OF VSAM MESSAGES  
+   WRITTEN TO THE CONSOLE, AND WHEN TAPEMAN COMPLETES THE TAPE MOUNT   
+   AN ABEND SC03 OCCURS.                                            
+   HOWEVER TAPEMAN HAS COMPLETED ALL OPERATIONS AND THE FILE HAS BEEN  
+   SUCESSFULLY CLOSED.                                               
+   **THIS IS PROBABLY NOT A REAL ISSUE IN V3 AS MMPF GENERALLY
+     CONTROLS THE TAPE CATALOG FILE, JUST SHUTDOWN MMPF CLEANLY.
+
+   ACTION NEEDED: NONE.                                               
+
+
+2. (HIGH) WITH THE OS NOT THE PROGRAM                                
+   EVEN THOUGH ALL MY BACKUP JOBS USE FILES WITH A DISP=SHR SOMETIMES  
+   THE OS LOCKS THEM SO TAPEMAN WAITS FOR ITS OWN PROGRAM LIBRARY TO  
+   BECOME FREE, EFFECTIVELY TAPEMAN CAN DEADLOCK. THIS IS NOT UNIQUE  
+   TO TAPEMAN, I HAVE BACKUP JOBS THAT DEADLOCK ON FILES LIKE          
+   SYS1.VTAMLST WHILE NET IS RUNNING, MY APF LIBRARIES WHEN MY         
+   AUTOMATION STC IS RUNNING ETC.                                         
+
+   ACTION NEEDED: THIS WILL PROBABLY TAKE YOU A WHILE, EACH SITE WILL  
+                  HAVE IT'S OWN REQUIREMENTS. YOU NEED TO IDENTIFY    
+                  ALL LIBRARIES LOCKED THIS WAY BY THE O/S AND REMOVE  
+                  THEM FROM REGULAR BACKUP SCHEDULES.                  
+                  CREATE A SEPERATE JOB TO BACK THESE FILES UP WHILE  
+                  AUTOMATION IS SHUTDOWN (CRITICAL) AND ANY OTHER STCS 
+                  YOU RUN THAT COULD LOCK FILES SHUTDOWN  U S I N G     
+                  THE TAPEMCUU PROGRAM TO REQUEST AND MOUNT A SCRATCH  
+                  TAPE.                                              
+                  AUTOMATION MUST BE SHUTDOWN WHEN USING TAPEMCUU TO   
+                  PREVENT AUTOMATION TRYING TO HANDLE THE MOUNT MESSAGE 
+                  THAT TAPEMCUU IS GOING TO BE HANDLING.             
+                  (SEE TAPEMCUU DOCUMENTATION)                          
+
+3. (MEDIUM) NEW WITH VERSION 3
+   NOW MMPF NEEDS A DD FOR THE VSAM FILE THE UTILITY PROGRAMS CANNOT
+   BE RUN WHILE MMPF IS RUNNING, THE EXAMPLE DD CARD FOR MMPF HAS A
+   DISP=OLD TO ENFORCE THIS.
+   USING A DISP=SHR WAS OK FOR MMPF BUT RUNNING THE UTILITY PROGRAMS
+   WITH A DISP OF SHARE ALSO CREATED IO ERRORS ON THE VSAM DATABASE,
+   NO DAMAGE IS DONE THEY JUST CANNOT ACCESS IT; MUST BE SHARING
+   MANAGEMENT AT THE VSAM LEVEL.
+   SO YOU MUST SHUTDOWN MMPF TO MANUALLY WORK WITH THE DATABASE FILE!.
+
+   ACTION NEEEDED: JUST ENSURE YOU SHUTDOWN MMPF WHEN DOING ANY MANUAL
+                   DATABASE MAINTENANCE (ADDING, DELETING, TAPES ETC)
+                   YOU CAN WAIT FOR THE WAITING FOR DATASETS MESSAGE
+                   FROM YOU JOB AND JUST STOP/START MMPF AS NEEDED.
+
+   NOTES: THIS WAS NEVER AN ISSUE IN VERSION 1 AND 2 SIMPLY BECAUSE
+          ALL JOBS USED A DISP OF OLD THEN, AS IEECVXIT TRIGGERED A
+          PROC ONLY ON DEMAND THE DATABASE WAS NORMALLY UNALLOCATED.
+*** UPDATE ***
+ IN MY SITE I NOW USE DISP=OLD ON THE VSAM CATALOG AT ALL TIMES, IN
+ ALL JOBS TO ENFORCE THAT...
+ AND USE AUTOMATION TO SHUTDOWN MMPF WHEN A UTILITY PROGRAM WANTS
+ TO ACCESS THE DATABASES (AND AUTOMATION RESTARTS MMPF WHEN DONE)
+ THAT WORKS FOR ME, SO I WILL NOT BE FOLOWING UP THIS ISSUE.
+ - IEECVXIT DOES A 'P MMPF' IF A JOBS 'WAITING ON DATASET' MESSAGE
+   CONTAINS THE TAPEMAN3 VSAM DATABASE, AND MY TASKMON PROGRAM STARTS
+   IT AGAIN, UP TO YOU HOW YOU DO IT.
+./ ADD NAME=@FILES
+These are all the files provided with the TAPEMAN distribution,
+and a desription of what each member within the files is used
+for as shipped.
+
+TAPEMAN.SRC
+  This is the source code for all the program files, excluding the
+  herccmd program for which I do not have the source.
+     TAPEMAN   - tapeman tape mounter program itself
+     TAPEMCUU  - batch mounter on CUU when automation is shutdown
+     TAPEMDES  - untested. should update the tape description
+     TAPEMEXP  - manually alter a tape expiry, for testing expiry
+     TAPEMUTL  - vsam database update utility
+     TAPEMSCR  - daily scratch program
+
+TAPEMAN.LINKLIB
+  These are pre-assembled modules. See the documentation for those
+  that need to be in apf libraries and those that don't.
+     TAPEMAN   - tapeman program itself
+     TAPEMCUU  - batch mounter when automation is shutdown
+     TAPEMDES  - untested. should update the tape description
+     TAPEMEXP  - manually alter a tape expiry, for testing expiry
+     TAPEMUTL  - vsam database utility program
+     TAPEMSCR  - daily scratch program
+
+TAPEMAN.INSTALL
+  Jobs to run to setup the environment for tapeman. The order these
+  should be run is covered in the TAPEMAN.DOC file.
+     $README   - basically says dont run any jobs without reading
+                 the $INSTALL in the TAPEMAN.DOC file.
+     CREATEDB  - create the vsam database
+     PROC      - example proc to place into your system proclib
+     CUTILS    - copy tapemscr and tapemutl between linklibs
+     CTAPEMAN  - copy tapeman3 between linklibs
+
+TAPEMAN.CONTROL
+  These are sample jobs to manage the tape database.
+     UTLADD    - sample job to add tape volers to the vsam database
+     UTLDEL    - sample job to delete tapes from the vsam database
+     UTLSCR    - sample job to change volsers back to scratch state
+     UTLLIST   - sample job with various volser list options
+     TAPLABEL  - sample batch job to label new tapes
+     DAILYSCR  - sample daily scratch job
+
+TAPEMAN.DOC
+  This is documentation on how to install TAPEMAN, and also
+  documentation on how to use the utility programs.
+    $ABOUT    - basic info on purpose of toolkit
+    $BUGS     - known bugs and workarounds
+    $$INSTALL - how to install
+    $FILES    - this member
+    MMPF      - how to configure MMPF for tape automation
+    TAPEMCUU  - manual on TAPEMCUU
+    TAPEMSCR  - manual on TAPEMSCR
+    TAPEMUTL  - manual on TAPEMUTL
+./ ADD NAME=@INSTALL
+TAPEMAN - INSTALLATION PROCEDURE
+================================
+
+Assumptions:
+   That you have sucessfully run the JCL stream to create all
+   the installation files, and are reading this from the
+   installed <pref>.TAPEMAN3.DOC file.
+
+===============================================================
+                   INSTALLATION STEPS
+===============================================================
+This is a quick list of what needs doing. It may look complicated
+but should take less than 20 minutes after filling out the
+preparation sheet in Apendix B.
+All the tasks are covered in detail after this index.
+
+0. Backup
+
+1. Preparation - gather information you will need
+2. Create a 'tapes' directory and create some .aws tape files
+   in it. You will need to initialise them also.
+3. Install the HERCCMD program   (into APF authorised library)
+4. Install TAPEMAN and TAPEMCUU programs (into APF authorised library)
+5. Install the utility programs (not APF authorised)
+6. Create the VSAM 'volser' database
+7. Load some tape volsers into the VSAM database
+8. Ensure some tape units are online after an IPL
+8.1 - update the hercules config file
+8.2 - ensure they are varied online at IPL time
+9. Update the hercules config file (again)
+10. Automate the messages using MMPF
+
+    The below is required only if you do not have a vsam
+    dataspace area already assigned at your site.
+Appendix A - Create a dedicated VSAM volume
+A.1 - create the volume
+A.2 - add the new device to your hercules config file
+A.3 - create a new catalogue and dataspace
+
+Appendix B - preparation datasheet
+
+Appendix C - installtion checklist (very short)
+
+
+---------------------------------------------------------------
+                        BACKUP
+---------------------------------------------------------------
+0. Backup
+   This goes without saying. But it is supprising how often it
+   is overlooked.
+   Of course you are using a linux server, so shutdown your
+   hercules system and tar -zcvf your entire hercules site
+   somewhere before beginning this. Then if you have any
+   problems you can untar it back.
+
+
+---------------------------------------------------------------
+                      PREPARATION
+---------------------------------------------------------------
+1. Preparation
+   - Identify all the aws tape volumes your site uses, you will need
+     to know these in order to migrate them to a 'tapes' directory
+     where the automation expects them to be.
+   - Locate your VSAM dataspaces and the file aliases that can live
+     within them (I assume you have some). The volser database is a
+     VSAM file so needs a VSAM dataspace to be created in.
+     If you do not have one already see...
+         Appendix A: create a dedicated VSAM volume (3330)
+   - Identify an APF authorised library you can use, that is in the
+     linklist. Both the HERCCMD and TAPEMAN3 programs must be in APF
+     authorised libraries that are also in the linklist.
+   - Check you have all the expected files from the tape
+     <pref>.TAPEMAN3.SRC       source files
+     <pref>.TAPEMAN3.CONTROL   sample management jobs
+     <pref>.TAPEMAN3.INSTALL   installation jobs
+     <pref>.TAPEMAN3.LINKLIB   populated by the install JCL assemblies
+     <pref>.TAPEMAN3.DOC       documentation
+
+
+2. Create the expected unix (or if you have to, dos) environment
+
+   - Under the directory you start hercules from
+     create a directory 'tapes'.
+     ***DOS/WIN*** the TAPEMAN3 program builds the HERCCMD comand
+                   as tapes/<volser>.aws and as I have never tried
+                   to use this under DOS/WIN you may need to change
+                   the tapes/ to a tapes\ in the code. (dunno)
+
+   - Copy all the existing tape files you have you want to be
+     automated into that directory, or preferably create a pool
+     of new AWS tapes in that directory using hetinit (why new ?,
+     any old ones will be treated as scratch tapes until overwritten
+     by a TAPEMAN3 mount so you probably don't want to lose existing
+     backups).
+
+   - For any tapes created initialise them. A sample job is provided
+     in <pref>.TAPEMAN3.CONTROL(TAPLABEL)
+
+   C R I T I C A L - all tape volsers must be VOLSER.aws, the VOLSER
+   is the internal tape label you have labelled them with and MUST
+   be in upper case, as the TAPEMAN3 program will attempt to locate the
+   volume based on the volser in the MVS WTO message which is in
+   upper case. The suffix must be .aws in lower case, thats hard
+   coded in TAPEMAN.
+
+
+---------------------------------------------------------------
+                   INSTALL THE PROGRAMS
+---------------------------------------------------------------
+
+3. Install the HERCCMD program into a APF library
+   This HERCCMD was written by Grzes Plucinski, obtained from
+   http://www.grzes.com/herccmd.aws.
+
+   This is some old JCL I had lying around from when I installed 
+   it. It you do not already have HERCCMD installed obtain the
+   tape from Gregs site above and try this.
+   The target needs to be a 3350 linklib dataset.
+
+//IEBCOPYR JOB (001),'RESTORE HERCCMD',CLASS=A,MSGCLASS=A
+//RELOAD  EXEC PGM=IEBCOPY,REGION=1024K
+//SYSPRINT DD  SYSOUT=*
+//TAPEIN   DD  UNIT=TAPE,DISP=OLD,DSN=GRZES.HERCCMD,
+//             VOL=SER=DHRCMD,LABEL=(,SL)
+//LIBOUT   DD  DISP=SHR,DSN=SYS2.LINKLIB
+//SYSUT3   DD  UNIT=SYSDA,SPACE=(80,(60,45)),DISP=(NEW,DELETE)
+//SYSIN    DD  *
+  COPY INDD=TAPEIN,OUTDD=LIBOUT
+/*
+//
+
+
+4. Install the TAPEMAN3 and TAPEMCUU programs into a APF library
+   Two options here...
+   Either
+     a) Customise CTAPEMAN in <pref>.TAPEMAN3.INSTALL and run the job
+        to copy the program to an APF authorised library.
+   OR
+     b) assemble from source, so you know what you are getting. The
+        job to assemble the programs are in <pref>.TAPEMAN3.SRC and
+        named TAPEMAN3 and TAPEMCUU
+        Update the jobdecks to assemble it into an APF authorised
+        library in your site.
+   **NOTE** if using under DOS/WIN you should probably re-assemble
+            to change the tapes/ to tapes\. Also of you want your
+            tapes anywhere other than in a 'tapes' directory you
+            should change the code here (and rework step 2 as you
+            just changed the rules if you changed tapes).
+
+
+5. Install the TAPEMAN utility programs
+   These DO NOT have to go into an APF authorised library.
+   Three options here...
+   Run ONE of these from <pref>.TAPEMAN.INSTALL...
+     a) if your target library is the same blocksize as the linklib
+        I have shipped, use member <pref>.TAPEMAN3.INSTALL(CUTILS)
+        to copy the modules to your program library.
+     b) or compile them from source. The source jobsare in the file
+        <pref>.TAPEMAN.SRC and are the two members TAPEMSCR and
+        TAPEMUTL.
+   OR
+     c) You could just STEPLIB all your jobs to the installation
+        <pref>.TAPEMAN.LINKLIB provided.
+
+
+---------------------------------------------------------------
+              CREATE THE DATA FILES NEEDED
+---------------------------------------------------------------
+
+6. Create the VSAM 'volser' database
+
+   The tape volser database is an indexed VSAM file. You need
+   to have identified a file prefix (alias) and a volume with
+   a VSAM dataspace file, that still has space :-).
+
+   If you do not have any dataspaces created already you should
+   refer to 'Appendix A' which walks through creating a 3330 pack
+   that is dedicated to VSAM files (the dataspace will fill that
+   pack).
+
+   Once you have the info needed...
+
+   Edit <pref>.TAPEMAN3.INSTALL(CREATEDB) with the volume and
+   file prefix you will be using. You should also review the
+   RECORD line in the database creation info and adjust to
+   meet your expected needs.
+   Then run the job.
+
+
+7. Populate your VSAM 'volser' database with entries
+
+   OK. You have an empty database by now, but there are no
+   scratch tapes in it yet.
+
+   Edit <pref>.TAPEMAN3.CONTROL(UTLADD).
+   Yes, it is not in the install file. This is a job you will
+   probably be running often so it is in the control file.
+
+   You need to alter the volumes in the SYSIN data to be the
+   volumes you have placed (or created) in the tapes directory
+   from step 2. ONLY the volser of course, don't include the .aws
+
+   *CAUTION* When the volser entries are added they are added as
+   SCRATCH tapes available to be overwritten, so don't include your
+   latest backup tapes in the first add job.
+
+
+8. Ensure some tape units are online after an IPL
+
+8.1 - update the hercules config file
+
+   In your hercules configuration file add some (all you want to be
+   automated) tape unit device number entries as per the below
+   samples for devices 310 and 311. This will assign them and allow
+   them to be varied online without getting channel errors.
+0310    3420    *
+0311    3420    *
+
+8.2 - ensure they are varied online at IPL time
+
+   In SYS1.PARMLIB, member COMMND00 you should vary the devices online
+   so they are available immediately after IPL time. Just add lines
+   like the below to the COMMND00 member.
+V 310,ONLINE
+V 311,ONLINE
+
+
+---------------------------------------------------------------
+            CUSTOMISE THE HERCULES CONFIG FILE
+---------------------------------------------------------------
+
+9. Update the hercules config file (again)
+
+  Yes, I could have included that in the earlier update step of
+  this file, but I'm trying to do this in an order that will cause
+  no disruption if you decide to stop halfway through and continue
+  on another day.
+
+  The change this time is to ensure you have the line
+DIAG8CMD  ENABLE
+  present in your hercules config file. The diag8 interface is
+  used by the HERCCMD program to issue the devinit command to
+  mount your tape files, so it must be present.
+
+  You should also add the below entry to your hercules config file
+SHCMDOPT DISABLE
+  to stop your turnkey3 system from being able to run shell
+  scripts via the DIAG8CMD... unless you need to be able to
+  issue shell commands from the hercules program itself, which
+  you shouldn't.
+
+  While you need to exit/restart hercules to pick up this change
+  don't do it just yet. You may as well do the last step first.
+
+
+---------------------------------------------------------------
+                AUTOMATE THE TAPE MOUNT MESSAGES
+---------------------------------------------------------------
+
+11. Automate the messages using MMPF
+
+  From version 3 onward TAPEMAN3 cannot be triggered by IEECVXIT.
+  You must use my MMPF product.
+
+  All the surperflous code in TAPEMAN (which was all the message
+  field parsing) that supported being triggered via IEECVXIT
+  has been removed from TAPEMAN version 3 onward, as all my
+  message parsing is now done by my MMPF utility.
+
+  To use TAPEMAN from MMPF simply 
+  (1) add an extra DD card to the MMPF proc you use, it should be
+      using the filename you selected, the example here is what
+      is used on my system
+//TAPEVOLS DD   DSN=VSAM.TAPEMAN3.VVDS.VOLSERS,DISP=OLD
+      Yes, disp must be old !. shr will run in mmpf ok but then
+      all other utilities trying to share the database will get
+      IO errors on sharing violations.
+
+  (2) add the five lines below to your MMPF configuration
+      file (or a new test one if you are not ready
+      to go live yet) and activate the new rules with
+          F MMPF,MMPF=xx
+      where nn is the number/characters of your MMPF member
+      being used.
+
+       The five lines to add to the MMPF control file are
+* THE NEXT THREE ARE TAPE MOUNT REQUESTS THAT TRIGGER AUTOMATIC MOUNTS
+IEC501A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD8
+IEF233A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD6
+IEC701D  LNK TAPEMAN3 &WORD2 &WORD4 &WORD9 &WORD1
+* TAP005A USED TO CANCEL JOBS THAT ASK FOR A NON-AUTOMATED TAPE
+TAP005A  CMK CANCEL &WORD8
+
+
+       IMPORTANT: This is not as failsafe as using IEECVXIT as
+                  MMPF is a master console screen scraper, so
+                  if an operator (in the hercules environment
+                  that would be you) deletes a mount request
+                  message from the console before MMPF see's 
+                  it it obviously won't be automated.
+                  HOWEVER MMPF is much easier to use, and does not
+                  require you playing with assembler code in
+                  IEECVXIT and filling your dump datasets :-)
+
+
+---------------------------------------------------------------
+      APPENDIX A - If needed create a VSAM volume
+---------------------------------------------------------------
+
+Appendix A - Create a dedicated VSAM volume
+
+   You can use this if your site does not already have existing
+   VSAM dataspaces defined for use with VSAM datasets.
+   These steps will create a 3330 volume named VSAM01 that has
+   its own user catalogue and is totally dedicated as a VSAM
+   database volume.
+
+A.1 - create the volume (unix commandline)
+
+   Create a file vsam01.cfg with the contents below (starting
+   in column 1 of the vsam01.cfg file)
+     vsam01 3330 *
+     sysvtoc vtoc trk 15
+
+   Run the command below to create disk file vsam01.3330
+     dasdload vsam01.cfg vsam01.3330 2
+
+A.2 - add the new device to your hercules config file
+
+  This is site dependant. Locate your hercules start command,
+  which will contain the name of the config file you use. Add
+  a line for the new device as a 3330 volume.
+  If you are unsure what 3330 devices you have free try the
+  MVS command 'D U,DASD,OFFLINE' and look for any 3330 devices.
+
+  Edit the MVS fuile SYS1.PARMLIB, member VATLST00. Add an
+  entry in the member for the new volume similar to the below.
+
+VSAM01,0,2,3330    ,Y        PERMANENT,PRIVATE,3330,MOUNTMSG
+
+  Stop (completely exit) hercules, and restart it to pick up
+  the changed config file.
+
+A.3 - create a new catalogue and dataspace
+
+  You will need to know the master catalogue password for your
+  site for this step. You will be prompted for it twice.
+
+  Run the below batch job. It will create a 30 cylinder user
+  catalogue named USERCAT.VSAM and an alias of VSAM that can be
+  used for any VSAM files you wish to create. The rest of the pack
+  will be allocated as VSAM dataspace
+
+//SYSPROGU JOB 'MID',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=A
+//*
+//* 3330 - 404 CYLS, 19 TRKS PER CYLS      = TOTAL 7676 TRACKS
+//*        I USED 15 TRKS FOR VTOC         - REMAINING 7661 TRACKS
+//*    VTOC SHOWS ONLY 7660 AVAILABLE
+//*        USE REMAINING 7660 TRACKS FOR VSAM DATASPACE
+//*        USE DATA/INDEX TO MAKE CATALOG SPACE 30 TRACKS...
+//*        ...THE REST OF THE SPACE IS AVAILABLE FOR VSAM FILES
+//*
+//CREATCAT EXEC PGM=IDCAMS,REGION=4096K
+//SYSPRINT DD SYSOUT=*
+//* THIS VOLUME WILL ALSO HOUSE THE VSAM CATALOGUE
+//* SO CREATE THAT FIRST.
+//VSAM01 DD UNIT=3330,VOL=SER=VSAM01,DISP=OLD
+//AMSDUMP DD DUMMY
+//SYSIN DD *
+ DEFINE USERCATALOG ( -
+     NAME (USERCAT.VSAM) -
+     VOLUME (VSAM01) -
+     TRACKS (7660 0) -
+     FOR (9999) ) -
+  DATA (TRACKS (15 5)) -
+  INDEX (TRACKS (15))
+/*
+//* THE ADD THE FILE PREFIX THAT WILL BE RECORDED IN THIS
+//* CATALOGUE.
+//ALIAS1 EXEC PGM=IDCAMS,REGION=4096K,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//VSAM01 DD UNIT=3330,VOL=SER=VSAM01,DISP=OLD
+//AMSDUMP DD DUMMY
+//SYSIN DD *
+  DEFINE ALIAS ( NAME(VSAM) RELATE(USERCAT.VSAM) )
+/*
+//
+
+
+---------------------------------------------------------------
+           APPENDIX B - PREPARATION DATASHEET
+---------------------------------------------------------------
+
+Appendix B - preparation datasheet
+
++-------------------------------------------------------------+
+** TAPE VOLUMES TO INITIALLY USE IN THE tapes/ DIRECTORY      |
++-------------------------------------------------------------+
+|                                                             |
+|                                                             |
+|                                                             |
+|                                                             |
+|                                                             |
+|                                                             |
+|                                                             |
+|                                                             |
++-------------------------------------------------------------+
+** VSAM DATAFILE INFORMATION                                  |
++-------------------------------------------------------------+
+| Volume with VSAM dataspace area :                           |
+| VSAM catalogue Name             :                           |
+| VSAM file prefix                :                           |
+| VSAM file name for datafile     :                           |
+|                                                             |
++-------------------------------------------------------------+
+** LOAD MODULE LIBRARY LOCATIONS                              |
++-------------------------------------------------------------+
+| APF Authorised library to use   :                           |
+| Non APF Authorised library      :                           |
+|                                                             |
++-------------------------------------------------------------+
+** MMPF MEMBER TO USE
++-------------------------------------------------------------+
+| Check MMPF is installed         :                           |
+| MMPF Member name to use         :                           |
+| MMPF Proc to customise known    :                           |
+|                                                             |
+| MMPF is available at                                        |
+| http://www.mdickinson.dyndns.org/hercules/downloads/mmpf.php|
+|                                                             |
++-------------------------------------------------------------+
+
+
+
+
+---------------------------------------------------------------
+           APPENDIX C - INSTALLATION CHECKLIST
+---------------------------------------------------------------
+
+Appendix C - installation checksheet
+
++-------------------------------------------------------------+
+|                                                             |
+|   [ ] Restored files                                        |
+|   [ ] Read $ABOUT                                           |
+|   [ ] Read $INSTALL (this file)                             |
+|   [ ] Installed HERCCMD to an APF authorised library        |
+|   [ ] Copied TAPEMAN to an APF authorised library           |
+|   [ ] Copied UTILITY programs (or STEPLIBed jobs)           |
+|   [ ] Created the VSAM datafile                             |
+|   [ ] Loaded tape volsers into the VSAM datafile            |
+|   [ ] Created and initalised all the tape volumes           |
+|   [ ] Copied the procedure to one of the JES2 proclibs      |
+|       as a member named TAPEMAN                             |
+|   [ ] Customised the MMPF proc to include the TAPEMAN VSAM  |
+|       database DD card                                      |
+|   [ ] Added the new MMPF rules, and activated them          |
+|                                                             |
++-------------------------------------------------------------+
+./ ADD NAME=TAPEMCUU
+TAPEMCUU - a TAPEMAN Utility Program
+====================================
+
+This program should ONLY BE RUN WITH AUTOMATION SHUT DOWN.
+
+The purpose of this program is to provide a way of automating scratch
+tape mounts during those occasions that the automation STC needs to
+be shutown.
+
+There are many reasons you would shutdown automation, for example
+to backup libraries that are locked by automation or system tasks.
+
+Any automation of tape mounts MUST BE DISABLED before this program
+is run, as it interfaces with TAPEMAN to obtain and mount a scratch
+tape; if automation was running there would be a conflict and you would
+have a tape unloaded midway through use (which from experience causes
+device overrun errors and switched the master console to a
+diagnostic/recovery console instead of a system message console).
+
+The program accepts a parameter of a valid tape CUU, which is expected
+to be online. The program will then call TAPEMAN3 with the MOUNTSCRATCH
+option specifying the CUU unit required and the jobname the scratch
+tape is to be assigned to.
+
+The TAPEMAN3 code will delay 30 seconds before mounting the tape, this
+is to allow your batch job to start the step that requests the tape
+mount to actually issue the mount request before the tape is mounted
+(if the tape is mounted to early then when the jobstep specifying the
+unit gets started the tape will be unmounted, and a new mount request
+issued; which is what we are trying to avoid).
+
+SINCE TAPEMAN Version 3 TAPEMCUU links directly to the TAPEMAN3
+program now it cannot be run inline in a batch job anymore,
+that would just delay the batch job 30 secs and unload the tape
+when the next step starts...
+...as TAPEMCUU is a workaround for mounting a tape when 
+automation is shutdown, and I don't really want to write
+workarounds to get a workaround working, I have not modified
+TAPEMCUU but instead modified my jobs that use it to run it
+outside the batch job that needs it as below...
+
+Note: the TAPEMCUU parm is used to select device 487, in STEP2 the
+      UNIT=487 is used to select the specific unit. Do not use
+      unit=tape. Unit 487 MUST be online.
+
+Example Job using TAPEMCUU
+==========================
+//DEMOJOB  JOB  (0),'DEMO TAPEMCUU',CLASS=A,MSGCLASS=A
+//*
+//* WE MUST RUN TAPEMCUU OUTSIDE THE CURENT BATCH JOB
+//* NOW THAE WE HAVE OBSOLETED THE TAPEMAN PROC AND
+//* LINK TO TAPEMAN3 DIRECTLY, SO JUST MOVE THE STEP
+//* THAT USED TO BE HERE WITH TAPEMAN TO A SUBMITTED 
+//* JOB FOR THE TAPEMAN3 IMPLEMENTATION.
+//*
+//STEP1    EXEC PGM=IEBGENER
+//SYSIN    DD   DUMMY
+//SYSPRINT DD   SYSOUT=*
+//SYSUT2   DD   SYSOUT=(A,INTRDR)
+//SYSUT1   DD   DATA,DLM=ZZ
+//TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=A
+//STEPMCUU EXEC PGM=TAPEMCUU,PARM='487'
+//TAPEVOLS DD DISP=OLD,
+//          DSN=VSAM.INSTALL.TAPEMAN33.VVDS.VOLSERS
+//
+ZZ
+//*
+//* RUN THE NEXT STEP IMMEDIATELY TO REQUEST THE
+//* TAPE MOUNT, THEN WHEN THE TAPEMCUU 30SEC TIMER
+//* EXPIRES AND MOUNTS THE TAPE WE WILL USE IT
+//*
+//STEP2 EXEC PGM=IEBCOPY
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DISP=SHR,DSN=SYSPROG.LIB.USERCAT.JCL
+//SYSUT2   DD  DISP=(NEW,KEEP),UNIT=487,LABEL=(1,SL),
+//       DSN=SYSPROG.LIB.USERCAT.JCL,
+//       DCB=*.SYSUT1
+//SYSIN    DD  *
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+/*
+//
+./ ADD NAME=TAPEMDES
+TAPEMDES - a TAPEMAN Utility Program
+====================================
+
+The TAPEMDES program is used to change the description field for a
+tape volume in the catalog.
+
+THIS IS STILL BEING TESTED.
+
+I intend to use it to insert the disk file name of the backup listing
+associated with a backup job into the catalog entry. But I havn't
+got around to doing this in any of my jobs yet.
+
+JCL sample to be provided when I have tested and finalised this
+utilty program.
+./ ADD NAME=TAPEMEXP
+TAPEMEXP - a TAPEMAN Utility Program
+====================================
+
+The TAPEMEXP program is used to change the expiry date field of a
+volser in the catalog.
+
+This is primarily used by me for testing the expiry handling of tapes
+and should probably not be used in the real world. As it is a simple
+test program it does no verification on the date field passed.
+
+---------------------------------------------------------------------
+                sample jobdeck for running this.
+---------------------------------------------------------------------
+
+//MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=A
+//TAPEMUTL EXEC PGM=TAPEMUTL
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+TAPE01 07099
+TAPE02 08360
+/*
+//
+
+---------------------------------------------------------------------
+                      SYSIN CARD FORMAT   
+
+vvvvvv yyddd
+
+    i) replace vvvvvv with an uppercase tape volser.
+   ii) replace yyddd with a valid julian date for the new expiry
+  iii) each card starts in column 1
+
+  See the example above.
+---------------------------------------------------------------------
+./ ADD NAME=TAPEMSCR
+TAPEMSCR - a TAPEMAN Utility Program
+====================================
+
+The TAPEMSCR program should be run daily to check the VSAM database
+used by TAPEMAN for any expired volume entries.
+
+It's only purpose in life is to scan for any volsers that have an
+expiry date prior to the current days date, and change them to
+scratch tape entries.
+
+If you do not run this regularly you will eventually run out of
+scratch tapes.
+
+In the file <pref>.TAPEMAN.CONTROL, where <pref> is the prefix
+you use to restore these files down, the member DAILYSCR has a
+sample jobdeck for running this.
+
+The contents of that member are below
+
+//MARKDSCR JOB  (0),'DAILY TAPE SCRATCH',CLASS=A,MSGCLASS=A
+//*
+//* SHOULD BE RUN DAILY TO EXPIRE TAPED IN THE SCRATCH POOL
+//* THAT HAVE PASSED THEIR EXPIRY DATES.
+//*
+//DAILYSCR EXEC PGM=TAPEMSCR
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS VSAM FILE
+//SYSPRINT DD   SYSOUT=*
+//
+
+If you have assembled/copied the programs into a program library
+in your systems linklist the steplib is not required.
+
+The INSTALL prefix on the TAPEVOLS DD will need to be updated to
+relect where you created your tape volume database.
+
+There is no SYSIN or equivalent DD card required, the program
+requires no parameters.
+
+NOTES: I have this in my COMMND00 member as well as triggered
+       daily by ZTIMER (ZTIMER is from the CBTTAPE site)
+./ ADD NAME=TAPEMUTL
+TAPEMUTL - a TAPEMAN Utility Program
+====================================
+
+The TAPEMUTL program is used to ADD, DELETE and LIST tape volser
+entries that are stored in the VSAM datafile.
+
+In the file <pref>.TAPEMAN.CONTROL, where <pref> is the prefix
+you use to restore these files down, there are sample jobs
+ UTLADD  - add new tapes
+ UTLDEL  - delete tapes
+ UTLSCR  - make tapes not yet due to expire, expire now
+ UTLLIST - list entries
+
+---------------------------------------------------------------------
+                sample jobdeck for running this.
+---------------------------------------------------------------------
+
+//MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=A
+//TAPEMUTL EXEC PGM=TAPEMUTL
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+INSERT TAPE01
+INSERT TAPE02
+LIST ALL
+SCRATCH TAPE01
+DELETE TAPE02
+/*
+//
+
+The VSAM prefix on the TAPEVOLS DD will need to be updated to
+relect where you created your tape volume database.
+
+---------------------------------------------------------------------
+                      SYSIN CARDS PERMITTED
+    i) replace vvvvvv with an uppercase tape volser.
+   ii) each card starts in column 1
+
+Terminology: a 'scratch' tape is one that is available for use by
+             any job that asks for a scratch tape.
+---------------------------------------------------------------------
+                            function
+
+INSERT vvvvvv               inserts a new volser as a scratch volser
+DELETE vvvvvv               deletes an existing volser from the file
+SCRATCH vvvvvv              force an existing volser back to scratch
+
+LIST vvvvvv                 list info for one volser
+LIST ALL                    list all volsers
+LIST SCRATCH                list all volsers in scratch state
+./ ENDUP
+QQ
+//INSTLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.INSTALL
+//SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.INSTALL
+//SYSIN DD DATA,DLM=QQ
+./ ADD NAME=CREATEDB
+//MARKALLC JOB  (0),'ALLOC DATA FILE',CLASS=A,MSGCLASS=A
+//* ************************************************************
+//*
+//* $CREATDB: CREATE THE DATA FILE NEEDED BY TAPEMAN.
+//*
+//* - CHANGE VSAM01 TO ONE OF YOUR VSAM DATASPACE VOLUMES
+//* - CHANGE THE VSAM.TAPEMAN3 PREFIX TO A PREFIX YOU HAVE IN
+//*   IN ONE OF YOUR CATALOGUES, PREFERABLY ONE USED BY THE
+//*   USER CATALOGUE ON YOUR VSAM VOLUME IF YOU WANT IT TO WORK
+//* - CHANGE THE 'RECORDS' VALUES IN THE DATA AREA DEFINITION
+//*   TO MATCH HOW MANY TAPES YOU EXPECT TO BE MANAGED.
+//*
+//* ************************************************************
+//CREATEDB EXEC PGM=IDCAMS,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//* RECORD LAYOUT,
+//* A 00000 IN EXPIRES IS A SCRATCH TAPE
+//* THE    THE      EXPIRY
+//* VOLSER JOBNAME  DATE
+//*
+//* ....+....1....+....2....+....3....+....4....+....5....+....6....+.
+//* VVVVVV JJJJJJJJ YYDDD DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+//* VVVVVV -------- 00000 Desctiption, up to 44 bytes for a filename
+//*
+//* Plus 66 bytes of padding, reserved for future use plus brings the
+//* record length up to 132 bytes, which space filled (by a DC in the
+//* DBREC definition) fits nicely with sysprin output.
+//*
+//SYSIN    DD   *
+ DELETE (VSAM.TAPEMAN3.VVDS.VOLSERS) CLUSTER SCRATCH
+ SET MAXCC = 0
+ DEFINE CLUSTER  -
+         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS) -
+         VOLUMES(VSAM01) -
+         RECORDS(100 50)) -
+       DATA -
+         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS.DATA) -
+         KEYS(6 0) -
+         RECORDSIZE(132 132) -
+         FREESPACE(20 10) -
+         BUFFERSPACE(2000) ) -
+       INDEX -
+         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS.INDEX) )
+/*
+//
+./ ADD NAME=CTAPEMAN
+//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=A
+//* -----------------------------------------------
+//* COPY THE TAPEMAN PROGRAMS THAT ARE AUTHORISED
+//* TO AN APF AUTHORISED LIBRARY
+//*   TAPEMAN  - AS IT MUST CALL HERCCMD WHICH IS
+//*              AUTHORISED.
+//*   TAPEMCUU - AT IT USES SVC34 TO INVOKE
+//*              TAPEMAN
+//* -----------------------------------------------
+//STEP1    EXEC PGM=IEBCOPY
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT2   DD   DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
+//SYSIN    DD   *
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+ SELECT MEMBER=TAPEMAN3
+ SELECT MEMBER=TAPEMCUU
+/*
+//
+./ ADD NAME=CUTILS
+//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=A
+//* --------------------------------------------------------
+//* COPY THE TAPEMAN UTILITY PROGRAMS THAT DO NOT NEED
+//* TO BE APF AUTHORISED INTO A PROGRAM LIBRARY THAT IS
+//* IN THE DEFAULT SEARCH LINKLST.
+//* --------------------------------------------------------
+//STEP1    EXEC PGM=IEBCOPY
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
+//SYSUT2   DD   DSN=SYS9.LINKLIB,DISP=SHR
+//SYSIN    DD   *
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+ SELECT MEMBER=TAPEMSCR
+ SELECT MEMBER=TAPEMUTL
+ SELECT MEMBER=TAPEMDES
+/*
+//
+./ ADD NAME=@README
+ALL THESE JOBS ARE REFERENCED FROM THE XXX.TAPEMAN.DOC($INSTALL)
+MEMBER.
+
+DO NOT RUN THESE BLINDLY (IN THE ORDER THEY APPEAR). REFER TO THE
+$INSTALL MEMBER FOR WHEN TO RUN THEM, WHAT CHANGES ARE NEEDED,
+AND WHICH ONES YOU DON'T NEED TO RUN.
+./ ENDUP
+QQ
+//CTRLLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.CONTROL
+//SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.CONTROL
+//SYSIN DD DATA,DLM=QQ
+./ ADD NAME=DAILYSCR
+//MARKDSCR JOB  (0),'DAILY TAPE SCRATCH',CLASS=A,MSGCLASS=A
+//*
+//* SHOULD BE RUN DAILY TO EXPIRE TAPED IN THE SCRATCH POOL
+//* THAT HAVE PASSED THEIR EXPIRY DATES.
+//*
+//DAILYSCR EXEC PGM=TAPEMSCR
+//STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//
+./ ADD NAME=TAPLABEL
+//MARKTAPE JOB (0),'LABEL TAPES',CLASS=A,MSGCLASS=A
+//*
+//* THIS IS A SAMPLE JOB SHOWING HOW TO LABEL TAPES IN A BATCH JOB.
+//* THE TAPE FILES MUST HAVE BEEN PREVIOUSLY CREATED WITH HETINIT
+//* FROM THE UNIX COMMAND LINE.
+//*
+//* THIS JOB LABELS TAPES MARK01 THROUGH MARK30, IT WILL USE THE
+//* SAME TAPE UNIT FOR ALL TAPE LABEL REQUESTS (THE TAPE1 DD WILL
+//* USE THE FIRST FREE TAPE UNIT)
+//*
+//* TO THE WTOR PROMPTS, WHEN THE TAPE IS MOUNTED REPLY M (NOT U)
+//*
+//* I HAVE AUTOMATED THE 'M' REPLY UNDER MMPF, CAN'T REMEMBER IF I
+//* ALSO DID THAT IN THE IEECVXIT SAMPLE.
+//*
+//INITTAPE EXEC PGM=IEHINITT
+//SYSPRINT DD   SYSOUT=*
+//TAPE1    DD   UNIT=(TAPE,,DEFER),DCB=DEN=3
+//SYSIN    DD   *
+TAPE1 INITT SER=MARK01,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK02,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK03,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK04,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK05,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK06,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK07,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK08,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK09,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK10,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK11,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK12,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK13,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK14,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK15,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK16,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK17,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK18,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK19,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK20,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK21,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK22,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK23,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK24,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK25,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK26,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK27,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK28,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK29,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+TAPE1 INITT SER=MARK30,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
+/*
+//
+./ ADD NAME=UTLADD
+//MARKADD  JOB  (0),'ADD TAPES',CLASS=A,MSGCLASS=A
+//*
+//* ADD SOME NEW SCRATCH TAPES INTO THE VSAM FILE
+//*
+//ADDTAPES EXEC PGM=TAPEMUTL
+//STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+INSERT MARK01
+INSERT MARK02
+INSERT MARK03
+INSERT MARK04
+INSERT MARK05
+INSERT MARK06
+INSERT MARK07
+INSERT MARK08
+INSERT MARK09
+INSERT MARK10
+INSERT MARK11
+INSERT MARK12
+INSERT MARK13
+INSERT MARK14
+INSERT MARK15
+INSERT MARK16
+INSERT MARK17
+INSERT MARK18
+INSERT MARK19
+INSERT MARK20
+INSERT MARK21
+INSERT MARK22
+INSERT MARK23
+INSERT MARK24
+INSERT MARK25
+INSERT MARK26
+INSERT MARK27
+INSERT MARK28
+INSERT MARK29
+INSERT MARK30
+/*
+//
+./ ADD NAME=UTLDEL
+//MARKDEL  JOB  (0),'DELETE TAPES',CLASS=A,MSGCLASS=A
+//*
+//* DELETE EXISTING TAPES FROM THE VSAM FILE
+//*
+//DELTAPES EXEC PGM=TAPEMUTL
+//STEPLIB  DD   DISP=SHR,DSN=INSTALLS.TAPEMAN.LINKLIB     SITE SPECIFIC
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+DELETE MARK01
+DELETE MARK02
+/*
+//
+./ ADD NAME=UTLEXP
+//MARKEXP  JOB  (0),'TAPE EXPIRY MAINT',CLASS=A,MSGCLASS=A
+//*
+//* CHANGE EXPIRY DATES ON SELECTED TAPES IN THE VSAM FILE
+//* CARD SYNTAX IS 'TAPE-VOLSER SPACE NEW-YYDDD EXPIRY'
+//*
+//EXPIRCTL EXEC PGM=TAPEMEXP
+//STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB     SITE SPECIFIC
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+MARK01 09360
+MARK02 09310
+MARK03 10001
+/*
+//
+./ ADD NAME=UTLLIST
+//MARKLIST JOB  (0),'LIST TAPES',CLASS=A,MSGCLASS=A
+//*
+//* LIST TAPE ENTRIES FROM THE TAPE CATALOG FILE.
+//*
+//* POSSIBLE LIST OPTIONS ARE
+//*   LIST ALL       - EVERY TAPE
+//*   LIST SCRATCH   - EVERY TAPE IN SCRATCH STATE
+//*   LIST VOLSER    - ONLY LIST SELECTED VOLSER
+//*
+//LSTTAPES EXEC PGM=TAPEMUTL
+//STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB     SITE SPECIFIC
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+LIST ALL
+LIST SCRATCH
+LIST MARK01
+/*
+//
+./ ADD NAME=UTLSCR
+//MARKSCR  JOB  (0),'SCRATCH TAPES',CLASS=A,MSGCLASS=A
+//*
+//* FORCE AN ALLOCATED TAPE TO BECOME AN EXPIRED TAPE
+//* NOTES: ONLY AFFECTS CATALOGUE ENTRY, DOESN'T CHANGE ANY
+//* PHYSICAL TAPE LABEL.
+//*
+//SCRTAPES EXEC PGM=TAPEMUTL
+//STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+SCRATCH MARK01
+SCRATCH MARK02
+SCRATCH MARK03
+SCRATCH MARK04
+SCRATCH MARK05
+SCRATCH MARK06
+SCRATCH MARK07
+SCRATCH MARK08
+SCRATCH MARK09
+SCRATCH MARK10
+SCRATCH MARK11
+SCRATCH MARK12
+SCRATCH MARK13
+SCRATCH MARK14
+SCRATCH MARK15
+SCRATCH MARK16
+SCRATCH MARK17
+SCRATCH MARK18
+SCRATCH MARK19
+SCRATCH MARK20
+SCRATCH MARK21
+SCRATCH MARK22
+SCRATCH MARK23
+SCRATCH MARK24
+SCRATCH MARK25
+SCRATCH MARK26
+SCRATCH MARK27
+SCRATCH MARK28
+SCRATCH MARK29
+SCRATCH MARK30
+/*
+//
+./ ENDUP
+QQ
+//SUBJOBS  EXEC PGM=IEBGENER,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMCUU)
+//         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMDES)
+//         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMEXP)
+//         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMSCR)
+//         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMUTL)
+//         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMAN3)
+//SYSUT2   DD   SYSOUT=(A,INTRDR)
+//SYSIN    DD   DUMMY
+//

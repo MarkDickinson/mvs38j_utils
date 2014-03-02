@@ -1,0 +1,916 @@
+//MARKASM  JOB (0),'ASSEMBLE TASKMON',CLASS=A,MSGCLASS=T,
+// MSGLEVEL=(1,1)
+//*
+//*   *** CHANGE SYS9.LINKLIB.APFAUTH TO BE ONE OF YOUR SITES
+//*       APF AUTHORISED LIBRARIES
+//*
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN
+//         DD  DISP=SHR,DSN=SYS1.ATSOMAC
+//         DD  DISP=SHR,DSN=SYS1.HASPSRC
+//         DD  DISP=SHR,DSN=SYS9.MNEMAC     <=== WHERE IS YOURS ?
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//SYSIN    DD  *                            
+           PRINT GEN
+* ********************************************************************
+*
+* TASKMON: PROGRAM
+*
+* PURPOSE: RUN AS A STARTED TASK, PERIODICALLY CHECKING THAT A LIST
+*          OF TASKS IS RUNNING. IF A TASK IS NOT IN THE UP/DOWN STATE
+*          EXPECTED TAKE THE ACTION SPECIFIED TO REMEDY THE PROBLEM.
+*          NOTE: CAN ALSO RUN AS A JES2 BATCH JOB IF YOU REALLY WANT
+*          TO TIE UP AN INITIATOR
+*
+* ENHANCED-2005/11/08
+*          THE SYMBOL POOL WAS GETTING TOO FULL, AS MOST OF THE
+*          SYMBOLS WERE USED INSERTING THE JOBNAME INTO THE WTO
+*          MESSAGES I HAVE REPLACED THE WTO MACRO WITH A CUSTOM
+*          WTO2 MACRO WHICH DOES THAT ITSELF.
+* ENHANCED-2009/08/24
+*          I NEEDED TO MAKE THE CARD LENGTH STORED 70 RATHER THAN
+*          60 SO BLEW THE 4K LIMIT. MOVED THE IN MEMORY CARD TABLE
+*          TO ITS OWN DSECT TO RESOLVE... THEORETICALLY THAT CAN
+*          NOW HOLD 58 RULES IN THAT DSECT 4K BUFFER BUT AS I
+*          STILL HAVEN'T USED 20 LEFT THE LIMIT AT 20 FOR NOW.
+*          PLUS
+*          CHANGED EVERYTHING I COULD TO LENGTH REFERENCES, NOW TO
+*          CHANGE CARD SIZE JUST CHANGE THE SIZE OF VARIABLE STCLLINE
+*          AND STCLLEN......
+*             .....WRONG, THAT SOC4'S EVERYWHERE, SEARCH FOR =F'70'
+*             AND CHANGE ALL THOSE TO THE NEW LENGTH, SETTING VAR
+*             STCLLEN TO DC F'70' JUST GENERATED SOC4'S
+*             ->ACTUALLY SEARCH FOR ' = SOC4' FOR THE LINES TO CHANGE
+*          TO CHANGE MAX RULES FROM 20 TO USE MORE CHANGE CONSTANT
+*          STCLMAX. MAX IN ONE DSECT IS 58 WITH 70 BYTE CARDLEN
+*          THAT CONSTANT DOES WORK :-)
+*
+*
+* POSSIBLE PROGRAM ABENDS
+*    U112 - YOU DID NOT PROVIDE ANY USER CONTROL CARDS
+*           NOTES: USER CAUSED
+*    U113 - AN ECB POST FROM A COM AREA OR TIMER WE DIDN'T EXPECT
+*           NOTES: NEVER SEEN IT HAPPEN, BUT IT'S CODED IF NEEDED
+*    S047 - RUNNING FROM A NON-AUTHORISED LIBRARY, PUT THE PROGRAM
+*           IN AN AUTHORISED LIBRARY
+*           NOTES: USER CAUSED
+*
+* OTHER NOTES
+*    LTORG POOL IS ALMOST FULL, HAD TO STRIP OUT SOME OF THE
+*    FANCY BITS TO GET IT TO ASSEMBLE. NEED TO START SPAWNING
+*    FUNCTIONS OFF TO SEPERATE MODULES (IE: THE SVC34 CAN BE
+*    MOVED TO A SEPERATE MODULE IN AN AUTHORISED LIBRARY SO THIS
+*    MAIN CODE CAN RUN NON-AUTHORISED).
+*
+*    ALSO FOR MY USE ON A KILLALL I GO TO STOPPEND (STOP PEND)
+*    RATHER THAN STOPPING, ORIGIONALLY THIS WAS AS IEECVXIT
+*    SCHEDULED SRB'S UNDER THIS TASK SO I NEEDED IT TO KEEP
+*    RUNNING FOR ONE MORE DELAY CYCLE SO WTORS COULD BE REPLIED
+*    TO, AFTER THAT ONE EXTRA LOOP IT GOES TO STOPPING STATE.
+*    I HAVE RETAINED THAT AS EVEN THOUGH SRBS ARE NOW SCHEDULED
+*    ON MY SYSTEM UNDER MMPF THE MMPF TASK SHUTS ITSELF DOWN
+*    ON THE TASKMON SHUTDOWN MESSAGE (AS PART OF MY SYSTEM SHUTDOWN
+*    LOGIC). SO YOU MAY REPLACE WHERE STOPPEND IS SET WITH 
+*    STOPPING IF YOU WISH THIS TO SHUTDOWN FASTER, BUT AS SHIPPED 
+*    IT WILL REMAIN THIS WAY.
+*
+* ------------------------------------------------------------------
+* DD CARDS: CONTROl CARD FORMAT
+* ------------------------------------------------------------------
+*    STCLIST - CARD IMAGE FILE
+*        CONTAINS CARDS IN THE FORMAT...
+*           COLS 01-08 JOBNAME
+*           COL  10    EXPECTED STATE, U=UP OR D=DOWN
+*           COL  12    ACTION IF DIFFERENT, C=COMMAND OR M=MESSAGE
+*           COL  14    AVAILABLE FOR KILLALL REQUEST, K=YES, ELSE NO
+*           COL  20-49 JOB START COMMAND OR NOP
+*           COL  50-69 JOB STOP COMMAND OR NOP
+*           COL  70-80 RESERVED
+*        EXAMPLES...
+*        ----+----1----+----2----+----3----+----4----+----5----+----6
+*        JES2     U C       S JES2,PARM='WARM,NOREQ'      $PJES2
+*        TSO      U C K     S TSO                         P TSO
+*        NET      U C K     S NET                         Z NET,QUICK
+*        FRED     U M       NOP                           NOP
+*
+* ------------------------------------------------------------------
+* SAMPLE JCL TO RUN THIS
+* ------------------------------------------------------------------
+*  //TESTPGM  EXEC PGM=TASKMON,COND=(0,NE)
+*  //STEPLIB  DD   DSN=MARK.LIB.LOAD.APFAUTH,DISP=SHR
+*  //STCLIST  DD   DSN=SYS9.CONTROL(TASKMON),DISP=SHR
+*
+* ------------------------------------------------------------------
+* OPERATOR COMMANDS: JOBNAME IS YOU STC JOBNAME IN THESE COMMANDS
+* ------------------------------------------------------------------
+*    F JOBNAME,LIST
+*         LIST THE JOBCARDS READ FROM THE STCLIST DD FILE
+*    F JOBNAME,PAUSE
+*         STOP CHECKING THE TASKS UNTIL A RESUME IS ENTERED
+*    F JOBNAME,RESUME
+*         RESUME CHECKING THE TASKS AFTER A PREVIOUS PAUSE
+*    F JOBNAME,NEWDECK
+*         RE-READ THE STCLIST DD FILE TO READ CHANGES
+*    F JOBNAME,KILLALL
+*         REQUESTS THE PROGRAM TO STOP ALL TASKS THAT IT MONITORS
+*         THAT ARE FLAGGED AS AVAILABLE FOR KILLALL TO WORK ON.
+*         A CONFIRMATION WTOR IS ISSUED TO OPERATORS THAT MUST BE
+*         REPLIED TO FOR THIS TO BE ACTIONED.
+*         THIS PROGRAM STOPS ITSELF ALSO, AS KILLALL IS ONLY
+*         INTENDED TO BE AN AID TO SYSTEM SHUTDOWN.
+*    F JOBNAME,KILLFORCE
+*         UNDOCUMENTED IN HELP, USED BY BY BATCH JOBS TO DO
+*         AUTOMATED SHUTDOWN OF EVEYTHING EXCEPT JES2 WHILE
+*         MY BACKUPS OF SYSTEM DATASETS ARE RUNNING.
+*    P JOBNAME
+*         STOP THE STARTED TASK
+*
+* ------------------------------------------------------------------
+*  MESSAGES: MESSAGES THAT CAN BE DISPLAYED
+* ------------------------------------------------------------------
+*
+*    --NORMAL OPERATION MESSAGES--
+*
+*       JOBNAME: XXXXXXXX ISSUING <SOME-COMMAND>
+*            TASK XXXXXXXX IS SUPPOSED TO BE STOPPED
+*                ISSUING THE STOP COMMAND SHOWN
+*
+*       JOBNAME: *WARNING* XXXXXXXX IS ACTIVE
+*            TASK XXXXXXXX IS SUPPOSED TO BE STOPPED
+*            CONFIGURED FOR MESSAGE ONLY, NO ACTION COMMAND
+*
+*       JOBNAME: ISSUING <SOME-COMMAND>
+*            TASK XXXXXXXX IS SUPPOSED TO BE RUNNING
+*            ISSUING THE START COMMAND SHOWN
+*
+*       JOBNAME: *WARNING* XXXXXXXX IS INACTIVE'
+*            TASK XXXXXXXX IS SUPPOSED TO BE RUNNING
+*            CONFIGURED FOR MESSAGE ONLY, NO ACTION COMMAND
+*
+*    --IN RESPONSE TO OPERATOR REQUESTS--
+*
+*       JOBNAME: CONFIRM, REPLY 'U' TO KILLALL OR 'C' TO CANCEL
+*            F JOBNAME,KILLALL WAS REQUESTED, THIS WTOR IS ISSUED
+*            FOR CONFIRMATION.
+*
+*       JOBNAME: MONITORING SUSPENDED
+*            F JOBNAME,PAUSE HAS BEEN ACCEPTED
+*
+*       JOBNAME: MONITORING RESTARTED
+*            F JOBNAME,RESUME HAS BEEN ACCEPTED
+*
+*       JOBNAME: NEW CONTROl CARDS READ
+*            F JOBNAME,NEWDECK HAS BEEN PROCESSED, CARDFILE REREAD
+*            FROM DISK FILE
+*
+*       JOBNAME: CONTROL CARD DUMP FOLLOWS
+*       ...BUNCH OF CARD IMAGES DUMPED...
+*       JOBNAME: CONTROL CARD DUMP ENDED
+*            RESPONSE TO A F JOBNAME,LIST BEING PROCESSED
+*
+*       JOBNAME : COMMAND NOT RECOGNISED
+*            AN UNKNOWN F JOBNAME,XX WAS ISSUED, IT IS IGNORED
+*
+*    --DURING KILLALL CONFIRMATION PROCESSING--
+*
+*       JOBNAME : INVALID REPLY, NEED U OR C
+*            BAD OPERATOR RESPONSE TO THE WTOR TO CONFIRM THE KILLALL
+*            REQUEST THE WTOR IS RE-ISSUED
+*
+*       JOBNAME: KILLALL REQUEST CANCELLED
+*            RESPONSE TO THE CONFIRMATION OF THE KILLALL REQUEST WAS
+*            CANCEL.
+*
+*       JOBNAME: XXXXXXXX DESIRED STATE NOW STOPPED
+*            AS PART OF KILLALL PROCESSING IT WILL LIST ALL TASKS
+*                BEING CHANGED TO A DESIRED STATE OF STOPPED
+*
+*
+*    --DURING THE LOADING OF A NEW CONTROL FILE--
+*
+*       JOBNAME: MAX 20 ENTRIES ALLOWED, IGNORING REST
+*            THIS VERSION ONLY SUPPORTS 20 MONITORED TASKS
+*            CONTROL CARDS FOLLOWING THE 20TH ARE IGNORED
+*
+*       FATAL ERROR, ALL CONTROL CARDS INVALID
+*            THERE WAS NOT A SINGLE GOOD CARD IN THE CONTROL FILE
+*            THE PROGRAM HAS NOTHING TO DO AND WILL ABEND U112
+*
+*       JOBNAME: *ERROR* BAD BAD DATA CARD READ, DISCARDED
+*            THERE WAS NO TASKNAME ON THE CONTROL CARD. THE
+*                OFFENDING CARD IS WTO'D AFTER THIS MESSAGE
+*
+*       FREEFORM CARD IMMAGE WTO
+*            THE OFFENDING CARD WTO
+*
+* ********************************************************************
+*
+* I NEED A CUSTOMISED WTO, INSERTING JOBNAMES INTO EACH WTO TO
+* BE DISPLAYED USED UP ALL MY SYMBOL POOL, SO DO IT WITHIN THE
+* COPY OF THE WTO MACRO NOW.
+         MACRO
+&NAME    WTO2 &MESG
+         LCLC  &L1,&L2,&L3
+&L1      SETC  '$'.'&SYSNDX'.'A'
+&L2      SETC  '$'.'&SYSNDX'.'B'
+&L3      SETC  '$'.'&SYSNDX'.'C'
+         CNOP  0,4
+&NAME    MVC   *+22(8),MYJOBNAM
+         BAL   1,&L3                BRANCH AROUND MESSAGE
+&L1      DC    AL2(&L2-&L1)        TEXT LENGTH
+         DC    B'0000000000000000' MCS FLAGS
+.LX      DC    C&MESG              MESSAGE TEXT
+&L2      EQU   *
+&L3      DS    0H
+         SVC   35
+         MEND
+TASKMON  CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+* CARD TABLE IS NOW IN A DSECT, BETTER GET MEMORY FOR IT AND 
+* REFERENCE IT, R11 IS NOW ONLY TO BE USED FOR ADDRESSING
+* THE TABLE.
+         GETMAIN R,LV=STCLTBLL,SP=126
+         LR    R11,R1
+         USING STCLTBLD,R11     USE R11 TO ADDRESS RULE TABLE DSECT
+         ST    R1,STCLTBLA
+*
+* ********************************************************************
+* INITIALISATION, PART1
+* 1. GET OUR STC OR BATCH JOB NAME TO INCLUDE IN WTOS
+* 2. LOAD (AND SANITY CHECK) THE CARDS IN THE CONTROL FILE
+* ********************************************************************
+         BAL   R10,GETJOBID          * GET OUR JOB OR STC NAME
+         BAL   R10,STCLNEW           * READ CONTROL CARDS
+         XC    WTORECB,WTORECB       * CLEAR THIS HERE
+*
+* ********************************************************************
+* INITIALISATION, PART2
+* 3. SETUP A COMMUNICATIOn AREA SO WE ARE ABLE TO ACCEPT COMMANDS
+*    ISSUED FROM AN OPERATIONS CONSOLE VIA MODIFY AND PARK COMMANDS
+* ********************************************************************
+* SET UP THE COMMUNICATION WITH THE OPERATOR CONSOLE TO
+* ACCEPT OPERATOR COMMANDS
+         LA      R4,COMM             * LOAD ADDR OF COMM...
+         EXTRACT (R4),FIELDS=COMM,   * GET THE COMM AREA               X
+               MF=(E,EXTRACT1)
+         L       R4,COMM             * LOAD CONTENTS OF COMM
+         USING   COMLIST,R4          * ..TO IEZCOM
+         L       R3,COMCIBPT         * GET ADDR OF CIB
+         USING   CIBNEXT,R3          * ESTAB ADDR TO IEZCIB
+         LTR     R3,R3               * WAS CIB ADDR RETURNED
+         BZ      SETCOUNT            * NO - INIT
+         CLI     CIBVERB,CIBSTART    * IS IT START?
+         BNE     SETCOUNT            * NO - INIT
+         QEDIT   ORIGIN=COMCIBPT,    * YES - FREE IT                   X
+               BLOCK=(R3)            *
+         LTR     R15,R15             * OK ?
+         BZ      SETCOUNT            * YES - CONTINUE
+SETCOUNT EQU     *
+         QEDIT   ORIGIN=COMCIBPT,    * SET LIMIT ON MODIFY             X
+               CIBCTR=1              * .. TO ONE
+         MVI     FLAG,ACTIVE         * RESET FLAG
+         EJECT
+* ********************************************************************
+* M A I N L I N E
+* SET A TIMER TO TRIGGER AT 30 SECOND INTERVALS. PLACE THE COMM AREA
+* AND TIMER ECBS INTO THE WAIT LIST, AND WAIT FOR EITHER THE TIMER TO
+* POP OR AN OPERATOR COMMAND TO BE ENTERED.
+* ********************************************************************
+* EITHER THE TIMER WILL POP IN WHICH CASE WE DO PERIODIC THINGS,    *
+* OR WE PROCESS AN OPERATOR COMMAND                                 *
+WAIT     EQU     *
+         XC      TIMERECB,TIMERECB   * CLEAR THE STIMER EXIT'S ECB
+         LA      R15,TIMERECB        * LOAD ADDRESS OF TIMER ECB
+         ST      R15,TIMEXPRM        * STORE IT FOR TIMER EXIT TO POST
+         STIMER REAL,TIMEOUT,DINTVL=SECS30
+*
+         L       R4,COMM             * GET THE COMMTASK STUFF
+         L       R4,COMECBPT-COMLIST(,R4)  * POINT TO COMMAND ECB
+         ST      R4,ECBLIST          * POST IT TO OUR ECB LIST
+         LA      R3,TIMERECB         * POINT TO THE STIMER ECB
+         ST      R3,ECBLIST+4        * PUT THAT IN THE ECB LIST
+         LA      R3,WTORECB          * ADD THE WTOR ECB TO THE LIST
+         ST      R3,ECBLIST+8
+         OI      ECBLIST+8,X'80'     * MARK END OF LIST
+         WAIT    1,                  * WAIT FOR SOMETHING              X
+               ECBLIST=ECBLIST       * TO HAPPEN IN THIS LIST
+*                                    * FIGURE OUT WHAT IT WAS
+         TTIMER  CANCEL              * CANCEL THE TIMER FOR ANY         EVENT
+*                                    * OR SOME NASTY LOOPS OCCUR
+*        CHECK THE COMMAND THAT TRIGGERED THE EVENT
+         LA      R3,TIMERECB         * POINT TO TIMER ECB
+         USING   ECB,R3              * COVER THE STIMER ECB
+         TM      ECBCC,ECBPOST       * DID THE TIMER POP?
+         BO      TIMRPOPD            * YES, GO DO PERIODIC STUFF
+         DROP    R3
+         USING   ECB,R4              * COVER THE COMMAND ECB
+         TM      ECBCC,ECBPOST       * DID WE GET A COMMAND?
+         BO      CMDPOPD             * YES, PROCESS COMMAND
+         DROP    R4
+         LA      R4,WTORECB
+         USING   ECB,R4              * COVER THE WTOR ECB
+         TM      ECBCC,ECBPOST       * DID WE GET A WTOR RESPONSE
+         BNO     ABEND113            * NO - SHOULD NOT OCCUR
+         XC      WTORECB,WTORECB     * CLEAR SO ITS NOT IN THE ECB
+*                                    * LIST WE WATCH NEXT TIME THRU
+         BAL     R10,WTORCHEK        * PROCESS WTOR REPLY
+         B       TIMRSKIP
+CMDPOPD  BAL     R10,COMENTER
+         B       TIMRSKIP
+TIMRPOPD BAL     R10,PERIOD          * DO TIMER EXPIRY STUFF
+TIMRSKIP TM      FLAG,STOPPING       * ARE WE STOPPING ?
+         BO      EXIT00              * YES - FREE EVERYTHING UP
+         TM      FLAG,STOPPEND       * ON THE WAY DOWN ?
+         BNO     WAIT                * NO - GO AND WAIT AGAIN
+         OI      FLAG,STOPPING       * STOP PENDING, WE ARE STOPPING
+         B       WAIT                * THEN - GO AND WAIT AGAIN
+EXIT00   EQU    *                    * RETURN TO CALLER
+* FREE THE MEMORY WE GETMAINED EARLIER
+         FREEMAIN R,A=(11),LV=STCLTBLL,SP=126
+* WRITE THE SHUTDOWN MESSAGE WITH DESC=(2) SO IT IA AN ATTENTION
+* MESSAGE THAT OUR AUTOMATION WILL PICK UP.
+         MVC   RTNWTO+16(8),MYJOBNAM
+RTNWTO   WTO   'MID111I jjjjjjjj:SHUTDOWN COMPLETE',DESC=(2)
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+* ********************************************************************
+* ENTRY
+*   WTORCHK  - CHECK THE WTOR REPLY WE RECIEVED
+*   WTORISSU - ISSUE THE WTOR MESSAGE FOR CONFIRMATION
+* ********************************************************************
+WTORCHEK EQU   *
+         OC      WTOREPLY,=C' '       , CONVERT TO UPPERCASE
+         CLI     WTOREPLY,C'U'
+         BE      WTORGO               , CONFIRMED, DO IT
+         CLI     WTOREPLY,C'C'
+         BE      WTOREXIT             , CANCELLED, JUST LEAVE
+WTORISSU EQU     *                    , INVALID, PROMPT AGAIN
+         ST      R1,WTORSAVE
+         MVC     KILLCONF+8(8),MYJOBNAM , the jobname execing this pgm
+         MVI     WTORTEXT,C' '           , erase sysinmsg buffer
+         MVC     WTORTEXT+1(L'WTORTEXT-1),WTORTEXT
+         MVC     WTORTEXT(L'KILLCONF),KILLCONF insert message text
+         LA      R1,L'KILLCONF+4       , length of wtor message
+         STH     R1,THEWTOR+8          , put into WTOR parmlist
+         XC      WTORECB,WTORECB         , clear the ECB
+         WTOR    ,WTOREPLY,L'WTOREPLY,WTORECB,MF=(E,THEWTOR)
+         L       R1,WTORSAVE
+         B       WTOREXIT
+WTORGO   ST      R10,WTORSAVE
+         BAL     R10,STCLKILL        * SET ALL K ENTRIES TO A
+*                                      DESIRED STATE OF DOWN
+         L       R10,WTORSAVE
+         B       WTOREXIT
+WTOREXIT BR      R10
+         EJECT
+* ********************************************************************
+* CALLED FROM THE MAINLINE WHEN A TIMER POST HAS TRIGGERED THE WAIT
+* FROM THE ECB LIST (TIMER HAS POPED).
+* BASICALLY JUST CALLS THE PROC TO CHECK ALL THE TASKS WE WANT TO
+* KEEP AN EYE ON.
+* ********************************************************************
+PERIOD   EQU   *
+* THIS ROUTINE IS BRANCHED TO WHEN THE TIMER POPS AND THE TIMEOUT   *
+* HANDLER TRIGGERS US FROM ISSUING A POST FOR THE TIMER ECB.        *
+         TM      FLAG,ACTIVE         * ARE WE ACTIVE ?
+         BNO     PERIODX             * NO - GO BACK AND WAIT
+         ST      R4,PER0SAVE
+         BAL     R4,CHEKLOOP
+         L       R4,PER0SAVE
+         B       PERIODX
+PERIODX  BR      R10                 * RETURN TO CALLER
+         EJECT
+* ********************************************************************
+* CALLED FROM THE MAINLINE WHEN THE ECB LIST WAIT HAS TRIGGERED ON
+* AN OPERATOR COMMAND. IT WILL DETERMINE THE COMMAND ENTERED AND
+* DO (OR CALL) THE APPROPRIATE ACTIONS.
+* ********************************************************************
+COMENTER EQU     *
+* ROUTINE TO PROCESS AN OPERATOR COMMAND (BRANCH AND LINK)          *
+* R4 ---> COMM AREA                                                 *
+* R3 ---> CIB                                                       *
+* * NOTE SAVE REG10 AS THIS ROUTINE CALLS OTHER ROUTINES            *
+         L       R4,COMM             * GET BACK R4
+         USING   COMLIST,R4          * ADDRESS IT
+         L       R3,COMCIBPT         * GET ADDR OF CIB
+         USING   CIBNEXT,R3          * ADDRESS IT
+         ST      R10,SAVE10          * SAVE CONTENTS OF R10
+STOP     EQU     *                   --- STOP REQUEST (P)
+* ROUTINE TO PROCESS A STOP COMMAND                                 *
+         CLI     CIBVERB,CIBSTOP     * IS IT STOP?
+         BNE     MODIFY              * NO - CHECK FOR MODIFY
+         OI      FLAG,STOPPING       * INDICATE STOP
+         B       OPCMDRET            * GO BACK
+MODIFY   EQU     *
+         CLI     CIBVERB,CIBMODFY    * IS IT MODIFY ?
+         BNE     OPERROR             * NO - ERROR
+PAUSEC   EQU     *                   --- PAUSE (F xx,PAUSE)
+* ROUTINE TO PROCESS A PAUSE COMMAND                                *
+         CLC     CIBDATA(6),PAUSE    * IS IT PAUSE ?
+         BNE     RESUMEC             * NO - CARRY ON
+         MVI     FLAG,PAUSED         * SET FLAG TO PAUSED
+         WTO2    'MID101W jjjjjjjj:MONITORING SUSPENDED'
+         B       OPCMDRET            * GO BACK
+RESUMEC  EQU     *                   -- RESUME (F xx,RESUME)
+* ROUTINE TO PROCESS A RESUME COMMAND                               *
+         CLC     CIBDATA(7),RESUME   * IS IT RESUME?
+         BNE     LISTC               * NO - CARRY ON
+         MVI     FLAG,ACTIVE         * SET FLAG TO ACTIVE
+         WTO2    'MID102I jjjjjjjj:MONITORING RESTARTED'
+         B       OPCMDRET            * GO BACK
+LISTC    EQU     *                   -- LIST (F xx,LIST)
+* ROUTINE TO PROCESS A LIST COMMAND                                 *
+         CLC     CIBDATA(5),LIST     * IS IT LIST  ?
+         BNE     NEWDECKC            * NO - CARRY ON
+         ST      R10,NEWD000A
+         BAL     R10,LISTLOOP
+         L       R10,NEWD000A
+         B       OPCMDRET            * GO BACK
+NEWDECKC EQU     *                   -- NEWDECK (F xx,NEWDECK)
+* CHECK FOR 7, CIBDATA IS 8 BYTES + NULL
+*        CLC     CIBDATA(8),NEWDECK  * IS IT NEWDECK  ?
+         CLC     CIBDATA(7),NEWDECK  * IS IT NEWDECK  ?
+         BNE     KILLALLC            * NO - CARRY ON
+         B       NEWD000X
+NEWD000X ST      R10,NEWD000A
+         BAL     R10,STCLNEW        RELOAD CARD DECK
+         L       R10,NEWD000A
+         WTO2    'MID103I jjjjjjjj:NEW CONTROl CARDS READ'
+         B       OPCMDRET            * GO BACK
+KILLALLC EQU     *                   -- KILLALL (F xx,KILLALL)
+* CHECK FOR 7, CIBDATA IS 8 BYTES + NULL
+*        CLC     CIBDATA(8),KILLALL  * IS IT KILLALL  ?
+         CLC     CIBDATA(7),KILLALL  * IS IT KILLALL  ?
+         BNE     KILLFRCC            * NO - CARRY ON
+         ST      R10,NEWD000A
+         BAL     R10,WTORISSU        * ISSUE A WTOR FOR CONFIRMATION
+         L       R10,NEWD000A
+         B       OPCMDRET            * GO BACK
+KILLFRCC EQU     *                   -- KILLFORCE
+         CLC     CIBDATA(7),KILLFORC * IS IT KILLFORCE  ?
+         BNE     OPERROR             * NO - CARRY ON
+         ST      R10,WTORSAVE
+         BAL     R10,STCLKILL        * ALL DOWN NOW
+         L       R10,WTORSAVE
+         B       OPCMDRET
+OPERROR  EQU     *
+         WTO2    'MID104E jjjjjjjj:PAUSE,RESUME,NEWDECK,LIST,KILLALL'
+OPCMDRET EQU     *
+         QEDIT   ORIGIN=COMCIBPT,    * FREE IT                         X
+               BLOCK=(R3)            *
+         L       R10,SAVE10          * RESET R10
+         BR      R10                 * GO BACK
+                 EJECT
+* ********************************************************************
+* CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
+* PROCEDURE DEFINED TO THE STIMER CALL.
+* IT ISSUES A POST ON THE TIMER EXPIRY EVENT WHICH WILL BE PICKED UP
+* BY THE MAINLINE WAIT ON THE ECB LIST (THE POST TRIGGERS THE TIMER
+* ENTRY MATCH IN THE ECB LIST).
+* ********************************************************************
+TIMEOUT  SAVE  (14,12)
+*        USING TIMEOUT,R15
+         L     R2,TIMEXPRM
+         POST  (2)
+         RETURN (14,12)
+         SPACE 2
+* ********************************************************************
+* ONLY CALLED AT INITIALISATION. IT FINDS THE NAME OF THE BATCH JOB
+* OR STARTED TASK THAT IS RUNNING THIS PROGRAM AND STORES THE NAME
+* SO IT CAN BE USED TO PREFIX ALL OUR WTO AND WTOR MESSAGES.
+* ********************************************************************
+GETJOBID EQU     *
+         STM   R1,R6,SAVEGETJ
+         L     R1,16             ADDR OF CVT
+         L     R1,0(R1)          ADDR OF DISPATCH QUEUE
+         L     R1,12(R1)         ADDR OF CURRENT ASCB
+         L     R1,176(R1)        ADDR OF JOBNAME
+         MVC   MYJOBNAM(8),0(R1)  MOVE JOBNAME TO JOBNAME FIELD
+         CLC   MYJOBNAM(8),=CL8'INIT'
+         BNE   GETJIDEX          NOT A BATCH JOB, SO DONE
+         LA    R5,16               ADDR OF CVT POINTER
+         L     R6,0(R5)            ADDR OF CVT
+         L     R5,0(R6)            ADDR OF TCBS
+         L     R6,4(R5)            ADDR OF 2ND TCB
+         L     R5,180(R6)          ADDR OF JSCB
+         L     R6,260(R5)          ADDR OF JCT PREFIX
+         LA    R6,24(R6)           ADDR OF JOBNAME IN JCT
+         MVC   MYJOBNAM(8),0(R6)   STORE THE JOBNAME
+GETJIDEX STM   R1,R6,SAVEGETJ
+         BR    R10
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* WRITE EACH CARD WE HAVE BUFFERED OUT TO THE CONSOLE AS WTO    *
+* MESSAGES IN RESPONDE TO A LIST REQUEST.                       *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+LISTLOOP DS    0F
+         STM   R4,R6,LISTACHK
+         LA    R5,STCLTBL        SET R5 TO ADDRESS TABLE
+         L     R6,STCLCNT        R6 TO COUNT WHATS LEFT
+LISTNEXT C     R6,=F'0'          ARE WE DONE ?
+         BE    LISTEND              YES, END CHECK LOOP
+*        INSERT INTO WTO IS 8, FOR MY WTO2 IS 23
+         MVC   LISTMSG2+8(70),0(R5)  
+LISTMSG2 WTO   '....+....1....+....2....+....3....+....4....+....5....+C
+               ....6....+....7'
+*        A     R5,STCLLEN        ADDRESS NEXT TABLE ENTRY = SOC4
+         A     R5,=F'70'         ADDRESS NEXT TABLE ENTRY
+         S     R6,=F'1'          DECREMENT COUNT LEFT
+         B     LISTNEXT          AND DO THE NEXT
+LISTEND  LM    R4,R6,LISTACHK
+         BR    R10
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* CALLED WHEN AN OPERATOR ENTERED THE KILLALL REQUEST.          *
+* MID: MOD, NOW CALLED WHEN OP REPLIES U TO THE CONFIRMATION    *
+*      WTOR THAT IS ISSUED WHEN A KILLALL IS REQUESTED.         *
+* WILL SEARCH FOR ALL CARDS THAT HAVE A 'K' IN THE KILL ALLOWED *
+* FIELD, AND CHANGE THE DESIRED STATE TO DOWN. IT WILL THEN RUN *
+* THE STATE CHECK CODE, WHICH WILL ISSUE THE STOP COMMAND FOR   *
+* THOSE TASKS WITH THE COMMAND FLAG SET. FOR THOSE THAT ARE SET *
+* TO ONLY LOG A MESSAGE A MESSAGE WILL BE LOGGED.               *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+STCLKILL DS    0F
+         STM   R4,R6,KILLACHK
+         MVI   FLAG,ACTIVE       RESET FLAG TO ACTIVE, WE WILL
+*                                PROCESS THE STATE CHANGES EVEN
+*                                IF WE WERE PREVIOUSLY PAUSED.
+         LA    R5,STCLTBL        SET R5 TO ADDRESS TABLE
+         L     R6,STCLCNT        R6 TO COUNT WHATS LEFT
+KILLNEXT C     R6,=F'0'          ARE WE DONE ?
+         BE    KILLEND              YES, END CHECK LOOP
+         MVC   STCLLINE(L'STCLLINE),0(R5) SET CARD TO CHECK FOR
+         CLI   STCLLINE+13,C'K'  IS THIS KILLABLE
+         BNE   KILLSKIP          NO, SKIP TO THE NEXT
+         MVI   STCLLINE+9,C'D'   DESIRED STATE IS NOW DOWN
+         MVC   0(L'STCLLINE,R5),STCLLINE  REPLACE CARD WITH NEW ONE
+* KILLSKIP A     R5,STCLLEN        ADDRESS NEXT TABLE ENTRY = SOC4
+KILLSKIP A     R5,=F'70'         ADDRESS NEXT TABLE ENTRY
+         S     R6,=F'1'          DECREMENT COUNT LEFT
+         B     KILLNEXT          AND DO THE NEXT
+KILLEND  BAL   R4,CHEKLOOP       FORCE THE CHECKS NOW
+         OI    FLAG,STOPPEND     WE MUST STOP ALSO, WE HAVE
+*                                   STOPED WHAT WE CAN, AND
+*                                   TRASHED OUR TABLE, ALL OK AS
+*                                   KILLALL IS FOR SYSTEM SHUTDOWN
+*                                   GO TO STOP-PENDING STATE SO WE
+*                                   HAND AROUND A WHILE TO ALLOW WTORS
+*                                   TO BE REPLIED TO.
+         LM    R4,R6,KILLACHK    RESTORE REGS
+         BR    R10
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                               *
+* CHEKLOOP                                                      *
+*                                                               *
+* LOOP FOR THE NUMBER OF CARDS THAT WERE READ, CALLING THE      *
+* ROUTINE TO CHECK THE TASKNAME IS ACTIVE FOR EACH.             *
+*                                                               *
+* TO BE CALLED WITH BAL R4 !.                                   *
+*                                                               *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+CHEKLOOP DS    0F
+         STM   R4,R6,SAVEACHK
+         LA    R5,STCLTBL        SET R5 TO ADDRESS TABLE
+         L     R6,STCLCNT        R6 TO COUNT WHATS LEFT
+CHEKNEXT C     R6,=F'0'          ARE WE DONE ?
+         BE    CHEKEND           YES, END CHECK LOOP
+         MVC   STCLLINE(L'STCLLINE),0(R5) SET CARD TO CHECK FOR
+         BAL   R4,ASTPARMS       DO THE SEARCH PROCESSING
+*         A     R5,STCLLEN        ADDRESS NEXT TABLE ENTRY = SOC4
+         A     R5,=F'70'         ADDRESS NEXT TABLE ENTRY
+         S     R6,=F'1'          DECREMENT COUNT LEFT
+         B     CHEKNEXT          AND DO THE NEXT
+CHEKEND  LM    R4,R6,SAVEACHK
+         BR    R4
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                               *
+* ASTPARMS                                                      *
+*                                                               *
+* SEARCH THROUGH THE SYSTEM CONTROL BLOCKS FOR THE TASKNAME WE  *
+* ARE LOOKING FOR.                                              *
+*                                                               *
+* TO BE CALLED WITH BAL R4 !.                                   *
+*                                                               *
+* INPUT: STCLLINE HAS THE CONTROl CARD TO SEARCH/USE            *
+*                                                               *
+* CURRENTLY: WTO IF THE TASK IS RUNNING OR NOT                  *
+* PROPOSED:  START THE TASK IF IT IS NOT RUNNING                *
+*                                                               *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ASTPARMS DS    0H
+         STM   R3,R9,SAVEAAST       SAVE REGS WE USE
+         MVC   JOBNAME(8),STCLLINE  SET TASKNAME TO SEARCH FOR
+         LA    R3,0
+         USING PSA,R3               PSA--->CVT
+         L     R4,FLCCVT
+         USING CVTMAP,R4            CVT--->ASVT
+         L     R7,CVTASVT
+         USING ASVT,R7              ASVT--->ASCB
+         XR    R8,R8                ZERO
+NEXTASID DS    0H
+         L     R5,ASVTENTY(R8)      AN ASID
+         USING ASCB,R5
+         CLM   R5,B'1000',=X'80'    IS HIGH BIT ON ?
+         BNE   INUSE                   NO, VALID
+         CLM   R5,B'0111',=XL3'0'   END OF TABLE ?
+         BE    ENDASVT                 ALL OVER
+RENTR    DS    0H
+         LA    R8,4(R8)             INCREMENT ASVTENTY ENTRY
+         B     NEXTASID
+INUSE    DS    0H
+         L     R6,ASCBJBNI          JOBNAME IF INITIATOR
+         LTR   R6,R6
+         BNZ   TESTIT
+         L     R6,ASCBJBNS          JOBNAME IF STC, ETC
+TESTIT   CLC   JOBNAME(8),0(R6)     IS THIS THE JOB ?
+         BNE   RENTR                  NO LEAVE
+*
+*              THE TASK IS ACTIVE, IS THIS OK ?
+         BAL   R4,ISACTOK
+         B     ASTEND
+*
+*              THE TASK IS NOT RUNNING, IS THIS OK
+ENDASVT  DS    0H
+         BAL   R4,ISNACTOK
+         B     ASTEND
+SAVEAAST DS    7F                   SAVEAREA FOR REGS WE TRASH
+ASTEND   LM    R3,R9,SAVEAAST
+         BR    R4
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* CALLED WHEN A MONITORED TASK IS DETERMINED TO BE ACTIVE. CHECKS
+* IF THE TASK IS ACTUALLY SUPPOSED TO BE ACTIVE AND TAKES THE
+* CONFIGURED ACTIONS IF NOT.
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ISACTOK  DS    0F                   IT IS RUNNING
+         ST    R4,ISACT99
+         CLI   STCLLINE+9,C'D'      IS IT SUPPOSED TO BE ?
+         BNE   ISACTOE              YES, NOTHING TO DO
+         CLI   STCLLINE+11,C'M'     NO, WHAT DO WE DO
+         BE    ISACTO1              M - MESSAGE ONLY
+         CLI   STCLLINE+11,C'C'     C - COMMAND TO ISSUE
+         BNE   ISACTOE              ELSE BAD CARD
+*        -- ISSUETH STOP COMMAND AT STCLLINE 50-69 ---
+         MVC   CMDSVC34+4(19),STCLLINE+49  MOVE IN STOP CMD
+         MVC   CMDSVC34+23(10),SPACES    CLEAR REMAINDER OF COMMAND
+         STM   R0,R1,SAVESVCR
+         MODESET KEY=ZERO,MODE=SUP
+         SR   R1,R1
+         LA   R1,CMDSVC34
+         SR   R0,R0
+         SVC  34          ISSUE COMMAND SPECIFIED
+         MODESET KEY=NZERO,MODE=PROB
+         LM    R0,R1,SAVESVCR
+         B     ISACTOE
+ISACTO1  MVC   ISACTO2+33(8),JOBNAME
+ISACTO2  WTO2  'MID105W jjjjjjjj:*WARNING* xxxxxxxx IS ACTIVE'
+         B     ISACTOE
+ISACT99  DS    1F
+ISACTOE  L     R4,ISACT99
+         BR    R4
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* CALLED WHEN A MONITORED TASK IS INACTIVE. CHECKS TO SEE IF THIS
+* IS OK, AND IF NOT TAKES THE CONFIGURED ACTIONS TO REMEDY THAT.
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ISNACTOK DS    0F
+         ST    R4,ISNACT99
+         CLI   STCLLINE+9,C'D'      IS IT SUPPOSED TO BE ?
+         BE    ISNACTE              YES, NOTHING TO DO
+         CLI   STCLLINE+11,C'M'     NO, WHAT DO WE DO
+         BE    ISNACTO1             M - MESSAGE ONLY
+         CLI   STCLLINE+11,C'C'     C - COMMAND TO ISSUE
+         BNE   ISNACTE              ELSE BAD CARD
+*        -- ISSUETH START COMMAND AT STCLLINE 20-49 ---
+         MVC   CMDSVC34+4(29),STCLLINE+19  MOVE IN START CMD
+         STM   R0,R1,SAVESVCR
+         MODESET KEY=ZERO,MODE=SUP
+         SR   R1,R1
+         LA   R1,CMDSVC34
+         SR   R0,R0
+         SVC  34          ISSUE COMMAND SPECIFIED
+         MODESET KEY=NZERO,MODE=PROB
+         LM    R0,R1,SAVESVCR
+         B     ISNACTE
+ISNACTO1 MVC   ISNACTO2+33(8),JOBNAME
+ISNACTO2 WTO2  'MID106W jjjjjjjj:*WARNING* xxxxxxxx IS INACTIVE'
+         B     ISNACTE
+ISNACT99 DS    1F
+ISNACTE  L     R4,ISNACT99
+         BR    R4
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                               *
+* STCLNEW - REREAD CONTENTS OF STCLLIST                         *
+*                                                               *
+* CALLED TO REFRESH IT'S MEMORY TABLES WITH A NEW LIST OF STC   *
+* TASKS TO BE MONITORED.                                        *
+*                                                               *
+* TO BE CALLED WITH BAL R10 !.                                  *
+*                                                               *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+STCLNEW  DS    0F
+         STM   R6,R7,STCLNSAV
+         XR    R6,R6                SET COUNT
+         ST    R6,STCLCNT              TO ZERO
+         LA    R7,STCLTBL           SET R7 TO ADDRESS TABLE
+         OPEN  (STCLIST,(INPUT))    OPEN FILE
+STCLNEXT GET   STCLIST              READ A LINE FROM FILE
+         MVC   STCLLINE(80),0(R1)   SAVE THE LINE, LATER ON
+*                                   WE WILL CHECK FOR COMMENTS
+*                                   AND CONTROL WORDS ETC,
+*                                   FOR NOW JUST...
+         CLI   STCLLINE,C'*'        CHECK IF IT IS A COMMENT
+         BE    STCLNEXT             YES, IGNORE
+         CLI   STCLLINE,C' '        CHECK THERE IS A JOBNAME
+         BE    STCLBADC             THERE ISN'T
+         CLI   STCLLINE+9,C'U'      CHECK EXPECTED STATE IS U/D
+         BE    STCL001              OK
+         CLI   STCLLINE+9,C'D'
+         BE    STCL001
+         B     STCLBADC             - BAD CARD
+STCL001  CLI   STCLLINE+11,C'C'     CHECK ACTION IS C/M
+         BE    STCL002              OK
+         CLI   STCLLINE+11,C'M'
+         BE    STCL002
+         B     STCLBADC             - BAD CARD
+STCL002  CLI   STCLLINE+13,C'K'     CHECK KILLPOS IS K/' '
+         BE    STCL003              OK
+         CLI   STCLLINE+13,C' '
+         BE    STCL003
+         B     STCLBADC             - BAD CARD
+STCL003  CLI   STCLLINE+19,C' '      CHECK DATA AT START CMD
+         BE    STCLBADC             - BAD CARD
+         CLI   STCLLINE+49,C' '     CHECK DATA AT STOP CMD
+         BE    STCLBADC             - BAD CARD
+*                                   -- ALL OK --
+         MVC   0(L'STCLLINE,R7),STCLLINE    SAVE FIRST 70 BYTES, DATA
+         CNOP  0,4                  DEBUG - BOUNDARY ERROR ?
+*         A     R7,STCLLEN       MOVE R7 TO ADDRESS NEXT ENT = SOC4
+         A     R7,=F'70'        MOVE R7 TO ADDRESS NEXT ENT
+         A     R6,=F'1'             ADD ONE TO ENT COUNTER
+*        C     R6,MAXRULES          IF AT 20, MAX REACHED
+         C     R6,=F'20'            IF AT 20, MAX REACHED
+         BC    GE,OVERFLOW
+         B     STCLNEXT             LOOP UNTIL END FILE
+OVERFLOW MVC   OVERFLMS+8(8),MYJOBNAM
+OVERFLMS WTO2  'MID108E jjjjjjjj:MAX 20 ENTRIES ALLOWED, IGNORING REST'
+         B     STCLEOF
+STCLNSAV DS    2F
+STCLEOF  CLOSE (STCLIST)            CLOSE THE FILE
+         ST    R6,STCLCNT           SAVE LATEST COUNTER
+         C     R6,=F'0'             IF THERE WERE GOOD CARDS
+         BNE   STCLEOFX                THEN CONTINUE
+         WTO2  'MID109E jjjjjjjj:FATAL, ALL CONTROL CARDS INVALID'
+         ABEND 112
+STCLEOFX LM    R6,R7,STCLNSAV
+         BR    R10
+STCLBADC CNOP  0,4                              
+         WTO2  'MID110E jjjjjjjj:BAD DATA CARD READ, DISCARDED'
+         B     STCLNEXT
+         EJECT
+         PRINT NOGEN
+* ********************************************************************
+* ********************************************************************
+ABEND113 ABEND   113,DUMP            * UNEXPECTED ECB POST
+* ********************************************************************
+* ********************************************************************
+         LTORG
+* CONSTANTS VARIABLES AND DSECTS                                    *
+STOPPEND EQU     X'08'               * BEGINNING TO STOP
+STOPPING EQU     X'04'               * STOP FLAG SETTING
+PAUSED   EQU     X'02'               * PAUSE FLAG SETTING
+ACTIVE   EQU     X'01'               * ACTIVE FLAG SETTING
+SECS30   DC      CL8'00003000'       * THIRTY  SECONDS
+PAUSE    DC      CL5'PAUSE',X'00'    * PAUSE   COMMAND
+RESUME   DC      CL6'RESUME',X'00'   * RESUME  COMMAND
+LIST     DC      CL4'LIST',X'00'     * LIST    COMMAND
+NEWDECK  DC      CL7'NEWDECK',X'00'  * NEWDECK COMMAND
+KILLALL  DC      CL7'KILLALL',X'00'  * KILLALL COMMAND
+KILLFORC DC      CL10'KILLFORCE',X'00' * KILLFORCE COMMAND
+         DS      0D
+SAVEAREA DS      18F                 * SAVEAREA FOR MAIN PROGRAM
+SAVEGETJ DS      6F                  * SAVE AREA FOR GETJOB ID
+COMM     DS      F                   * COMM AREA
+TIMERECB DS      F                   * THE STIMER ECB
+ECBLIST  DS      3F                  * ECB LIST FOR STIMER,COM,WTOR
+TIMEXPRM DS      F                   * TIMER PARAMETER
+SAVE10   DS      F                   * REG10 SAVEAREA
+SAVE7    DS      F                   * REG7  SAVEAREA
+LISTACHK DS      3F                  * SAVE AREA FOR LISTALL
+PER0SAVE DS      1F                  * SAVE AREA FOR TIMER POP
+NEWD000A DS      1F                  * SAVEAREA FOR NEWDECK COMMAND
+KILLACHK DS      3F                  * SAVEAREA FOR STCLKILL
+SAVEACHK DS      3F                  * SAVEAREA FOR CHEKLOOP
+FLAG     DS      X                   * STATUS FLAG
+MYJOBNAM DC      CL8' '              * THIS JOB OR STC NAME
+JOBNAME  DC    CL8' '     CURRENT JOBNAME BEING SEARCHED FOR
+SPACES   DC    CL10' '    TO CLEAR TRAILING CMD BUF ON STOP COMMAND
+STCLLINE DS    CL70       FOR WORKING WITH CARD IMAGE LINE, *ALSO*
+*                         USED FOR MOVING DATA ABOUT AND ADDRESSING
+STCLLEN  DC    F'70'      LENGTH OF ABOVE, MUST MATCH
+MAXRULES DC    F'20'      ONLY ALLOW 20 RULES FOR NOW
+*                         (ACTUAL MAX POSSIBLE IS 58 IN ONE DSECT)
+STCLCNT  DS    1F         COUNTER FOR HOW MANY WE REALLY HAVE
+*
+* DATA NEEDED TO ISSUE A WTOR FOR CONFIRMATION OF A KILLALL RQST
+WTORSAVE DS      1F
+WTORECB  DS    F                     , ECB we are waiting for
+WTOREPLY DC    C' '                  , reply we are waiting for
+THEWTOR  WTOR  '---------1---------2---------3---------4---------5-----+
+               ----6---------7---------8---------9---------0---------1-+
+               --------2-',,,,MF=L
+WTORTEXT EQU   THEWTOR+12,121
+KILLCONF DC    C'MID107W jjjjjjjj: CONFIRM, REPLY ''U'' TO KILLALL OR  +
+               ''C'' TO CANCEL'
+*
+* BELOW IS THE SVC 34 BUFFER WE USE, LEN HARD CODED AS 23 AS WE
+* KNOW ALL OUR COMMANDS ARE MAX 29 BYTES (31=CMDLEN + HEADERS)
+SAVESVCR DS 2F  REG SAVEAREA FOR SVC CALL
+CMDSVC34 DC 0D'0',XL2'1F',XL2'00',C'....+....1....+....2....+....'
+*
+STCLIST  DCB   DDNAME=STCLIST,MACRF=(GL),DSORG=PS,EODAD=STCLEOF
+         LTORG
+EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
+         LTORG
+         IEZCOM                      * COMM AREA
+         IHAECB                      * ECB
+         DSECT
+         IEZCIB                      * CIB
+         LTORG
+         IHAPSA
+         CVT DSECT=YES
+         LTORG
+         IHAASVT                     * ASVT MAP
+         IHAASCB
+         IKJTCB
+STCLTBLD DSECT
+         DS    0D                    FORCE CORRECT ALIGNMENT
+*              NOW IN A DSECT SHOULD BE ABLE TO HOLD 58 ENTRIES
+*              I AM ONLY USING 20 FOR NOW
+STCLMAX  EQU   20
+STCLTBL  DS    CL(L'STCLLINE*STCLMAX)
+STCLTBLA DS    1F                    OUR ADDRESS NEEDED BY SOME CODE
+STCLTBLL EQU   *-STCLTBL
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+GE       EQU   11   * NOT A LOW
+         END
+/*
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH(TASKMON),    <=== CHANGE
+//             DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR     <=== CHANGE
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ SETCODE AC(1)
+ INCLUDE SYSLMOD(TASKMON)
+ ENTRY TASKMON
+ NAME TASKMON(R)
+/*
+//

@@ -1,0 +1,604 @@
+//MARKA JOB (0),'ASSEMBLE IPLREASN',CLASS=A,MSGCLASS=T
+//*
+//* ========= TO INSTALL ========
+//* GLOBALLY REPLACE MARK.LIB.LOAD WITH THE DSN OF YOUR
+//* LOAD LIBRARY TO BE USED BEFORE RUNNING THIS TO ASSEMBLE
+//* THE PROGRAM.
+//*
+//* IT REQUIRES MY DATE LIBRARIES/MACROS IN ORDER TO ASSEMBLE
+//* (either download my date utility from my site,
+//* http://mdickinson.dyndns.org/hercules/downloads/
+//* or search on "MY PERSONAL DATE UTILITES" and replace
+//* that block of code with lots of your code instead).
+//* Sorry but I wasn't going to recode all that stuff inline in
+//* the program when I can just call existing working macros.
+//*
+//* GLOBALLY REPLACE INSTALL.UTILS.DATETIME WITH THE DSN 
+//* YOU INSTALLED MY DATE LIBRARY TO FOR THE MACROS TO BE FOUND.
+//* And of course the program modules are expected to have been
+//* assembled into one of your linklist libraries.
+//*
+//* ========= AND CLEAN UP ========
+//* NOTE: THE FIVE TEST STEPS AT THE END OF THIS JOBDECK YOU SHOULD
+//*       EITHER DELETE OR CUSTOMISE FOR YOUR SITE. THEY ARE JUST
+//*       TO TEST SOME SIMPLE LOGFILE ERROR HANDLING TO MAKE SURE
+//*       IT IS ALL WORKING AS EXPECTED.
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN            CVT, CVTSMCA, IEFJFCBN
+// DD DISP=SHR,DSN=MVSSRC.SYM101.F01       ILRASMVT
+// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME  MY DATE UTILITIES
+//ASM.SYSIN DD *
+***********************************************************************
+*
+* IPLREASN: Mark Dickinson, 2013
+*           Tested only on MVS3.8J Turnkey3
+*           Does NOT need to run APF authorised under Turnkey3
+*
+* PURPOSE: RECORD THE REASON AN IPL WAS DONE TO A HISTORY LOG FILE
+*          (LRECL=132) AND A COPY OF THE LOGGED RECORD IS ALSO WTO'D
+*          WITH MSGID MIDIP04I
+* purpose2:ok, its fun to write code that requires looking through
+*          macros and obsolete source code (and frustrating).
+*          but it's a way to pass the time.
+*
+* FUNCTION: ISSUES A WTOR PROMPT FOR A 82 BYTE REPLY, AND USES A TIMER
+*           TO CANCEL THE WTOR IF A REPLY IS NOT RECIEVED IN 10 MINS.
+*           IF THE WTOR TIMES OUT A DEFAULT 'NO REPLY FROM OP' WILL BE
+*           LOGGED.
+*           SHOULD BE CALLED AS A 'S xxx' FROM COMMND00 AT IPL TIME TO
+*           PROMPT FOR THE REASON FOR THE IPL BEING PERFORMED.
+*           IF THE LOGFILE DD USED IS IN INVALID OR MISSING THE
+*           INFORMATION WILL STILL BE WTO'ED FOR REFERENCE.
+* 
+* LOG FILE RECORD CONTAINS...
+* 2013/07/10 09:14 WED MID1 MVSRES(0148) IPL=CVIO,TEST NONCLPA
+*      |       |    |    |       |           |    |
+* yyyy/mm/dd   |    |    |       |           |    |
+*              |    |    |       |           |    |
+*            hh:mm  |    |       |           |    |
+*                   |    |       |           |    |
+*               day name |       |           |    |
+*                                |           |    operator response to
+*                   system smfid |           |    WTOR after comma
+*                                |           |    (82 bytes (wtorrepl))
+*                      ipl volser(ipl CCUU)  |    
+*                                            |    
+*                                       ipl type
+*                                 clpa/cvio(quick)/warm
+* 
+* EXAMPLE PROCEDURE:
+*    //IPLREASN PROC
+*    //IPLREASN EXEC PGM=IPLREASN
+*    //LOGFILE  DD   DISP=MOD,DSN=MARK.IPLS.LOG
+* LOGFILE IS DSORG=FB,LRECL=132
+* 
+*
+* ON MVS3.8J (TURNKEY3 PATCH LEVEL) DOES NOT HAVE TO BE APF
+* AUTHORISED AS THE CONTROL BLOCKS USED ARE AVAILABLE TO NON-AUTHORISED
+* PROGRAMS.
+* 
+* REQUIRES
+*    - SYS1.AMODGEN      (EXISTS ON TK3) for CVT, CVTSMCA, IECSDSL1 
+*    - MVSSRC.SYM101.F01 (EXISTS ON TK3) for ILRASMVT 
+*
+* MAINTENANCE NOTES
+*    With the exception of the WTO MIDIP04I (which is hardcoded with
+*    132 to prevent overwriting beyong the WTO space allocated) to
+*    change the log message length to add extra values just change
+*    the length of the OUTREC variable; all code apart from that 
+*    single WTO will adjust for the change as L'OUTREC is used for
+*    everything else including the file DCB.
+*    However... while I think JES2 SYSOUT will automatically
+*    truncate long print lines you might want to change the
+*    check I have to allow JES2 spool to be used as output to be
+*    disallowed (It is only there for debugging after all).
+*
+*
+* ALL WTO/WTOR MESSAGES USED BY THIS PROGRAM
+*  WTOR - MIDIP01A : ENTER THE REASON FOR THE IPL
+*              Self explainatory. Operator enyters a reason
+*              ACTION: reply to the WTOR
+*  WTO  - MIDIP02I : NO OP-REPLY IN 10MINS, WTOR CANCELLED
+*              Self explainatory.
+*              ACTION: none required
+*  WTO  - MIDIP03I : DATE LIBRARY PROGRAMS UNAVAILABLE
+*              My date utility programs are not in your linklist,
+*              the logfile message will not be timestamped.
+*              ACTION: none required (or install my libraries)
+*  WTO  - MIDIP04I : copy of the log message also WTO'ed in this
+*              A copy of the message written to LOGFILE is always
+*              WTO'ed; this message will be WTO'ed even if it was
+*              not possible to use the LOGFILE dataset so there
+*              will always be some record of the IPL.
+*              ACTION: none required
+*  WTO  - MIDIP05E : LOGFILE IS LRECL=nnn, REQUIRE nnn, DSN file.name
+*              The file on the LOGFILE DD card has a different LRECL
+*              than that expected by this program.
+*              ACTION: use a dataset with the correct LRECL 
+*  WTO  - MIDIP06E : NO LOGFILE DD CARD PROVIDED'
+*              Self explainatory.
+*              ACTION: provide the LOGFILE DD card 
+*  WTO  - MIDIP07E : VTOC LOOKUP ON VOLSER vvvvvv FAILED FOR file.name
+*              The dataset does not exist on the volume it was
+*              catalogued to; obviously we cannot write to it.
+*              ACTION: provide a properly cataloged dataset for the
+*                      LOGFILE DD card
+*  WTO  - MIDIP08E : LOGFILE NOT DSORG=PS, DSN file.name
+*              This program will only write to DSORG=PS log files.
+*              Live with it.
+*              ACTION: Use a DSORG=PS dataset on the LOGFILE DD card
+*
+* CHANGES:
+*   MID 2013/05/31 - Initial implementation of a simple WTOR and
+*                    datestamped op reply that ran out of a non-apf
+*                    library
+*   MID 2013/06/14 - Changed to include SMFID, IPL VOLSER and the CCUU
+*                    the IPL volser was on, reformatted message.
+*                    WTOR reply length dropped from 60 to 40 bytes
+*   MID 2013/07/09 - Changed to include IPL TYPE (CLPA/QUICK/WARM) in
+*                    the log message as that info can be obtained from
+*                    the ASMVT control block; also changed log record
+*                    length from 80 to 132 so opertaor reply is now
+*                    able to be 82 bytes (would have only been 30
+*                    bytes allowed with lrecl of 80).
+*   MID 2013/07/12 - Check the LOGFILE DD card is present, and that  
+*                    the file assigned to it is LRECL=132 and DSORG=PS.
+*                    Using an old copy of the pgm corrupted the disk
+*                    file so added these checks. Note: bad lrecl
+*                    should cause a S013-20 abend when the file is
+*                    opened, but it didn't in at least one test case
+*                    so I decided I needed these checks. Interesting
+*                    code examples in here anyway.
+*   MID 2013/07/18 - The REAL time of the IPL is now calculated and  
+*                    used in the log message (provided by my date
+*                    library).
+*
+***********************************************************************
+         PRINT NOGEN
+IPLREASN CSECT
+         STM   R14,R12,12(R13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+* --------------------------------------------------------------------
+* COLLECT THE INFO WE WANT FROM THE SYSTEM CONTROL SPACES
+* --------------------------------------------------------------------
+*
+* R15 : ADDRESS THE CVT,
+*       PURPOSE=NEEDED TO OBTAIN OTHER ADDRESSES
+         L     R15,CVTPTR             CVTPTR IS DEFINED IN CVT (16)
+         USING CVTMAP,R15             CVTMAP IN CVT ADDRESSES CVT
+*
+* MID - commented below, I only run mvs38j so even though I have
+*       figured out how to extract the 03.8 for the message I
+*       have decided not to use it in the message.
+* R3  : ADDRESS CVTFIX (CVT PREFIX) AREA
+*       PURPOSE =NEEDED TO PROVIDE OS VERSION
+*                NEEDED TO PROVIDE HARDWARE MODEL
+*        LR    R3,R15                   COPY CVT ADDRESS
+*        SH    R3,=Y(CVTMAP-CVTFIX)     LOCATE TO CVT PREFIX
+*        USING CVTFIX,R3
+*        MVC   OUTREC2+10(2),CVTNUMB     OS RELEASE NUMBER
+*        MVC   OUTREC2+13(2),CVTLEVL     OS LEVEL NUMBER
+*        UNPK  OUTMDL(4),CVTMDL(2)       MODELNUMBER INSIGNED PL2 
+*        OI    OUTMDL+3,X'F0'            CORRECT SIGN
+*           -- model number shows as 3030 instead of my expected
+*              3033 so something wrong here...oops, need len of
+*              5 for the unpack anyway, maybe look at this later.
+*        DROP  R3
+* R3  : DONE WITH R3 
+*
+* R3 : ADDRESS CVTSMCA, ADDRESS IS PROVIDED BY CVT THAT
+*      IS STILL ADDRESSES BY R15
+*      PURPOSE=OBTAIN THE SYSTEM NAME/SMFID
+         L     R3,CVTSMCA
+         USING SMCABASE,R3
+         MVC   OUTSYSID,SMCASID       SMFID INTO OUTPUT LINE
+*
+* - R3 STILL ADDRESSING SMCA, GET THE IPL VOLUME AND CCUU
+*   R2 TO REFERENCE CVTSYSAD OFFSET PROVIDED BY SMCA
+         L     R2,CVTSYSAD            MID
+         MVC   OUTVOLID(6),28(R2)     VOLID INTO OUTPUT LINE
+         L     R2,48(15)              GET SYSRES UCB POINTER
+         UNPK  UNPKFLD(5),4(3,R2)     UNPK BINARY CCUU + 1 BYTE
+         TR    UNPKFLD(4),TRTAB-240   MAKE IT DISPLAYABLE HEX
+         MVC   OUTCCUU,UNPKFLD        GET UNIT ADDRESS
+* DONE WITH THAT CONTROL BLOCK, DROP R3 FOR NEXT MAPPING NEEDED
+         DROP  R3
+*
+*
+* R3 : ADDRESS CVTASMVT, ADDRESS IS PROVIDED BY CVT THAT
+*      IS STILL ADDRESSES BY R15
+         L     R3,CVTASMVT
+         USING ASMVT,R3
+         TM    ASMFLAG2,ASMQUICK      CVIO QUICK START ?
+         BNO   IPLTYPE2
+         MVC   OUTIPL(4),=CL4'CVIO'
+         B     IPLTYPEX
+IPLTYPE2 TM    ASMFLAG2,ASMWARM       WARM START ?
+         BNO   IPLTYPE3
+         MVC   OUTIPL(4),=CL4'WARM'
+         B     IPLTYPEX
+IPLTYPE3 MVC   OUTIPL(4),=CL4'CLPA'  CLPA START
+IPLTYPEX EQU   *
+         DROP  R3
+*
+* MY PERSONAL DATE UTILITES
+* LINK TO UIPLTIME (VIA MIPLTIME MACRO) TO DO ALL THE MESSY
+* CALCULATIONS TO FIND THE ACTUAL IPL TIME.
+*    UDATEVAR RETURNS MAPPED FIELDS AS USED BELOW
+         UDATEMAC DATA=UDATEVAR,ERROR=SKIPDATE,REQ=IPL
+         MVC   OUTYEAR(4),D370YEAR           CCYY
+         MVC   OUTMNTH(2),D370MMDD           MM
+         MVC   OUTDAY(2),D370MMDD+2          DD
+         MVC   OUTHH(2),D370TIME             HH
+         MVC   OUTMM(2),D370TIME+2           MM
+         MVC   OUTDNAME(3),D370DNAM          SUN THRU SAT
+         B     DOWTOR
+SKIPDATE MVC   LOGRESP(21),=CL21'DATE LIBRARY PROGRAMS UNAVAILABLE'
+         WTO   'MIDIP03I : DATE LIBRARY PROGRAMS UNAVAILABLE'
+         EJECT
+* --------------------------------------------------------------------
+* WTOR NOW TO GET THE OPERATOR REASON
+* --------------------------------------------------------------------
+***********************************************************************
+* (1) START A TIMER
+* (2) START A WTOR
+* (3) PUT BOTH ON AN ECB LIST
+* (4) WAIT UNTIL ONE OF THOSE EVENTS TRIGGERS
+* NOTE: WHEN THE TIMER EXPIRES THE TIMER HANDLER DOES POSTS THE TIMEOUT
+*       EVENT TO THE ECB LIST FOR US TO CHECK
+***********************************************************************
+DOWTOR   XC      TIMERECB,TIMERECB     CLEAR THE STIMER EXIT'S ECB
+         XC      WTORECB,WTORECB       CLEAR THE WTOR ECB
+         LA      R15,TIMERECB          LOAD ADDRESS OF TIMER ECB
+         ST      R15,TIMEXPRM          STORE IT FOR TIMER EXIT TO POST
+*                                      START THE TIMER, THE TIMER
+*                                      HANDLER IS AT LABEL 'TIMEOUT'
+*                                      FOR THE DEMO, WAIT 60 SECONDS
+         STIMER REAL,TIMEOUT,DINTVL=SECS600
+*                                      ISSUE THE WTOR,
+*                                         TEXT
+*                                         DATA AREA FOR OPERATOR REPLY
+*                                         LENGTH OF THAT DATA AREA
+*                                         WHERE TO STORE INFO FOR ECB
+WTORMSG  WTOR  'MIDIP01A : ENTER THE REASON FOR THE IPL',              X
+               WTORREPL,L'WTORREPL,WTORECB
+         ST      R1,WTORMSID           SAVE MESSAGE ID OF WTOR
+*                                        RETURNED IN R1 FROM WTOR CALL
+         LA      R3,WTORECB            POINT TO THE WTOR ECB
+         ST      R3,ECBLIST            STORE ADDR OF WTORECB IN ECBLIST
+         LA      R3,TIMERECB           POINT TO THE STIMER ECB
+         ST      R3,ECBLIST+4          STORE IN NEXT ECB LIST ENTRY
+         OI      ECBLIST+4,X'80'       MARK END OF ECB LIST TABLE
+         WAIT    1,ECBLIST=ECBLIST     WAIT FOR ANYTHING IN ECB LIST
+*                                      FIGURE OUT WHAT IT WAS
+         TTIMER  CANCEL                CANCEL THE TIMER FOR ANY EVENT
+*                                      OR SOME NASTY LOOPS OCCUR
+*        CHECK THE COMMAND THAT TRIGGERED THE EVENT
+         LA      R3,TIMERECB           POINT TO TIMER ECB
+         USING   ECB,R3                COVER THE STIMER ECB
+         TM      ECBCC,ECBPOST         DID THE TIMER POP?
+         BO      TIMEERR               YES, NO RESPONSE IN TIME
+         DROP    R3
+*                                      ELSE THE WTOR REPLY
+         MVC     LOGRESP,WTORREPL      MOVE TO THE LOG MSG
+         B     CHECKLOG
+TIMEERR  WTO   'MIDIP02I : NO OP-REPLY IN 10MINS, WTOR CANCELLED'
+*                                      AS WE SAY WE ARE CANCELLING IT,
+*                                      LETS CANCEL IT THEN
+         L     R1,WTORMSID           RETRIEVE MSGID OF WTOR
+         DOM   MSG=(R1),REPLY=YES    REPLY=YES (AS IT IS A WTOR),
+*                                        CANCEL/DOM THE WTOR INSTEAD
+*                                        OF WAITING UNTIL MVS CANCELS
+*                                        IT WHEN THE PROGRAM ENDS
+         MVC   LOGRESP(39),DEFAULTR  USE DEFAULT RESPONSE
+         DROP  R15                     DONT NEED TO ADDRESS CVT NOW
+         EJECT
+* --------------------------------------------------------------------
+* SEE IF WE HAVE A USABLE LOGFILE. IF WE DON'T WE WILL SKIP THE
+* LOGFILE WRITE AND JUST DO THE WTO PART.
+*
+* TESTS DONE ARE
+* (1) DD CARD MUST BE PRESENT, WE OBVIOUSLY CANNOT WRITE TO IT IF 
+*     IT'S NOT THERE
+* (2) IF JES2 SPOOL, PROBABLY TESTING, ALLOW TO WRITE TO THE LOGFILE,
+*     BUT IF I EVER CHANGE OUTREC TO BE > 132 BYTES WILL HAVE TO
+*     REVISIT ALLOWING THAT; BUT OBVIOUSLY IS ONLY USED FOR TESTING
+* (3) MUST BE DSORG=PS  
+* (4) LRECL MUST MATCH L'OUTREC (length of the OUTREC area)
+*
+* I USE THE OBTAIN MACRO TO GET THE LRECL FROM THE VTOC ENTRY FOR THE
+* DISK FILE AS THE INFORMATION IN THE DCB IS NOT POPULATED UNTIL THE
+* FILE IS ACTUALLY OPENED, AND ITS A BIT LATE TO CHECK THERE IF THE
+* OPEN ABENDS DUE TO BAD LRECL :-)
+* --------------------------------------------------------------------
+CHECKLOG EQU     *
+*    DD CARD PRESENT ?
+         RDJFCB IPLOUT                 READ IPLOUT JFCB(DDNAME LOGFILE)
+         LTR   R15,R15                 WAS THE DD PRESENT
+         BNZ   BADDDCRD                NO, DD CARD NOT PRESENT
+*    OUTPUT IS A JES2 SPOOL DATASET ?
+         CLC   JFCBDSNM(6),=CL6'JES2.J'  IF JES2 SPOOL OUTPUT, 
+         BE    WRITELOG                  THEN ANY LRECL IS OK
+*                                      ALLOW NON DSORG=PS LOGFILES
+*    READ THE VTOC ENTRY FOR THE DATASET TO GET EXTRA INFO
+*    WE USE THIS INSTEAD OF INFO IN THE DCB AS THE DCB IS
+*    NOT POPULATED UNTIL THE FILE IS OPENED, AND IN THE CASE
+*    OF A BAD LRECL THE OPEN CAUSES AN ABEND SO TOO LATE TO
+*    CHECK THEN.
+         MVC DSN,JFCBDSNM          The RDJFCB gave us dsn and volser
+         MVC VOL,JFCBVOLS
+         OBTAIN CAMLIST            Read the VTOC record
+         LTR   R15,R15
+         BNZ   BADVTOC             Oopsie, obtain faled
+*    DSORG=PS ?                        
+         CLI   DS1DSORG,DS1DSGPS       CAN'T VTOC LOOKUP A FILE NAME
+         BNE   BADDSORG                LIKE X.X(MBR) SO JUST DON'T
+*                                      WE COULD STRIP OFF THE ( AND
+*                                      FOLLOWING CHARS BUT THEN WOULD
+*                                      ALSO NEED TO CHECK IF IT WAS
+*                                      DSORG=PO THAT A MEMBER NAME
+*                                      WAS PROVIDED BEFORE DOING A
+*                                      WRITE TO THE FILE.
+*                                      IF YOU ARE INTERESTED IN HOW TO
+*                                      DO THOSE CHECKS LOOK AT HOW MY 
+*                                      BKBYVTOC PROGRAM CHECKS ITS
+*                                      BACKUP LISTING IS SANE FOR
+*                                      DSORG=PS AND DSORG=PO(MBR).
+*                                      FOR THIS PROGRAM, ONLY ALLOW PS
+*    VTOC LRECL ENTRY IS THE SAME AS OUR RECORD LENGTH ?
+         XR    R4,R4                   CHECK LRECL
+         LH    R4,DS1LRECL             LRECL FIELD IN THE VTOC ENTRY
+         LA    R5,L'OUTREC               WHAT WE ACTUALLY REQUIRE
+         CR    R4,R5
+         BNE   BADLRECL            Bad LRECL
+*    A L L    G O O D    A T    T H I S    P O I N T
+         B    WRITELOG             ALL CHECKS PASSED
+         EJECT
+* --------------------------------------------------------------------
+* This page just contains the WTO error events for the possible file
+* errors tested for on the previous page.
+* Was using DESC=(2) or 3, and ROUTCDE=(2) to highlight these, but
+* for non-authorised programs WTO's are DOM'ed as soon as the job
+* ends... so that was a bit pointless. Just normal msgs now.
+* --------------------------------------------------------------------
+BADDSORG MVC   BADORGWT+45(44),JFCBDSNM 
+BADORGWT WTO   'MIDIP08E : LOGFILE NOT DSORG=PS, DSN ....+....1....+...X
+               .2....+....3....+....4....'
+         B     WRITEWTO                SKIP DISK LOG STEP
+BADLRECL MVC   BADLRWTO+58(44),JFCBDSNM
+         CVD   R4,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   BADLRWTO+36(3),DOUBLE
+         LA    R4,L'OUTREC               WHAT WE ACTUALLY REQUIRE
+         CVD   R4,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   BADLRWTO+49(3),DOUBLE
+BADLRWTO WTO   'MIDIP05E : LOGFILE IS LRECL=nnn, REQUIRE nnn, DSN ....+X
+               ....1....+....2....+....3....+....4....'
+         B     WRITEWTO                SKIP DISK LOG STEP
+BADDDCRD WTO   'MIDIP06E : NO LOGFILE DD CARD PROVIDED'
+         B     WRITEWTO                SKIP DISK LOG STEP
+BADVTOC  MVC   BADVTOC1+60(44),JFCBDSNM
+         MVC   BADVTOC1+49(6),JFCBVOLS
+         CVD   R15,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   BADVTOC1+35(3),DOUBLE
+BADVTOC1 WTO   'MIDIP07E : VTOC SEARCH ERR nnn ON VOLSER vvvvvv FOR ...X
+               .+....1....+....2....+....3....+....4....'
+         B     WRITEWTO                SKIP DISK LOG STEP
+         LTORG
+         EJECT
+* --------------------------------------------------------------------
+* LOG THE INFO COLLECTED NOW
+*    TO THE LOGFILE IF IT PASSED SANITY CHECKS
+*    TO THE CONSOLE ALWAYS
+* --------------------------------------------------------------------
+WRITELOG OPEN  (IPLOUT,(OUTPUT))
+         PUT   IPLOUT,OUTREC          WRITE THE INFO
+         CLOSE (IPLOUT)
+*
+* WTO THE LOG RECORD AS WELL, USE 132 AS LENGTH INSTEAD OF L'WTORREPL
+* TO ENSURE NO ISSUES WITH THIS BIT IF L'WTORREPL EVER GETS INCREASED
+WRITEWTO EQU   *
+         MVC   WTOMSG+19(132),OUTREC   USE 132 NOT L'WTORREPL 
+WTOMSG   WTO   'MIDIP04I : ....+....1....+....2....+....3....+....4....X
+               +....5....+....6....+....7....+....8....+....9....+....0X
+               ....+....1....+....2....+....3..'
+*
+* --------------------------------------------------------------------
+* COMPLETED
+* --------------------------------------------------------------------
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         XR    R15,R15                SET RC=0
+         BR    R14
+         LTORG
+* ********************************************************************
+* CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
+* ROUTINE DEFINED TO THE STIMER CALL EARLIER IN THE CODE.
+* IT ISSUES A POST ON THE TIMER EXPIRY EVENT WHICH WILL BE PICKED UP
+* BY THE MAINLINE WAIT ON THE ECB LIST (THE POST TRIGGERS THE TIMER
+* ENTRY MATCH IN THE ECB LIST).
+* THEN AS IT IS EFFECTIVELY JUST AN EXIT WE MUST BRANCH BACK TO
+* THE OS/CALLER AND WAIT FOR THE ECBLIST WAIT TO HANDLE THE POST
+* WE HAVE JUST MADE.
+* ********************************************************************
+TIMEOUT  SAVE  (14,12)
+         L     R2,TIMEXPRM        IT IS THE TIMER EVENT WE ARE POSTING
+         POST  (2)                POST THE TIMER EVENT, DO NO MORE !!!
+         RETURN (14,12)           STIMER EXIT END, RETURN CONTROL
+         EJECT
+***********************************************************************
+*                                                                     *
+*        D A T A   A R E A   B I T S                                  *
+*                                                                     *
+***********************************************************************
+         LTORG
+SAVEAREA DS    18F
+WTORMSID DS    F                  SAVE MESSAGE ID OF WTOR HERE
+WTORREPL DC    CL82' '            REPLY AREA FOR WTOR, ONLY 82 BYTES
+WTORECB  DS    F                  WTOR ECB
+TIMERECB DS    F                  THE STIMER ECB
+ECBLIST  DS    3F                 ECB LIST FOR STIMER,WTOR
+TIMEXPRM DS    F                  TIMER PARAMETER
+SECS600  DC    CL8'00060000'      10 MINUTES FOR STIMER INVOCATION
+DOUBLE   DC    D'0'               WORK AREA FOR LRECL ERROR MSG
+*
+DEFAULTR DC    CL39'NO RESPONSE FROM OPERATOR AFTER 10 MINS'
+*                   80-39 = 35 bytes for reply msg length
+*                    ....+....1....+....2....+....3....+....4....+....
+OUTREC   DC    CL132'yyyy/mm/dd hh:mm ddd xxxx vvvvvv(ccuu) IPL=...., '
+OUTYEAR  EQU   OUTREC+0,4
+OUTMNTH  EQU   OUTREC+5,2
+OUTDAY   EQU   OUTREC+8,2
+OUTHH    EQU   OUTREC+11,2
+OUTMM    EQU   OUTREC+14,2
+OUTDNAME EQU   OUTREC+17,2
+OUTSYSID EQU   OUTREC+21,4
+OUTVOLID EQU   OUTREC+26,6
+OUTCCUU  EQU   OUTREC+33,4
+OUTIPL   EQU   OUTREC+43,5
+LOGRESP  EQU   OUTREC+48,L'WTORREPL    WHERE IN OUTREC FOR REPLY
+         SPACE
+UNPKFLD  DS    CL5
+TRTAB    DC    C'0123456789ABCDEF'
+IPLOUT   DCB   DDNAME=LOGFILE,DSORG=PS,RECFM=FB,LRECL=L'OUTREC,        X
+               MACRF=PM,EXLST=EXLSTLGF
+         DS    0F
+EXLSTLGF DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DC    176X'00'                 JFCB AREA
+         ORG   JFCBAREA
+         IEFJFCBN              map the jfcbarea
+         LTORG
+* -- FOR OBTAIN/CAMLIST
+* CAMDUM CAMLST SEARCH,DSNAME,VOLSER,DSCB+44
+CAMLIST  CAMLST SEARCH,DSN,VOL,DS1FMTID
+* -- TO MAP THE FORMAT 1 DSCB VTOC ENTRY
+*    THERE MUST BE THE LEADING 44 BYTES, THE ACTUAL
+*    IECSDSL1 MAPPING EXPECTS THOSE BYTES TO BE THERE.
+VOL      DS    CL6
+         DS    0F         Align on fullword boundary
+DSN      DS    CL44
+DSCB     DS    CL140
+         ORG   DSN            overlay from DSN not from DSCB
+         IECSDSL1 1           Map the Format 1 DSCB
+* -- UDATEVAR FOR UDATEMAC FIELDS
+         UDATEVAR DSECT=NO
+         SPACE 2
+* -- ECB FIELDS NEEDED FOR THE WTOR AND TIMER
+         IHAECB DSECT=NO          ECB INFORMATION REQUIRED
+         EJECT   
+* THE BELOW WILL GENERATE SEPERATE DSECTS
+*
+* -- THE CVT PREFIX HAS THE OSVER AND HW MODEL TYPE, PREFIX=YES
+*    OH, AND POINTERS TO LOTS OF OTHER THINGS WE NEED :-)
+         CVT   DSECT=YES,PREFIX=YES,LIST=YES
+* -- THE SMCA AREA HAS SYSRES VOLUME AND SYSRES UCB POINTER (FOR CCUU)
+         IEESMCA
+* -- THIS HAS THE ASMVT WHICH HAS THE TYPE OF IPL (QUICK/WARM/CLPA)
+         ILRASMVT DSECT=YES
+         EJECT   
+* STANDARD REGISTER EQUATES HERE
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*              AND COMPARE INSTRUCTIONS I ALWAYS INCLUDE
+GT       EQU   2 -                 A HIGH
+LT       EQU   4 -                 A LOW
+NE       EQU   7 -                 A NOT EQUAL B
+EQ       EQU   8 -                 A EQUAL B
+GE       EQU   11 -                A NOT LOW
+LE       EQU   13 -                A NOT HIGH
+         END   IPLREASN
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DISP=SHR,
+// DSN=MARK.LIB.LOAD(IPLREASN)
+//*
+//* ===================================================================
+//* AND LETS TEST THAT IT ALL WORKS
+//* FOUR WTOR'S TO BE REPLIED TO HERE
+//* ===================================================================
+//* -------------------------------------------------------------------
+//* TEST1 - TEST MISSING DD CARD
+//*    ALL INFO COLLECTED INCLUSING WTOR
+//*    MESSAGE WTO'ED SAYING NO LOGFILE DD CARD
+//*    FULL LOG MESSAGE STILL WTO'ED TO CONSOLE
+//* -------------------------------------------------------------------
+//TEST1   EXEC PGM=IPLREASN,COND=(0,NE)
+//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
+//*
+//* -------------------------------------------------------------------
+//* TEST2 - TEST BAD LRECL ON LOGFILE
+//*    CREATE A TEMPORARY TEST FILE WITH A SHORT LRECL
+//*    ALL INFO COLLECTED INCLUSING WTOR
+//*    MESSAGE WTO'ED SAYING LOGFILE HAS BAD LRECL + DATASET NAME
+//*    FULL LOG MESSAGE STILL WTO'ED TO CONSOLE
+//*    DELETE THE TEMPORARY TEST FILE
+//* -------------------------------------------------------------------
+//TEST2A  EXEC PGM=IEFBR14,COND=(0,NE)
+//DD1     DD DISP=(NEW,CATLG,DELETE),
+// UNIT=3380,VOL=SER=PUB002,
+// SPACE=(TRK,(1,1)),
+// DCB=(DSORG=PS,RECFM=FB,LRECL=80,BLKSIZE=800),
+// DSN=MARK.TEST.DELME
+//TEST2B  EXEC PGM=IPLREASN,COND=(0,NE)
+//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
+//LOGFILE DD DISP=MOD,DSN=MARK.TEST.DELME
+//TEST2C EXEC PGM=IEFBR14,COND=(EVEN)
+//DD1 DD DISP=(OLD,DELETE,DELETE),DSN=MARK.TEST.DELME
+//*
+//* -------------------------------------------------------------------
+//* TEST3 - TEST A JES2 SPOOL FILE   (PERMITTED)
+//*    ALL INFO COLLECTED INCLUSING WTOR
+//*    LOG MESSAGE WRITTEN TO LOGFILE (JES2 SYSOUT)
+//*    FULL LOG MESSAGE STILL WTO'ED TO CONSOLE
+//* -------------------------------------------------------------------
+//TEST3   EXEC PGM=IPLREASN,COND=(0,NE)
+//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
+//LOGFILE DD SYSOUT=*
+//*
+//* -------------------------------------------------------------------
+//* TEST4 - LOGFILE IS NOT DSORG=PS
+//*    MESSAGE WTO'ED SAYING NOT A DSORG=PS FILE
+//*    FULL LOG MESSAGE STILL WTO'ED TO CONSOLE
+//* -------------------------------------------------------------------
+//TEST4   EXEC PGM=IPLREASN,COND=(0,NE)
+//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
+//LOGFILE DD DISP=MOD,DSN=MARK.LIB.JCL 
+//*
+//* -------------------------------------------------------------------
+//* TEST5 - TEST A GOOD DISK FILE
+//*    ALL INFO COLLECTED INCLUSING WTOR
+//*    LOG MESSAGE WRITTEN TO DISK FILE (USING MY EXISTING DISK FILE)
+//*    FULL LOG MESSAGE WTO'ED TO CONSOLE
+//* -------------------------------------------------------------------
+//TEST5   EXEC PGM=IPLREASN,COND=(0,NE)
+//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
+//LOGFILE DD DISP=MOD,DSN=MARK.IPLS.LOG
+//

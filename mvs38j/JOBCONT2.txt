@@ -1,0 +1,198 @@
+//MARKA   JOB  (0),'ASSSEMBLE',MSGLEVEL=1,CLASS=A,MSGCLASS=T
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//SYSIN   DD   DATA,DLM=ZZ
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                   *
+* JOBCONT2:                                                         *
+*                                                                   *
+* THIS IS A QUICK AND DIRTY FIX SINCE I INSTALLED RAKF AND REMOVED  *
+* ALL ACCESS FROM THE DEFAULT BATCH GROUP.                          *
+*(RAKF is now on CBT249 file 165 as a SMP install (www.cbttape.org))*
+*                                                                   *
+* IT IS USED IN MY JOBDECK PROCEDURE TO SUBMIT JOBS INSTEAD OF      *
+* IEBGENER TO INTRDR.                                               *
+* IT A S S U M E S A JCL JOBDECK(S) AS INPUT AND THAT THE JOB CARDS *
+* CORRECTLY HAVE ' JOB  (account...' STARTING AT COL 11 (JOB AT 12) *
+* ie: //JJJJJJJJ JOB  (0),'DESCRIPTION',CLASS=A,MSGCLASS=T,         *
+*     // MSGLEVEL=(1,1)                                             *
+*                                                                   *
+* WHENEVER A JOBCARD IS FOUND CARDS ARE READ UNTIL A CARD WITHOUT   *
+* A CONTINUATION (COOMA) IS FOUND. IT THEN ADDS A COMMA TO THAT     *
+* LINE AND ADDS A SEPERATE JOBCARD LINE CONTAINING THE              *
+* // USER=xxx,PASWORD=yyy VALUES NEEDED FOR PRODUCTION BATCH.       *
+* (ASSUMING YOU USE PARM='USER=xxx,PASSWORD=yyy' AS THE PARM OF     *
+*  COURSE, YOU CAN APPEND ANYTHING YOU WANT)                        *
+* ie: output using above examples would be                          *
+*     //JJJJJJJJ JOB  (0),'DESCRIPTION',CLASS=A,MSGCLASS=T,         *
+*     // MSGLEVEL=(1,1),                                            *
+*     // USER=xxx,PASSWORD=yyy                                      *
+*                                                                   *
+* THIS ALLOWS ME TO HAVE THE USER/PASSWORD CODED IN A PROCLIB       *
+* ONLY STCGROUP CAN READ TO SUBMIT PROD BATCH JOBS AND AVOIDS THE   *
+* NEED TO HAVE USER=/PASSWORD= CODED ON PRODUCTION BATCH JOBS.      *
+*                                                                   *
+* CALLED JOBCONT2 BECAUSE IT WILL ADD ANYTHING ON THE PARM AS A     *
+* CONTINUATION FOR A JOB CARD, SO CAN BE USED TO APPEND OTHER       *
+* INFORMATION IF NEEDED (THE 2 IS, VERSION 2)                       *
+*                                                                   *
+* INPUT: SYSUT1 - LRECL=80                                          *
+* OUTPUT: SYSUT2 - LRECL=80                                         *
+*                                                                   *
+* I M P O R T A N T                                                 *
+* THIS IS A QUICK AND DIRTY, IT DOES NOT CHECK IF USER/PASSWORD     *
+* ALREADY EXIST.                                                    *
+* ---> REQUIRES CORRECT JCL COLUMN USAGE. SO NO PARSING REQUIRED    *
+*      OR WE MIGHT FALSLY TRIGGER ON COMMENTS                       *
+* CREATED FOR MY USE WITH KNOWN INPUT STREAMS; MAY ENHANCE IT LATER *
+*                                                                   *
+* CHANGE HISTORY:                                                   *
+* 2013/11/01 - Created JOBCONT, required JOB card always be card 1  *
+* 2013/11/02 - Oops, some of my prod jobs are submitted via DD      *
+*              concatenation, can be multiple jobs passed into      *
+*              SYSUT1, changed the logic to search for job cards    *
+*              anywhere in the SYSUT1 data stream for the extra     *
+*              card insertion.                                      *
+*                                                                   *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         EJECT
+         SPACE 2
+JOBCONT2 CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+* SAVE THE PARM STRING PASSED
+         L     R1,0(,R1)    POINT TO PARM
+         LH    R5,0(,R1)    LENGTH OF PARM TO R5
+         LTR   R5,R5        WAS PARM LEN > 0 ?
+         BZ    NOPARM
+         LA    R1,2(,R1)    ADDRESS PARM DATA
+         S     R5,=F'1'     LEN ALWAYS INCLUDES AN EXTRA NUL???
+*                           SO DEC 1 BEFORE THE EX
+         EX    R5,MOVEPARM  SAVE THE PARM
+*
+* OPEN THE FILES
+         OPEN  (INFILE,(INPUT),OUTFILE,(OUTPUT))
+         LTR   R15,R15
+         BNZ   OPENERR
+         SPACE 2
+READCARD GET   INFILE
+         MVC   OUTLINE(L'OUTLINE),0(R1)
+*             //JJJJJJJJ JOB (acct.....
+         CLC   OUTLINE+10(7),=CL7' JOB  ('  JOB CARD ?
+         BNE   WRITCARD
+         BAL   R4,JOBCARDS
+WRITCARD PUT   OUTFILE,OUTLINE           WRITE THE RECORD
+         MVI   OUTLINE,C' '              CLEAR THE RECORD BUFFER
+         MVC   OUTLINE+1(L'OUTLINE-1),OUTLINE
+         B     READCARD
+         SPACE 2
+OPENERR  EQU   *
+         WTO   'FILE OPEN ERROR FROM JOBDECK'
+         B     EXIT
+EOJ      EQU   *
+         CLOSE (INFILE,,OUTFILE)
+EXIT     EQU   *
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         SPACE 2
+NOPARM   WTO   'NO PARM PASSED TO JOBCONT2, ABENDING U111'
+         ABEND  111
+BADLINE  WTO   'INPUT FILE STARTS WITH AN EMPTY LINE, AB U112'
+         ABEND  112
+         EJECT
+*
+* CALLED WITH BAL R4,JOBCARDS WHEN A JOB CARD IS FOUND
+* CARD ALREADY IN OUTLINE
+* KEEP READING CARDS UNTIL WE FIND ONE NOT A CONTINUATION
+* MAKE THAT CARD A CONTINUATION AND ADD THE PARM TO IT
+* THEN RETURN TO MAIN ROUTINE VIA R4...
+* ...OUTLINE HAS OUR CONTINUATION CARD AT THAT POINT
+* 
+JOBCARDS LA    R2,OUTLINE
+         LA    R3,OUTLINE+72
+JSCAN1   S     R3,=F'1'
+         CR    R3,R2
+         BE    BADLINE
+         CLI   0(R3),C' '
+         BE    JSCAN1
+         CLI   0(R3),C','                DOES IT CONTINUE ?
+         BNE   ADDCONT                   NO, END OF JOBCARDS
+         PUT   OUTFILE,OUTLINE           YES, KEEP THIS ONE
+         GET   INFILE
+         MVC   OUTLINE(L'OUTLINE),0(R1)
+         B     JOBCARDS                  GET THE NEXT JOB CONTINUATION
+*
+* ADD A , TO SHOW CONTINUATION, THEN WRITE THAT CARD
+* THEN BUILD A CONTINUATION CARD WITH THE PARMS PASSED    
+ADDCONT  A     R3,=F'1'                  WE CONTINUE THE CARD
+         MVI   0(R3),C','
+         PUT   OUTFILE,OUTLINE           PUT WITH EXTRA ,   
+         MVI   OUTLINE,C' '              CLEAR THE RECORD BUFFER
+         MVC   OUTLINE+1(L'OUTLINE-1),OUTLINE
+         MVC   OUTLINE,PWDLINE           EXTRA LINE FROM PARM
+         BR    R4                        WHICH IS WRITTEN IN MAINLINE
+         EJECT
+SAVEAREA DS    18F
+OUTLINE  DC    CL80' '
+PWDLINE  DC    CL80'// '
+MOVEPARM MVC   PWDLINE+3(0),0(R1)
+INFILE   DCB   DDNAME=SYSUT1,MACRF=(GL),DSORG=PS,EODAD=EOJ
+OUTFILE  DCB   DDNAME=SYSUT2,MACRF=(PM),DSORG=PS,RECFM=F,LRECL=80
+         SPACE 2
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+LT       EQU   4 -                 A LOW
+NOP      EQU   0 -                 NO OPERATION
+         END
+ZZ
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD(JOBCONT2),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(JOBCONT2)
+ ENTRY JOBCONT2
+ NAME JOBCONT2(R)
+/*
+//

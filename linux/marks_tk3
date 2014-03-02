@@ -1,0 +1,523 @@
+#!/bin/bash
+#
+# chkconfig: 35 90 12
+# description: Start/Stop hercules TK3 MVS3.8J system
+#
+# PURPOSE:
+#    Start my MVS3.8J Turnkey3 system on a headless server without
+#    any intervention being needed by me.
+#
+# Copy script to /etc/init.d/marks_tk3 and
+#  'chkconfig --add marks_tk3' then 'chkconfig marks_tk3 on'
+#  All the links in rc3.d and rc5.d etc will be created by
+#  chkconfig (start at S90marks_tk3, stop at S12marks_tk3)
+#  as defined in the chkconfig line at the top.
+#
+# -------------------------------------------------
+# ----> R E A D M E <----
+# Before running please update the global variables after the
+# end of the header comment block, the three variables to update are
+#    RUNUSER="mark"   # This is the userid that should do the startup
+#    TK3DIR="/home/mark/hercules/turnkey3" # where is TK3 installed
+#    CONFIG="conf/marks.conf"            # the hercules config file to use
+#    IPL_VOL="148"                       # the IPL volume
+#    MARKS_SYSTEM="YES"                  # change to NO
+# -------------------------------------------------
+# ISSUES, SOLVED AND UNSOLVED, ARE IN A COMMENT BLOCK AT THE END OF
+# THIS SCRIPT FILE. UNSOLVED IS A F18 ONE... SO REVIEW THAT.
+#
+# The script may look a little messy as it is using multiple ways of
+# issuing commands (screen -X, x3270-script via netcat, and using the
+# hercules.rc file to issue the ipl command intead of the script doing 
+# it. But they are all required as discussed at the end of this script.
+#
+# SYNTAX:
+#    scriptname start 
+#         start the TK3 system, telnet, consoles and IPL to fully active state
+#    scriptname stop
+#         does the 'f taskmon,shutnow', ends jes2, z eod and quiesce, and
+#         tries to shutdown hercules, using a kill if needed (see the known
+#         issues at the end of this file as ti why a kill of hercules may
+#         be needed)
+#
+# INTERACTIVE INTERFACES:
+#    As the user that runs this script
+#       screen -r hercules
+#             connect to the hercules hardware console
+#       screen -r hardcopy
+#             connect to the telnet session if you really want to
+#       screen -r c3270A
+#             connect to the master console  (ctrl-A d to disconnect again)
+#       screen -r c3270B
+#             connect to the backup console  (ctrl-A d to disconnect again)
+#
+#    network interfaces
+#       tcpip port 3270 - 
+#             standard hercules assignment, telnet, consols and terminals connect here
+#
+# BATCH INTERFACES:
+#       console commands can be issued by scripts using the c3270
+#       tcpip ports, or via the hardcopy console using screen.
+#       Note: that hardcopy commands are CASE SENSITIVE so upshift
+#             any commands used for the hardcopy console.
+#       Also hercules commands can be issued via screen.
+#       Interfaces are as below...
+#
+#       tcpip port 3271 -
+#             x3270-script port used by the master console session
+#               echo 'string("D A,L")' | nc ${localhost} 3271
+#               echo "enter()" | nc ${localhost} 3271
+#       tcpip port 3272 -
+#             x3270-script port used by the backup console session
+#             (see above for how to use it, with port 3272 of course)
+#       screen -S hercules -X stuff $'any command \n'
+#             issue a command to the hercules hardware console
+#             (see known issues at th end of this script, at least
+#             one screen attach must have been entered first)
+#       screen -S hardcopy -X stuff $'any command \n'
+#             issue a command to the hardcopy console
+#             NOTE: commands on hardcopy console ARE case sensitive
+#
+
+# ----------- U P D A T E   T H E S E -------------
+RUNUSER="mark"   # This is the userid that should do the startup
+TK3DIR="/home/mark/hercules/turnkey3" # where is TK3 installed
+CONFIG="conf/marks.conf"            # the hercules config file to use
+IPL_VOL="148"                       # Volume to IPL off
+MARKS_SYSTEM="YES"                  # Handle specifics for my system
+localhost="127.0.0.1"               # On F18 localhost doesnt work,
+                                    # 127.0.0.1 does so make it a
+                                    # variable so I can change it easily
+                                    # between my systems
+# --------- E N D   O F   U P D A T E S -----------
+HERCULES_RC="/tmp/hercstartup.tmp"  # must unfortunately use an rc file
+                                    # (see known issues at end of this file)
+export HERCULES_RC                  
+
+# ----------------------------------------------------------
+# We are opening up ports, do not do so as root !!!
+# ----------------------------------------------------------
+# If running as root try to switch to the correct user
+# and reissue the command... IF parm2 is empty indicating
+# we have not already tryed that.
+myid=`whoami`
+if [ "${myid}." = "root." -a "$2." = "." ];
+then
+    optcmd="$1"
+    dirpath=`dirname $0`
+    cd ${dirpath}
+    dirpath=`pwd`
+    scriptname=`basename $0`
+    # Bother, forgot about status. Bung in an elif later to not redirect anywhere,
+    # for now just report what userr is needed
+    if [ "${optcmd}." = "status." ];
+    then
+        echo "You should log in as ${RUNUSER} to use the status option"
+        exit 1
+    fi
+    if [ "${optcmd}." = "stop." ];
+    then   # SHUTDOWN, run in the foreground, maybe shutdown will wait for it to finish
+       su - ${RUNUSER} -c "bash /${dirpath}/${scriptname} ${optcmd} changeduser > /tmp/hercstop.log 2>&1"
+    else   # STARTUP, runs headless as a background task so as not to hold up boot
+       su - ${RUNUSER} -c "bash -x /${dirpath}/${scriptname} ${optcmd} changeduser > /tmp/hercstart.log 2>&1 &"
+    fi
+    exit 0
+fi
+if [ "${myid}." != "${RUNUSER}." ];
+then
+   cat << EOF
+Please start this as user '${RUNUSER}'.
+Do not start hercules as root, there is internet access to this
+system now !.
+EOF
+   exit 1
+fi
+
+# ----------------------------------------------------------
+# Ensure we always start in the correct place, or nothing
+# will start up, and screen won't report any errors, the 
+# only way we would know if anything went wrong was if there
+# are no screen sockets in use.
+# ----------------------------------------------------------
+cd ${TK3DIR}
+
+# ----------------------------------------------------------
+# roll_log:
+# A little helper routine to roll the log files at startup.
+# ----------------------------------------------------------
+roll_log() {
+   logfilename="$1"
+   maxnum="$2"
+   nextnum="${maxnum}"
+   prevnum=$((${num} - 1))
+   while [ ${prevnum} -gt 0 ];
+   do
+      if [ -f ${logfilename}.${prevnum} ];
+      then
+         mv ${logfilename}.${prevnum} ${logfilename}.${nextnum}
+      fi
+      nextnum="${prevnum}"
+      prevnum=$((${num} - 1))
+   done
+   mv ${logfilename} ${logfilename}.1
+} # roll_log
+
+
+# ----------------------------------------------------------
+# is_running:
+# test to see if we are already running, if we are we don't
+# want to try to start everything up again.
+# NOTE: echo nothing except the yes|no expected by the caller
+# ----------------------------------------------------------
+is_running() {
+    active="no"
+    x1=`ps -ef | grep hercules | grep -v grep`
+    if [ "${x1}." != "." ];
+    then
+        active="yes"
+    fi
+    x2=`netstat -an | grep 3270 | grep LISTEN | grep -v grep`
+    if [ "${x2}." != "." ];
+    then
+        active="yes"
+    fi
+    x3=`netstat -an | grep 3271 | grep LISTEN | grep -v grep`
+    if [ "${x3}." != "." ];
+    then
+        active="yes"
+    fi
+    x4=`netstat -an | grep 3272 | grep LISTEN | grep -v grep`
+    if [ "${x4}." != "." ];
+    then
+        active="yes"
+    fi
+    echo "${active}"
+} # is_running
+
+
+# ----------------------------------------------------------
+# start_system:
+# start the hercules turnkey3 system
+#
+# (a) make sure hercules is not already running
+# (b) roll the log files
+# (c) start hercules running the TK3 system, use hercules.rc to ipl
+# (d) start the telnet session to the hardcopy print terminal
+# (e) start master console, use scriptport 3271
+# (f) start the secondary console, use scriptport 3272
+# (g) provide the 'enter' key to master console as IPL options
+# (h) switch master console to RD mode
+# (i) switch backup console to RD mode
+# ----------------------------------------------------------
+start_system() {
+   # Do not try to start anything if it looks like it is already
+   # up and running.
+   testvar=`is_running`
+   if [ "${testvar}." = "yes." ];
+   then
+      echo "*Error* hercules appears to already be running."
+      exit 1
+   fi
+
+   # Roll any existing log files
+   roll_log prt/prt00e.txt 5         # roll the logs, keep 5 old versions
+   roll_log prt/prt00f.txt 5         # roll the logs, keep 5 old versions
+   roll_log log/hardcopy.log 5       # roll the logs, keep 5 old versions
+   roll_log log/hercules.log 5       # roll the logs, keep 5 old versions
+
+   # Initialise the hercules.rc file we need to IPL
+   # The first commands entered to hercules must be from the hercules.rc file
+   # see know issues at the end of the script for why
+   echo "pause 20" > ${HERCULES_RC}
+   echo "ipl ${IPL_VOL}" >> ${HERCULES_RC}
+   # Uses env variable HERCULES_RC to locate the .rc file to use
+   # hercules now allows a logfile as the last parm; doesn't work for me
+   # so I redirect to a logfile
+   screen -t hercules -S hercules -p hercules -d -m hercules -f ${CONFIG} > log/hercules.log 
+   sleep 5
+   # start the telnet session to port 3270
+   screen -t hardcopy -S hardcopy -p hardcopy -d -m telnet ${localhost} 3270
+
+   # While commands can be "stuff'ed" into c3270 sessions I have found no
+   # way to trigger the 'enter' key to get the command string accepted 
+   # using the stuff command (\n, \0x07d, \0x027 don't work).
+   # So we have to use the scriptport option of c3270 so we can trigger
+   # the enter key that way, we can use nc to pass the script commands
+   # to the session to be executed.
+   screen -t c3270A -S c3270A -p c3270A -d -m c3270 -scriptport 3271 ${localhost}:3270
+   sleep 1
+   screen -t c3270B -S c3270B -p c3270B -d -m c3270 -scriptport 3272 ${localhost}:3270
+   sleep 1
+   # Not starting the 3rd screen for TSO, I start that as needed remotely
+
+   # Wait for things to stabalise, and the hercules pause to pass
+   # when run from init.d 40 secs was not long enough, use 60
+   sleep 60 
+
+   # The hercules command session refuses to accept the initial IPl command
+   # unless it is attached to an active screen (bug in hercules ????, every
+   # command except the first command can be entered with the screen detached
+   # but the first command entered must be to an attached session [doesn't have
+   # to be entered on the attached session, session just has to be attached] so
+   # we cannot use screen to run the hercules program. So we have to run it
+   # in daemon mode instead and rely on the hercules.rc to ipl for us.
+
+   # And enter the IPL options (just the enter key normally)
+   # You can uncomment the R00,CLPA here if you want
+   echo 'string("R 00,CLPA")' | nc ${localhost} 3271
+   sleep 1
+   echo "enter()" | nc ${localhost} 3271
+   # wait for quite a while, for everything to start
+   # NOTE: sleep 20 works fine on my public webserver, but on my dev server
+   #       that is also my network backup server, that runs at 100%
+   #       when network backups are being run; I need 150 for that
+   #       one server.
+   testserver=`hostname`
+   if [ "${hostname}." = "falcon." ];
+   then
+      sleep 150
+   else
+      sleep 20
+   fi
+   # then change both 3270 consoles to RD mode
+   # keep the K A on a seperate line, its invalid on the K S line
+   echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${localhost} 3272
+   echo "enter()" | nc ${localhost} 3272
+   sleep 1
+   echo 'string("K A,NONE")' | nc ${localhost} 3271
+   sleep 1
+   echo "enter()" | nc ${localhost} 3271
+   sleep 1
+   echo 'string("K A,NONE")' | nc ${localhost} 3272
+   sleep 1
+   echo "enter()" | nc ${localhost} 3272
+   # log file to be available for screen scrapes
+   chmod 644 log/hardcopy.log
+   # If this is my system,
+   if [ "${MARKS_SYSTEM}." = "YES." ];
+   then
+      sleep 90     # give time for me to logon and override if needed
+                   # need at least sleep 10 for the wtor to be issued
+      echo 'string("R 00,REBOOT BY HOST AUTOMATION")' | nc ${localhost} 3271
+      echo "enter()" | nc ${localhost} 3271
+   fi
+} # start_system
+
+# ----------------------------------------------------------
+# stop_system:
+# shutdown the running hercules system
+#
+# IMPORTANT: most likely in a normal unix 'shutdown' this
+#            shutdown proc would be killed and the system
+#            complete it's shutdown long before this script
+#            has a chance to complete running.
+#            So the shutdown routine is included for 
+#            completeness (and soon to be playing with the
+#            script expect) rather than as a server shutdown
+#            routine. It should still work with a normal
+#            'service stop mvs38j' or /etc/init.d/mvs38j stop
+#            as you prefer.
+#
+# T O D O  : instead of lots of netcat (nc) commands try and
+#            build a single script that can manage it's 
+#            flow control with 'expect' statements to watch
+#            for messages saying things have terminated.
+#
+#  (a) issue the BSPPILOT shutnow command to get everything
+#      but JES2 down, and wait a while
+#      TODO, replace wait a while with a script expect statement
+#  (b) shutdown JES2
+#  (c) Z EOD
+#  (d) QUIESCE
+#  (e) stop hercules
+#  --- stopping hercules will cause the telnet and c3270
+#      sessions to stop (and exit their screen sessions)
+#      so we don't need to (can't be bothered) trying to
+#      figure out how to send ^] and quit commands to them
+#
+# ----------------------------------------------------------
+stop_system() {
+   # Do not try to stop anything if it looks like it is not
+   # running anyway.
+   testvar=`is_running`
+   if [ "${testvar}." != "yes." ];
+   then
+      echo "*Error* hercules appears to NOT be running."
+      exit 1
+   fi
+
+   # Shutdown the system using the master console script port
+   echo 'string("F BSPPILOT,SHUTNOW")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   # T O D O - put an expect() into the script so we know
+   #           when we can carry on, until then delay lots
+   #           actually no, we will want to kill it if it hangs anyway
+   sleep 120
+
+   # We assume everything has stopped by now
+   # So stop JES2
+   echo 'string("$PI")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   sleep 1
+   echo 'string("$P")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   sleep 1
+   echo 'string("$PJES2")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   sleep 120
+
+   # We assume JES2 has stopped now
+   echo 'string("Z EOD")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   sleep 2
+   echo 'string("QUIESCE")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
+   sleep 2
+
+   # Stop hercules itself now
+   screen -S hercules -X stuff $'stopall \n'  # $ and quotes so \n is escaped
+   screen -S hercules -X stuff $'quit \n'     # $ and quotes so \n is escaped
+   # If it didn't stop (see known issues) frin the pid and kill it
+   pid=`ps -ef | grep "hercules" | grep "${RUNUSER}" | grep -v grep | awk {'print $2'}`
+   if [ "${pid}." != "." ];
+   then
+      kill ${pid}
+   fi
+   # NOTE: when hercules stops all the other screen sessions (telnet/c3270)
+   #       stop also when the tcpip port closes, so we have also cleaned
+   #       up all the screen sessions we had going without any effort.
+} # stop_system
+
+# ----------------------------------------------------------
+# status_system: 
+# What is the current state looking like.
+# ----------------------------------------------------------
+status_system() {
+   testvar=`is_running`
+   if [ "${testvar}." = "yes." ];
+   then
+      echo "System appears to be running."
+      echo ""
+      echo "Listening ports..."
+      netstat -an | grep 3270 | grep LISTEN | grep -v grep
+      netstat -an | grep 3271 | grep LISTEN | grep -v grep
+      netstat -an | grep 3272 | grep LISTEN | grep -v grep
+      echo ""
+      echo "Screen sessions"
+      screen -list
+   else
+      echo "System appears to NOT be running."
+      # In case something crashed, show what screen sessions
+      # there are anyway.
+      echo "Screen sessions"
+      screen -list
+   fi
+} # status_system
+
+# ----------------------------------------------------------
+# Now the easy bit, what are we doing and do it.
+# ----------------------------------------------------------
+case "$1" in
+   "start")  start_system
+             ;;
+   "stop")   stop_system
+             ;;
+   "status") status_system
+             ;;
+   *)        echo "Syntax: $0 start|stop|status"
+             echo "$0 $1 $2 : invalid"
+             exit 1
+             ;;
+esac
+exit 0
+# ==========================================================
+# KNOWN ISSUES SECTION:
+#
+# Issues worked around in a satisfactory way
+# ------------------------------------------
+# (1) c3270 running under screen - no way to provide the ENTER AID key
+#     while the screen -X command can place commands into the command
+#     line of teh c3270 session I could find no way of triggering the
+#     ENTER key AID code to process the command. Newline (\n) just
+#     tabbed between the two command linput lines, \0x07d, \0x013,
+#     \0x027 all did nothing either.
+#     WORKAROUND: the c3270 sessions are still started under screen
+#                 but each 3270 session uses the -scriptport option
+#                 so commands can be issues to the c3270 sessions
+#                 via the tcpip script port associated with each
+#                 c3270 instance; and x3270-script allows the Enter :-)
+#
+# (2) The hercules program 'blocks' IO on the first console command
+#     to be entered. Basically the symptoms are
+#     - attach to the session so it is interactive, enter any command
+#       detach from the session again
+#       the screen -X command can now pass commands to hercules
+#     - BUT unless a command has been entered interactively to
+#       hercules the screen -X commands to hercules are all discarded
+#     ISSUE: not possible to issue commands to hercules at startup 
+#            unless there is interactive involvement, which we don't
+#            want in a headless server startup script.
+#     WORKAROUND: use a hercules.rc file to issue the initial IPL
+#                 command to get the system up and running.
+#                 On shutdown if no commands have been manually entered
+#                 it may hang again, after the screen -X commands check
+#                 if hercules is still running and kill it if so (as
+#                 jes2 has stopped and zeod and quiesce done by then
+#                 should be no issues with a kill).
+#                 A simple screen -r hercules and a detach again seems
+#                 to fix the issue, but of course thats no use in a
+#                 startup script.
+#     Notes: running hercules in daemon mode was what I used to do
+#            as a workaround, but getting it back under screen is 
+#            handier.
+#
+# Issues remaining
+# ---------------------------------------------
+# (A) Timing issues at startup.
+# I have tweaked the 'sleep' periods so it works
+# most of the time on my system (and have automation 
+# to detect and restart if it does).
+# Issues seen during startup sometimes
+#     console: DBG028: select: Bad file descriptor
+#          normally seen when hercules is not started on a terminal,
+#          but I worked around that issue, this seems to be hercules
+#          losing track of what connects
+#          resolved: adding a sleep 1 between each connect to port
+#                    3270 'seems' to have resolved this
+#     console: DBG023: recv: Socket operation on non-socket
+#          possibly related to the above ???. unlikely due to resolution
+#          resolved: changed sleep frop 40sec to 60sec before issuing
+#                    the response to the enter ipl parameters prompt.
+# Notes: both these errors are reported on the hercules forums and
+#        they are all timing related. Increase the delay times between
+#        steps if you encounter these.
+#
+# (B) Shutdown procedure
+# Not actually an issue as such, if the shutdown is run manually its fine.
+# The issue is at server shutdown, of course the script is started, but a
+# Fedora server will have completed its shutdown and powered off the 
+# server long before the script finishes running.
+# Nothing to be done about that.
+#
+# (C) Fedora Core 18... so many problems
+# The fixed one is 'nc' to localhost failed, so I created a variable
+# 'localhost' to replace all references to localhost. On F18 systems
+# this needs to be set to "127.0.0.1" (which works) instead of
+# "localhost" which stopped working in F18.
+# -- The unfixed issue --
+# Changes in either netcat (nc) or c3270 prevent the CLPA command
+# from working (the origional "string (R00,CLPA)" had the comma
+# stripped out when it hit the c3270 session, changing to 
+# 'string("R00,CLPA")' shows the correct format in the c3270 
+# session but still is treated as an invalid response.
+# So I sleep 1 and submit another enter to allow the IPL to
+# continue without a CLPA (if the clpa was accepted the extra
+# enter causes no issues).
+# This error is F18 specific, the script runs OK on F13,14,15,16,17
+# SO IF YOU NEED TO CLPA YOU MUST START HERCULES MANUALLY TO DO SO
+# INSTEAD OF USING THIS SCRIPT... FOR FEDORA 18 ONLY.
+# My webserver is still F17 where this script works perfectly. My
+# dev server was F18, now F19 and I havn't yet retested on F19.
+# ==========================================================

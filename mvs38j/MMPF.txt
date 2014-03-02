@@ -1,0 +1,3594 @@
+//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=A,        
+//   MSGLEVEL=(1,1)
+//*
+//*   My MPF / Marks MPF / MVS 3.8J console automation 
+//*      without IEECVXIT (almost, see notes below)
+//*
+//*   This job will create source and loadlib files, load all
+//*   the required files into the source library, and will also
+//*   submit jobs to assemble the programs into the loadlib.
+//*   It will not touch your existing datasets, there is a seperate
+//*   $install member in the source file that must be used to copy
+//*   the assembled modules into place after you have reviewed
+//*   what you are about to install.
+//*
+//*   1. CHANGE THE UNIT AND VOLSER HIGHLIGHTED BY THE
+//*      'CHANGE THIS' FLAG IN THE FIRST STEP OF THE JOB.
+//*   2. GLOBALLY CHANGE INSTALL.MID.MMPF TO WHATEVER YOUR SITE WILL
+//*      BE USING (CREATES A SRC AND LOADLIB WITH THAT PREFIX)
+//*      U S E   A   G L O B A L   C H A N G E
+//*      AS THAT WILL ALSO CORRECTLY UPDATE ALL THE JOBS THAT
+//*      WILL USE THOSE DATASETS AND SAVE YOU A LOT OF TIME LATER
+//*   3. OPTION A
+//*         GLOBALLY CHANGE SYS9.LINKLIB.APFAUTH TO ONE OF YOUR
+//*         APF AUTHORISED LIBRARIES
+//*         GLOBALLY CHANGE SYS9.LINKLIB TO ONE OF YOUR
+//*         NON-APF-AUTHORISED LIBRARIES
+//*      OPTION B - THE FILENAMES ONLY EXIST IN THE INSTALL MEMBER
+//*         JUST EDIT THE INSTALL MEMBER AFTER YOU HAVE RUN THIS
+//*         JOB TO UPDATE FILENAMES.
+//*   4. TURNKEY3 USERS
+//*      -- IN 2, YOU WILL HAVE PROBABLY USED HERC01 AND 
+//*         CHANGED THE UNIT/VOL IN THE CREATE STEP TO
+//*         UNIT=3350 VOL=PUB000; THAT SHOULD WORK
+//*      -- B U T  SEARCH ON 'TK3 CHANGE' FOR FURTHER
+//*         CUSTOMISATIONS SPECIFIC TO TK3 USERS, WHICH
+//*         WILL BE
+//*           - CHECK OSISTK3 TOGGLE VALUE IS SET TO 1.
+//*             TK3 SYSTEMS HAVE DIFFERENT CONSOLE LINE OFFSETS
+//*             TO MY SYSTEM (DEFAULT AS SHIPPED IS NOW THAT FLAG
+//*             IS SET FOR A TK3 SYSTEM; BUT CHECK)
+//*           - CHANGE THE LINKLIB USED, SAMPLE IF YOU SEARCH
+//*             IS SYS2.LINKLIB; WHICH NEEDS TO BE CLPA'D IN AT EVERY
+//*             CHANGE WHICH IS A PAIN.. IF YOU HAVE CREATED YOUR OWN
+//*             APF AUTHORISED LIBRARY CHANGE IT TO THAT.
+//*   6. THEN RUN THIS JOB
+//*
+//*   X. NON TK3 USERS, YOUR SYSTEM IS PROBABLY CUSTOMISED LIKE
+//*      MINE, SOME PATCHES PUT STC/JOB NUMBERS IN FRONT OF CONSOLE
+//*      MESSAGES, SOME PUT TIMESTAMPS, I CAN'T ALLOW FOR THEM ALL;
+//*      BUT IF YOU RUN THE PROC AS S MMPF,MODE=DEBUG IT WILL LOG
+//*      THE CONSOLE MESSAGES IT IS CHECKING TO SYYSPRINT SO YOU CAN
+//*      DETERMINE WHAT YOU NEED TO CHANGE THE MESSAGE OFFSET IN THE
+//*      PROGRAM TO.
+//*
+//* 
+//*  NOTES:
+//*
+//*     As this is a console screen scraper implementation it
+//*     cannot get in to change routing codes or suppress messages
+//*     from display, you still need ieecvxit for that. This can
+//*     only work on messages after they are displayed.
+//*
+//*     So why use it instead of ieecvxit then ?
+//*       - you can issue 'S xxx' commands without needing to 
+//*         schedule SRB's from ieecvxit
+//*       - rules can include &WORD1-&WORD20, &MSG; you do not
+//*         have to code assembler to parse the messages, just
+//*         use in your rules the field positions you want from
+//*         the message rather than having to write the parse 
+//*         routines yourself
+//*       - can't suppress messages, but can DOM messages 
+//*         (which are DOM'ed across all consoles).
+//*       - it's a STC so it can use files, so you can change
+//*         message rules on the fly as needed without a CLPA.
+//*       - the only minus, I only support action/attention 
+//*         messages for automation.
+//*       - and making a coding error using complicated msg   
+//*         parsing and oopsies on getmain/freemain in 
+//*         ieecvxit just fill up dump datasets.
+//*
+//*
+//* CREDITS ---
+//*    The console scraping is based upon the SPY code from
+//*    Greg Price on the 'http://www.prycroft6.com.au/' .
+//*    I just found it more usefull to use sceen scraping
+//*    for STC/batch use than interactive use under hercules.
+//*
+//* Updates to MMPF V2 Base
+//*   2009/04/25 - added the MMPFEX utility, as I needed it
+//*                so it may be usefull to others.
+//*                Also removed the test step from the main 
+//*                mmpf assembly job, was just annoying.
+//*   2009/10/13 - Joined the TK3 mail list, so I started using
+//*                the TK3 system, bother BSPPILOT WTORs are
+//*                prefixed @ instead of *. Allowed for that.
+//*                Note: found later * or @ depends on whether
+//*                an authorised or non-authorised program
+//*                issues the message, so fix was needed
+//*
+//*                No longer on tk3 mail list as I deleted the 
+//*                yahoo mailid I had and created another and a
+//*                request to rejoin with the new mailid just
+//*                went into a black hole, guess it is no longer
+//*                active
+//*   2010/11/14 - TK3 leaves that */@ in front of messages
+//*                when they are DOMed, so use the */@ at
+//*                byte 4 (now identical to my system), some
+//*                PTF in TK3 must have changed this behaviour
+//*                as it beaved differently on my non-TK3 system
+//*   2012/07/11 - repackaged to create loadlib and doc files,
+//*                added new ,, bug to bug documentation
+//*   2013/01/20 - fixed all important bugs in message parsing and
+//*                updated the dsect used.
+//*
+//CREATE   EXEC PGM=IEFBR14
+//SYSPRINT DD   SYSOUT=*
+//* DD1 - WILL CONTAIN ALL THE SOURCE AND JCL
+//DD1      DD   DSN=INSTALL.MID.MMPF.SRC,
+//   UNIT=3350,VOL=SER=SRCMD1,             <===== CHANGE THIS
+//   DCB=(DSORG=PO,LRECL=80,BLKSIZE=9600,RECFM=FB),
+//   SPACE=(TRK,(5,5,5)),
+//   DISP=(NEW,CATLG,DELETE)
+//* DD2 - WILL CONTAIN THE ASSEMBLED MODULES
+//DD2      DD   DSN=INSTALL.MID.MMPF.LOADLIB,
+//   UNIT=3350,VOL=SER=SRCMD1,             <===== CHANGE THIS
+//   DCB=SYS1.LINKLIB,
+//   SPACE=(TRK,(5,5,5)),
+//   DISP=(NEW,CATLG,DELETE)
+//DD3      DD   DSN=INSTALL.MID.MMPF.DOC,
+//   UNIT=3350,VOL=SER=SRCMD1,             <===== CHANGE THIS
+//   DCB=(DSORG=PO,LRECL=80,BLKSIZE=9600,RECFM=FB),
+//   SPACE=(TRK,(5,5,5)),
+//   DISP=(NEW,CATLG,DELETE)
+//INSTALL  EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
+//SYSUT2   DD DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
+//SYSIN    DD DATA,DLM=ZZ
+./ ADD NAME=GWDSECT
+         MACRO
+&NAME    GWDSECT  &DSECT='YES'
+.* *******************************************************************
+.*                                                                   *
+.*    GWDSECT                                                        *
+.*                                                                   *
+.*    USED BY: ANYONE THAT USES THE GETWORDS PROGRAM                 *
+.*                                                                   *
+.*    THIS IS THE DSECT USED TO MAP OUT THE GETMAINED WORK AREA      *
+.*                                                                   *
+.*    THE CALLER OF GETWORDS IS EXPECTED TO USE THIS MACRO TO DEFINE *
+.*    THE DSECT THEY USE AND TO GETMAIN AN AREA OF GWAREAL TO BE     *
+.*    PASSED IN R4 TO GETWORDS.                                      *
+.*                                                                   *
+.* *******************************************************************
+         AIF   ('&DSECT' EQ 'YES').GWDYES
+GWAREA   EQU   *
+         AGO   .GWDSKIP
+.GWDYES  ANOP
+         DS    0F            ALIGN IT
+GWAREA   DSECT
+.GWDSKIP ANOP
+GWAREAS  EQU   *
+GWWRDMAX EQU   20            WE ONLY ALLOW UP TO 20 GWWORDS
+GWWRDCHL EQU   12            MAX LENGTH OF EACH WORD
+GWWRDCNT DS    F             THE NUMBER OF GWWORDS IN TOTAL
+GWRESLEN DS    F             LENGTH OF RESULT LINE
+GWMSGLIN DS    CL78          THE CONSOLE MESSAGE LINE
+GWMSKLIN DS    CL78          MASK TEMPLATE TO USE
+GWRESULT DS    CL78          POPULATED TEMPLATE
+GWLENTXT DS    CL3           RESULT LEN AS TEXT VALUE
+         DS    0F            MUST WORD ALIGN, EACH NEW
+*                             ENTRY MUST BE WORD ALIGNED SO
+*                             GWWRDCHL MUST BE MULTIPLE OF 4
+*GWWORDS  DS  CL16*GWWRDMAX 4 BYTES LEN + 12 BYTES DATA * 20 ENTRIES
+GWWORDS  DS    CL320
+GWRDSLEN EQU   *-GWWORDS       LEN OF GWWORDS TABLE
+GWAREAL  EQU   *-GWAREAS
+         MEND
+         MEND
+./ ADD NAME=GWDSECTI
+         MACRO
+&NAME    GWDSECTI
+.* *******************************************************************
+.*                                                                   *
+.*    GWDSECTI                                                       *
+.*                                                                   *
+.*    USED BY: ANYONE THAT USES THE GETWORDS PROGRAM                 *
+.*                                                                   *
+.*    CAN BE CALLED BY ANY PROGRAM THAT USES GWDSECT TO INITIALISE   *
+.*    ALL THE KEY FIELDS.                                            *
+.*    OPTIONAL: THE MACROS TO ADD INFO CLEAR SOME OF THE FIELD       *
+.*                                                                   *
+.* *******************************************************************
+         SR    R1,R1
+         ST    R1,GWWRDCNT
+         ST    R1,GWRESLEN
+         MVI   GWMSGLIN,C' '
+         MVC   GWMSGLIN+1(L'GWMSGLIN-1),GWMSGLIN
+         MVI   GWMSKLIN,C' '
+         MVC   GWMSKLIN+1(L'GWMSKLIN-1),GWMSKLIN
+         MVI   GWRESULT,C' '
+         MVC   GWRESULT+1(L'GWRESULT-1),GWRESULT
+         MVI   GWWORDS,C' '
+         MVC   GWWORDS+1(L'GWRDSLEN-1),GWWORDS
+         MEND
+./ ADD NAME=GWSTMSG
+         MACRO
+&NAME    GWSTMSG &MSG=,&LEN=78
+.* *******************************************************************
+.*                                                                   *
+.*    GWSTMSG                                                        *
+.*                                                                   *
+.*    USED BY: ANYONE THAT USES THE GETWORDS PROGRAM                 *
+.*                                                                   *
+.*    HELPER TO STORE THE MESSAGE LINE INTO THE DSECT AREA.          *
+.*                                                                   *
+.* *******************************************************************
+         AIF   ('&MSG' EQ '').GWMSGER
+         AIF   (&LEN GT 78).GWLENER
+         AGO   .GWSTORE
+.GWMSGER MNOTE 12,'***** MSG MUST BE SET TO THE MESSAGE SOURCE *****'
+         MEXIT
+.GWLENER MNOTE 12,'***** LEN CANNOT BE GREATED THAN 78 BYTES *****'
+         MEXIT
+.GWSTORE ANOP
+.*       SPACE OUT THE LINE BEFORE ADDING THE MESSAGE IF IT
+.*       IS NOT THE FULL 78 BYTES IN LENGTH
+         MVI   GWMSGLIN,C' '
+         MVC   GWMSGLIN+1(L'GWMSGLIN-1),GWMSGLIN
+         MVC   GWMSGLIN(&LEN),&MSG
+         MEND
+./ ADD NAME=GWSTMASK
+         MACRO
+&NAME    GWSTMASK &MASK=,&LEN=78
+.* *******************************************************************
+.*                                                                   *
+.*    GWSTMASK                                                       *
+.*                                                                   *
+.*    USED BY: ANYONE THAT USES THE GETWORDS PROGRAM                 *
+.*                                                                   *
+.*    HELPER TO STORE THE TEMPLATE MASK STRING INTO THE DSECT AREA.  *
+.*                                                                   *
+.* *******************************************************************
+         AIF   ('&MASK' EQ '').GWMSKER
+         AIF   (&LEN GT 78).GWMSKLE
+         AGO   .GWMSTOR
+.GWMSKER MNOTE 12,'***** MASK MUST BE SET TO TEMPLATE STRING *****'
+         MEXIT
+.GWMSKLE MNOTE 12,'***** LEN CANNOT BE GREATED THAN 78 BYTES *****'
+         MEXIT
+.GWMSTOR ANOP
+.*       SPACE OUT THE LINE BEFORE ADDING THE MESSAGE IF IT
+.*       IS NOT THE FULL 78 BYTES IN LENGTH
+         MVI   GWMSKLIN,C' '
+         MVC   GWMSKLIN+1(L'GWMSKLIN-1),GWMSKLIN
+         MVC   GWMSKLIN(&LEN),&MASK
+         MEND
+./ ADD NAME=GWGETTXT
+         MACRO
+&NAME    GWGETTXT &DEST=
+.* *******************************************************************
+.*                                                                   *
+.*    GWGETTXT                                                       *
+.*                                                                   *
+.*    USED BY: ANYONE THAT USES THE GETWORDS PROGRAM                 *
+.*                                                                   *
+.*    HELPER TO RETRIEVE THE RESULT TEXT BUILD FROM THE MESSAGE AND  *
+.*    TEMPLATE INTO A USER STORAGE AREA.                             *
+.*                                                                   *
+.*    UP TO THE USER TO ENSURE DEST DATA AREA IS AT LEAST 78 BYTES   *
+.*    WE DON'T CHECK AS DEST MAY BE PASSED IN THE N(0,RN) FORMAT     *
+.*                                                                   *
+.* *******************************************************************
+         AIF   ('&DEST' NE '').GWGTOK
+         MNOTE 12,'***** DEST MUST BE SET TO A USER DATA AREA *****'
+         MEXIT
+.GWGTOK  ANOP
+         B    GWJM&SYSNDX
+* EX COMMAND AND REGISTER SAVE AREA FOR THIS MOVE
+GWEX&SYSNDX   MVC   &DEST,GWRESULT
+GWRG&SYSNDX   DS    F
+GWJM&SYSNDX   ST   R1,GWRG&SYSNDX     SAVE REG1
+         L    R1,GWRESLEN
+         EX   R1,GWEX&SYSNDX
+         L    R1,GWRG&SYSNDX     RESTORE REG1
+         MEND
+./ ADD NAME=GWEXEC
+         MACRO
+&NAME    GWEXEC &SA=SAVEAREA,&REG=R4
+.* *******************************************************************
+.*                                                                   *
+.*    GWEXEC                                                         *
+.*                                                                   *
+.*    USED BY: ANYONE THAT USES THE GETWORDS PROGRAM                 *
+.*                                                                   *
+.*    HELPER TO SETUP THE PARM LIST NEEDED AND EXECUTE THE PGM.      *
+.*                                                                   *
+.*    IT IS EXCPECTED THE REQUIRED DSECT HAS BEEN CREATED &          *
+.*    INITIALISED BEFORE THIS IS CALLED                              *
+.*                                                                   *
+.*    SA   - THE NAME OF THE CALLING PROGRAMS 18 FULLWORD SAVEAREA   *
+.*    REG  - THE NAME OF THE REGISTER ADDRESSING THE GWDSECT DATAAREA*
+.*                                                                   *
+.*    NOTES:                                                         *
+.*      IF YOU CALL THIS A LOT PUT IN IN A SUBROUTINE TO STOP LOTS   *
+.*      OF VARIABLES BEING CREATED.                                  *
+.*                                                                   *
+.* *******************************************************************
+         ST    &REG,GWX1&SYSNDX SAVE PARM ADDR SO WE CAN BYTE MOVE IT
+.* CANT USE GWX3&SYSNDX(4) SO ALLOW TO DEFAULT TO 4 (TGT FIELD LEN)
+         MVC   GWX3&SYSNDX,GWX1&SYSNDX
+         ST    R1,GWX1&SYSNDX   R1 ALTERED IN LINK, SAVE IT
+         L     R1,&SA+4         SAVE R13 PTR TO ORIGIONAL CALLERS SA
+         ST    R1,GWX5&SYSNDX     AS WE ARE MODIFYING THE SAVE ARAE
+.* MID:
+.* THIS SHOULD BE +8 TO WORK I THINK ?, BUT IT MUST BE +4 HERE
+.* OR THERE ARE SOC4'S ALL OVER THE PLACE. NEED TO POKE FURTHER.
+         ST    R13,&SA+4
+         LA    R13,&SA
+         LINK EP=GETWORDS,ERRET=GWX6&SYSNDX,PARAM=(GWX2&SYSNDX),VL=1
+         L     R13,&SA+4
+         L     R1,GWX5&SYSNDX   RESTORE ORIGIONAL R13 PTR TO CALLERS
+         ST    R1,&SA+4           SAVE AREA NOW
+         L     R1,GWX1&SYSNDX   RESTORE R1 TO WHAT IS WAS
+         B     GWX7&SYSNDX      SKIP DATA AREA
+GWX1&SYSNDX DS   F              TEMP REGSAVE FOR PARM MOVE AND R1
+GWX2&SYSNDX DC   Y(GWX4&SYSNDX) NUMBER OF BYTES IN REMAINDER OF LIST
+GWX3&SYSNDX DS   CL4            FOUR BYTES, FULLWORD
+GWX4&SYSNDX EQU  *-GWX2&SYSNDX  LEN OF PARM FOR GWX2&SYSNDX
+GWX5&SYSNDX DS   F              SAVE CALLERS R13 FROM SAVEAREA
+GWX6&SYSNDX WTO  'LINK ERROR, PROGRAM GETWORDS NOT FOUND'
+GWX7&SYSNDX CNOP 0,4
+         MEND
+./ ADD NAME=GETWORDS
+//MARKA    JOB (0),'ASSEMBLE GETWORDS',CLASS=A,MSGCLASS=A,
+//   MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+         PRINT NOGEN
+* ********************************************************************
+*                                                                    *
+*   NAME : GETWORDS                                                  *
+*                                                                    *
+*   USED BY: MMPF FOR MESSAGE PARSING INTO COMMANDS, WILL            *
+*            CERTAINLY BE HEAVILY USED BY OTHER PROGRAMS LATER       *
+*                                                                    *
+*   FUNCTION :                                                       *
+*                                                                    *
+*   PARSE A 78 BYTE STRING PASSED IN GWMSGLIN TO PULL OUT THE FIRST  *
+*   20 WORDS, USE THESE WORDS WITH THE MASK TEMPLATE STRING PASSED   *
+*   IN GWMSKLIN TO BUILD A CUSTOMISED NEW 78 BYTE STRING IN GWRESULT.*
+*   THE LENGTH OF THE STRING CREATED IN GWRESULT IS RECORDED IN      *
+*   GWRESLEN FOR THE CALLER.                                         *
+*                                                                    *
+*   -ALL VARIABLKES DEFINED IN DSECT CREATED BY GWDSECT              *
+*   -CALLER TO THIS PROGRAM IS EXPECTED TO HAVE GETMAINED AN AREA OF *
+*    GWAREAL SIZE AND POPULATED THE TWO INPUT FIELDS BEFORE CALLING  *
+*    THIS PROGRAM WITH THE CALLERS GETMAINED DSECT ADDRESSED BY R4.  *
+*                                                                    *
+*   TEMPLATE MASKED PASSED CAN CONTAIN THE KEYWORDS &WORD1 TO        *
+*   &WORD20 TO HAVE WORDS INSERTED, OR KEYWORD &MSG TO HAVE THE      *
+*   FIRST 45 BYTES OF THE MESSAGE INSERTED.                          *
+*                                                                    *
+*                                                                    *
+*  EXAMPLE:                                                          *
+*    GWMSGLIN  CL78'IEEA12A THIS IS A TEST MESSAGE DATA = 1'         *
+*    GWMSKLIN  CL78'I WANT &&WORD1, &&WORD5, &&WORD6 AND &&WORD3'    *
+*  PRODUCES IN GWRESULT                                              *
+*    I WANT IEEA12A, TEST MESSAGE AND IS                             *
+*    GWRESLEN WILL BE 35, THE LENGTH OF THE RESULT                   *
+*                                                                    *
+*  KNOWN BUGS:                                                       *
+*    -EMPTY (,,) FIELD TEST RETURNS , AS A VALUE FOR THE WORD. I CAN *
+*     LIVE WITH THAT AS THAT FIX HAS STOPPED THE FIELD BEING         *
+*     TOTALLY IGNORED                                                *
+*                                                                    *
+*  NOTES:                                                            *
+*     NOT RE-ENTRANT DUE TO REQUIREMENT OF A TEMPORARY VARIABLE TO   *
+*     EXTRACT THE REGISTER VALUE FROM THE PARM LIST. I DON'T WANT    *
+*     TO GETMAIN FOUR BYTES.                                         *
+*     DELIBERATE DECISION TO MAKE THE CALLER GETMAIN/ALLOCATE THE    *
+*     DSECT AREA TO BE USED, THIS PROGRAM COULD BE CALLED MULTIPLE   *
+*     TIMES FROM A PROGRAM SO RATHER THAN HAVE THIS GETMAIN/FREEMAIN *
+*     EACH INVOKATION THERE IS MUCH LESS OVERHEAD IN HAVING THE      *
+*     CALLER DO IT ONCE AND KEEP RE-USING IT UNTIL CALLER EXIST.     *
+*                                                                    *
+*                                                                    *
+* ********************************************************************
+         SPACE 2
+         PRINT GEN
+* -------------------------------------------------------------------
+* ASSEMBLE TIME OPTIONS TO CONTROL DEBUGGING LEVEL
+* -------------------------------------------------------------------
+         LCLB  &USERDBG
+&USERDBG SETB  0       1 IS DEBUG (STATUS WTOS), 0 IS NO DEBUG
+         EJECT
+* ********************************************************************
+*                                                                    *
+*  GETWORDS: MAIN CODE STARTS                                        *
+*                                                                    *
+* ********************************************************************
+GETWORDS CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 5
+* -------------------------------------------------------------------
+*
+* REGISTER 4 IS EXPECTED TO HAVE THE GETMAINED DSECT ADDRESS
+* SETUP ADDRESSING BEFORE DOING ANYTHING !!!.
+*
+* ADDRESS IS PASSED IN THE PARM(1), NEED TO COPY TO A TEMPVAR THAT
+* IS FULLWORD ALIGHNED BEFORE WE CAN LOAD IT INTO A REGISTER.
+*
+* -------------------------------------------------------------------
+         LTR   R1,R1          R1 IS ADDRESS OF FULLWORD PARM LIST
+         BZ    NOPARM
+         L     R2,0(,R1)      ADDR OF FIRST PARM IN LIST
+         MVC   TEMPV(4),2(R2) VALUE IN THAT ADDRESS IS THE REG TO USE
+*                             PLUS 2, SKIP THE LEN HALFWORD
+         L     R4,TEMPV       AND LOAD INTO R4
+         USING GWAREA,R4      NOW WE CAN ADDRESS THE DSECT PASSED.
+*
+* -------------------------------------------------------------------
+* IF DEBUGGING IS ON SHOW THE START OF THE TEMPLATE WE GOT, ALSO THE
+* MESSAGE WE GOT. NEED TO ENSURE THE DATA PASSED IS ACCURATE.
+* -------------------------------------------------------------------
+         AIF    (&USERDBG EQ 0).SKIPINI
+         MVC    DEBUGIN1+8(78),GWMSKLIN
+         MVC    DEBUGIN2+8(78),GWMSGLIN
+DEBUGIN1 WTO   '#....+....1....+....2....+....3....+....4....+....5....X
+               +....6....+....7....+...#'
+DEBUGIN2 WTO   '#....+....1....+....2....+....3....+....4....+....5....X
+               +....6....+....7....+...#'
+.SKIPINI ANOP
+*
+* -------------------------------------------------------------------
+* POPULATE THE WORD TABLE FIRST
+*    R1 ADDR TO START OF WORD
+*    R2 ADDR TO END OF WORD
+*    R3 LEN OF WORD/WORD COUNT/WORK
+*    R5 WORD TABLE ENTRY ADDRESSING
+*    R6 MAX LINE LEN END
+* -------------------------------------------------------------------
+         SR     R3,R3              SET WORD COUNT TO ZERO FIRST
+         ST     R3,GWWRDCNT
+         MVI   GWWORDS,C' '        AND CLEAR ANY OLD INFO FROM WKAREA
+         MVC   GWWORDS+1(L'GWRDSLEN-1),GWWORDS
+         LA     R5,GWWORDS         R5 TO START OF WORD TABLE
+         LA     R1,GWMSGLIN        R6 TO BE END OF INPUT LINE ADDR
+         LR     R6,R1                   START OF LINE
+         LA     R3,L'GWMSGLIN           AND GET LINE LEN
+         AR     R6,R3                   AND ADD, WE HAVE EOL ADDR
+*****    A      R6,=F'(L'GWMSGLIN)'
+*
+* SKIP OVER ALL SEPERATOR FIELDS, WE ONLY WANT TO STORE WORDS
+*
+PWT01    CLI    0(R1),C' '        SKIP OVER ALL SEPERATORS
+         BC     EQ,PWT01B            UNTIL WE FIND A WORD TO PROCESS
+         CLI    0(R1),C','
+         BC     EQ,PWT02A
+         CLI    0(R1),C';'
+         BC     EQ,PWT01B
+         CLI    0(R1),C'-'
+         BC     EQ,PWT01B
+         CLI    0(R1),C'='
+         BC     EQ,PWT01B
+         B      PWT02             A NON FIELD SEPERATOR, A WORD
+PWT01B   A      R1,FONE
+         CR     R1,R6             AT LINE END ?
+         BNL    PWT06             YUP, NO MORE GWWORDS
+         B      PWT01             NO, KEEP CHECKING SKIP SEPERATORS
+*
+* SPECIAL HANDLING FOR A COMMA AS WE MUST HANDLE ,, AS
+* A BLANK FIELD NOT JUST KEEP LOOKING FOR NON-COMMA DATA
+* AS WOULD BE DONE IN THE LOOP ABOVE WHICH WOULD OTHERWISE
+* SKIP OVER/IGNORE ,, AS A FIELD
+PWT02A   CLI    1(R1),C','
+         BC     NE,PWT01B         NEXT BYTE NOT , SO BACK TO NORMAL
+         LR     R2,R1
+         A      R2,FONE           AND+1 BYTE FOR NEXT SCAN
+         B      PWT03             IN THSI SCAN STEP
+*
+* WE ARE AT THE START OF A WORD (R1), FIND THE END OF THE WORD AND
+* DROP INTO R2 SO WE CAN WORK OUT THE LENGTH.
+*
+PWT02    LR     R2,R1             R2 TO LOCATE END OF WORD
+PWT03    CLI    0(R2),C' '        FIND THE NEXT SEPERATOR, END OF WORD
+         BC     EQ,PWT04
+         CLI    0(R2),C','
+         BC     EQ,PWT04
+         CLI    0(R2),C';'
+         BC     EQ,PWT04
+         CLI    0(R2),C'-'
+         BC     EQ,PWT04
+         CLI    0(R2),C'='
+         BC     EQ,PWT04
+         A      R2,FONE
+         CR     R2,R6             AT LINE END ?
+         BNL    PWT04             YUP, SAVE LAST WORD
+         B      PWT03             NOPE, SCAN ON...
+PWT04    LR     R3,R2             GET LEN OF WORD FOUND
+         SR     R3,R1
+* IF THE WORD IS TOO BIG FOR THE TABLE ENTRY WE NEED TO TRUNCATE IT
+         LA     R10,GWWRDCHL      MAX WORD LEN ALOWED
+         CR     R3,R10            DOES THE WORD FOUND FIT ?
+         BNH    PWT05                YES, USE THAT LEN
+         LA     R3,GWWRDCHL          NO, USE THE MAX LEN ALLOWED
+PWT05    EX     R3,EXSAVWRD       NEEDS TO BE DONE BY EX TO GET R3 USED
+         ST     R3,0(R5)          SAVE LEN IN 1ST 4 BYTES
+         AIF   (&USERDBG EQ 0).SKIPDB2
+         MVC    DEBUG2+15(12),4(R5)
+         ST     R1,DEBUGSAV
+DEBUG2   WTO    'STORED xxxxxxxxxxxx    '
+         L      R1,DEBUGSAV
+.SKIPDB2 ANOP
+* MOVE R5 TO THE NEXT TABLE ENTRY POSITION READY TO STORE ANOTHER
+         LA     R10,GWWRDCHL      WORD LENGTH
+         A      R10,FFOUR         PLUS LENGTH AREA
+         AR     R5,R10            IS OFFSET TO NEXT ENTRY
+         L      R3,GWWRDCNT       INC WORD CNT
+         A      R3,FONE
+         ST     R3,GWWRDCNT
+         LR     R1,R2             R1 TO DELIM FOUND FOR NEXT SCAN
+         CR     R1,R6             AT LINE END ?
+         BNL    PWT06             YUP, ALL DONE
+         LA     R10,GWWRDMAX      FILLED TABLE TO MAX WORDS ALLOWED ?
+         CR     R3,R10
+         BL     PWT01             NO, FIND ANOTHER WORD
+PWT06    EQU    *
+         AIF   (&USERDBG EQ 0).SKIPDB1
+         L      R3,GWWRDCNT        DEBUGGING
+         CVD    R3,DECIMAL
+         UNPK   DECIMAL(3),DECIMAL+6(2)
+         OI     DECIMAL+2,C'0'
+         MVC    DEBUG1+25(3),DECIMAL
+         ST     R1,DEBUGSAV
+DEBUG1   WTO    'TABLE POPULATED, nnn ENTRIES'
+         L      R1,DEBUGSAV
+.SKIPDB1 ANOP
+         EJECT
+* -------------------------------------------------------------------
+*
+* NOW WE NEED TO BUILD THE OUTPUT LINE BASED ON THE
+* TEMPLATE MASK PROVIDED.
+* KEY WORDS ALLOWED CAN BE &WORDN AND &MSG
+* TAKE CARE THAT THE OUTPUT LINE LEN IS NOT EXCEEDED
+*
+* R1 ADDR INTO MASK TEMPLATE STR
+* R2 -NOT USED ANYMORE
+* R3 LEN OF STR
+* R5 BYTES IN OUTPUT LINE
+* R7 ADDR INTO RESULT LINE
+* R8 MAX TEMPLATE END LEN
+* R9 WORD TABLE POINTER
+* R10 USED WHENEVER A EQU VALUE NEEDS TO BE LOADED TO A REGISTER
+*
+* -------------------------------------------------------------------
+         MVI    GWRESULT,C' '     IN CASE CALLER DIDN'T INITALISE
+         MVC    GWRESULT+1(L'GWRESULT-1),GWRESULT
+*
+         LA     R1,GWMSKLIN
+         LR     R8,R1
+         LA     R10,L'GWMSKLIN
+         AR     R8,R10
+******** A      R8,=F'(L'GWMSKLIN)'
+         LA     R7,GWRESULT
+         SR     R5,R5
+         SPACE  2
+* MOVE BYTES UNTIL WE FIND A KEYWORD TO PROCESS
+TPL01    CLI    0(R1),C'&&'       POSSIBLE KEYWORD
+         BE     TPL02             YES, GO CHECK
+         SPACE  2
+TPL01B   MVC    0(1,R7),0(R1)     MOVE THE BYTE JUST CHECKED
+         A      R1,FONE           UPDATE INPT PTR
+         A      R5,FONE           UPDATE LEN WRITTEN
+         A      R7,FONE           UPDATE OUTPUT PTR
+         CR     R1,R8
+         BC     LT,TPL01             NOT END OF INPUT YET
+         B      TPL98             IS END OF INPUT
+         SPACE  2
+* IF WE HAVE A &MSG PARM PROCESS IT
+TPL02    CLC    1(3,R1),=CL3'MSG'    IS IT &MSG ?
+         BNE    TPL04                NO, SEE IF A &WORDN NOW
+         LA     R3,L'GWRESULT        YES, PROCESS IT
+******** LR     R3,=F'(L'GWRESULT)'
+         SR     R3,R5             LINELEN - BYTES WRITTEN
+         C      R3,FFORTY5        DO WE HAVE 45 BYTES LEFT
+         BC     LT,TPL03            NO, JUST WRITE INTO WHATS LEFT
+         L      R3,FFORTY5          YES, MOVE 45 BYTES
+TPL03    EX     R3,EXMSGFLD       MOVE IN 1ST R3 BYTES OF MESSAGE
+*  ADJUST THE OUTPUT TRACKING INFO AND SKIP OVER KEYWORD
+         AR     R7,R3             ADJUST R7 OUTBUF PTR
+         AR     R5,R3             ADJUST LEN WRITTEN
+         A      R1,=F'4'          MOVE PAST THE &MSG TEXT
+         B      TPL08             ALL LINELEN SANITY CHECKING TO DO
+         SPACE  5
+* SEE IF IT IS A &WORD PARM TO BE FILLED IN
+TPL04    CLC    1(4,R1),=CL4'WORD'
+         BE     TPL04B              YES. GO PROCESS FIELD REQUEST
+*
+* WE DIDN'T MATCH ON &MSG OR &WORD, SOME OTHER &
+         B      TPL01B        NO, GO BACK MOVE THE BYTE AS NORMAL
+*                                 YES, WHAT NUMBER WORD
+TPL04B   A      R1,FFIVE          SKIP TO NUMBER PART OF KEYWORD
+         BAL    R10,NUMBRS        CONVERT TO NUMBER IN R3
+         AIF   (&USERDBG EQ 0).SKIPDB9
+         CVD    R3,DECIMAL
+         UNPK   DECIMAL(3),DECIMAL+6(2)
+         OI     DECIMAL+2,C'0'
+         MVC    DEBUG9+30(3),DECIMAL
+         ST     R1,DEBUGSAV
+DEBUG9   WTO    'WORD REQUEST FOR WORD NNN  '
+         L      R1,DEBUGSAV
+.SKIPDB9 ANOP
+*
+*
+         C      R3,=F'0'          IF ZERO AN ERROR
+         BC     EQ,TPL04E
+         L      R9,GWWRDCNT        DO WE HAVE THIS MANY GWWORDS ?
+         CR     R3,R9
+         BC     LE,TPL05             YES WE DO
+*                                 ELSE NO WE DON'T, ERROR IT
+TPL04E   MVC    0(3,R7),=CL3'***'
+         L      R3,=F'3'          WROTE 3 BYTES, SKIP DOWN
+         B      TPL06B
+         SPACE  2
+* MOVE THE REQESTED WORD INTO THE TEMPLATE
+TPL05    LA     R9,GWWORDS
+         S      R3,FONE           TABLE IS FROM 0, NOT 1
+         C      R3,=F'0'
+         BC     EQ,TPL06A         IF ZERO SKIP THE BCT BIT
+         LA     R10,GWWRDCHL  INCREMENT SIZE OF EACH TBL ITEM
+         A      R10,FFOUR     PLUS LENGTH FIELD IS PART OF ITEM
+TPL06    AR     R9,R10
+******** A      R9,=F'(GWRDSLEN)'
+         BCT    R3,TPL06
+TPL06A   L      R3,0(R9)          GET THE LEN
+         A      R9,=F'4'          SKIP LEN, POINT TO DATA
+         EX     R3,EXPRTFLD
+         AIF    (&USERDBG EQ 0).SKIPDBF
+         CVD    R3,DECIMAL
+         UNPK   DECIMAL(3),DECIMAL+6(2)
+         OI     DECIMAL+2,C'0'
+         MVC    DBGWTOF+18(3),DECIMAL
+         MVC    DBGWTOF+29(12),0(R9)
+         L      R10,=F'78'
+         SR     R10,R5
+         CVD    R10,DECIMAL
+         UNPK   DECIMAL(3),DECIMAL+6(2)
+         OI     DECIMAL+2,C'0'
+         MVC    DBGWTOF+52(3),DECIMAL
+         ST     R1,DEBUGSAV
+DBGWTOF  WTO    'FIELD LEN ..., VALUE ............, BUF LEFT ...'
+         L     R1,DEBUGSAV
+.SKIPDBF ANOP
+*  ADJUST THE OUTPUT TRACKING INFO AND SKIP OVER KEYWORD
+TPL06B   AR     R7,R3             ADJUST R7 OUTBUF PTR
+         AR     R5,R3             ADJUST LEN WRITTEN
+TPL07    A      R1,FONE           MOVE R2 PTR PAST NUMBERS IN KEYWORD
+         CLI    0(R1),C'0'
+         BC     LT,TPL08             DONE
+         CLI    0(R1),C'9'
+         BC     GT,TPL08             DONE
+         C      R1,R8          STOP RUNAWAY SCAN
+         BC     LT,TPL07         (REPLACES STRAIGHT B THAT LOOPED)
+TPL08    LA     R10,L'GWRESULT
+         CR     R5,R10               STILL LESS THAN LINELEN ?
+******** C      R5,=F'(L'GWRESULT)'
+         BC     GE,TPL98             AT END OF OUTPUT LINE, DONE
+         CR     R1,R8
+         BC     GE,TPL98             AT END OF INPUT LINE, DONE
+         SPACE  2
+*                                 NOT YET DONE, BACK TO CHAR CHECKING
+         B      TPL01
+         EJECT
+* -------------------------------------------------------------------
+* -------------------------------------------------------------------
+* ALL DONE
+TPL98    EQU   *
+* R5 HAS THE COMPUTED LINE LEN, DOUBLR CHECK ITS NOT > MAX ALLOWED
+         LA    R10,L'GWRESULT       ENSURE WE NEVER RETURN > LINE LEN
+         CR    R5,R10               R5 LEN STILL <= LINELEN ?
+         BC    LE,TPL98A            YES, STORE THAT R5 VALUE
+         LA    R5,L'GWRESULT        NO, STORE MAX VALUE
+         AIF   (&USERDBG EQ 0).SKIP99A
+         ST    R1,DEBUGSAV
+         WTO   'WARNING: ADJUSTED GETWORDS RESULT LEN DOWNWARD'
+         L     R1,DEBUGSAV
+.SKIP99A ANOP
+TPL98A   ST    R5,GWRESLEN      SAVE LENGTH OF LINE BUILT
+         SPACE 2
+* -------------------------------------------------------------------
+* AND A FINAL MODIFICATION, AS WE IMPLEMENTED THE MASK FAITHFULLY
+* WE ALSO HAVE ALL TRAILING SPACES THAT WERE PRESENT IN THE MASK.
+* LETS ADJUST THE LENGTH DOWNWARD FOR OUR RESULT LENGTH TO REMOVE
+* THE TRAILING SPACES FROM THE RESPONSE COUNT.
+* -------------------------------------------------------------------
+         LA    R3,GWRESULT             RESULT LINE
+         AR    R3,R5                   R5 IS OUTPUT DATA LEN, EOBUF
+*                                      R5 IS OUTPUT DATA LEN TO DECR
+TPL99    CLI   0(R3),C' '                IS SPACE ?
+         BNE   TPL99A                    NO, WE ARE DONE
+         BCTR  R3,0                      YES, PTR TO PREV BYTE
+         BCT   R5,TPL99                    AND CHECK AGAIN
+*                            IF R5 REACHED 0 THERE WAS NO DATA, THIS
+*                            MAY BE A VALID MASK RESULT SO CARRY ON
+TPL99A   A      R5,=F'1'     BCT DROPPED BY 1 EXTRA, ADD IT BACK
+         ST     R5,GWRESLEN  CORRECTED DATA LENGTH
+         CVD    R5,DECIMAL
+         UNPK   DECIMAL(3),DECIMAL+6(2)
+         OI     DECIMAL+2,C'0'
+         MVC    GWLENTXT(3),DECIMAL
+         AIF   (&USERDBG EQ 0).SKIPEND
+* -------------------------------------------------------------------
+* IF DEBUGGING, SHOW WHAT WE ARE RETURNING.
+* -------------------------------------------------------------------
+         ST     R1,DEBUGSAV
+         MVC   ENDWTO+9(78),GWRESULT    ===> SHOW RESULTS
+ENDWTO   WTO   '#....+....1....+....2....+....3....+....4....+....5....X
+               +....6....+....7....+...#'
+         MVC    ENDWTO2+28(3),DECIMAL
+ENDWTO2  WTO    'RETURN FIELD LEN IS nnn  '
+         L     R1,DEBUGSAV
+.SKIPEND ANOP
+         SPACE 3
+EXIT00   L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+NOPARM   WTO   'NO PARM PASSED TO GETPARMS, PROCESSING SKIPPED'
+         B     EXIT00
+         EJECT
+* -------------------------------------------------------------------
+*
+*  CONVERT OUR NUMBERS TO BINARY, WE MAY HAVE
+*  UP TO 20 OF THEM.
+*
+*  ON ENTRY
+*      R10 CONTAINS THE RETURN ADDRESS
+*      R1 POINTS TO THE NUMBER STRING
+*  ON EXIT
+*      R3 IS TO CONTAIN THE NUMBER
+*
+* -------------------------------------------------------------------
+NUMBRS   DS    0F
+         AIF   (&USERDBG EQ 0).SKIPDBC
+         ST     R1,DEBUGSAV
+         MVC   DEBUG12+18(2),0(R1)
+DEBUG12  WTO   'NUMBER IS ...'
+         L     R1,DEBUGSAV
+.SKIPDBC ANOP
+         L     R3,=F'20'     START WITH 20
+         CLC   0(2,R1),=CL2'20'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'19'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'18'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'17'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'16'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'15'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'14'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'13'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'12'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'11'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLC   0(2,R1),=CL2'10'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'9'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'8'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'7'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'6'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'5'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'4'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'3'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'2'
+         BC    EQ,NUMBRSEX
+         S     R3,FONE
+         CLI   0(R1),C'1'
+         BC    EQ,NUMBRSEX
+         SR    R3,R3          MUST BE 0, AN ERROR
+NUMBRSEX BR    R10
+         EJECT
+* -------------------------------------------------------------------
+* -------------------------------------------------------------------
+SAVEAREA DS    18F
+TEMPV    DS    F
+FONE     DC    F'1'
+FFOUR    DC    F'4'
+FFIVE    DC    F'5'
+FFORTY   DC    F'40'
+FFORTY5  DC    F'45'
+TESTFLD  DS    CL5
+*
+*    EX MASKS NEEDED
+EXSAVWRD MVC    4(0,R5),0(R1) SAVE VARIABLE LENGTH GWWORDS IN TBL
+EXPRTFLD MVC    0(0,R7),0(R9) COPY VAR GWWORDS FROM TBL TO RESULT
+EXMSGFLD MVC    0(0,R7),GWMSGLIN  MOVE IN MSG 1ST R3 BYTES
+*
+*
+* CANT REMENBER WHY THESE ARE HERE ?, NOT REFERENCED
+*TESTMSG  DC    CL78'IEEA12A THIS IS A TEST-MESSAGE DATA = 1'
+*TESTMASK DC    CL78'I WANT &&WORD1, &&WORD5, &&WORD6 AND &&WORD3'
+DECIMAL  DC    D'0'
+DEBUGSAV DS    F
+         LTORG
+         EJECT
+         PRINT GEN
+         GWDSECT
+         PRINT NOGEN
+         EJECT
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*              AFTER COMPARE INSTRUCTIONS
+GT       EQU   2 -                 A HIGH
+LT       EQU   4 -                 A LOW
+NE       EQU   7 -                 A NOT EQUAL B
+EQ       EQU   8 -                 A EQUAL B
+GE       EQU   11 -                A NOT LOW
+LE       EQU   13 -                A NOT HIGH
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.MID.MMPF.LOADLIB(GETWORDS),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.MID.MMPF.LOADLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(GETWORDS)
+ ENTRY GETWORDS
+ NAME GETWORDS(R)
+/*
+//
+./ ADD NAME=GETWTEST
+//MARKA    JOB (0),'ASSEMBLE TEST PGM',CLASS=A,MSGCLASS=A,
+//  MSGLEVEL=(1,1)
+//*
+//* TEST OUT THE GETWORDS PROGRAM TO MAKE SURE IT IS
+//* WORKING CORRECTLY AFTER ANY CHANGES TO THE GETWORDS
+//* PROGRAM OR ANY OF THE MACROS.
+//*
+//* TEST MESSAGES AND EXTRACTION MASKS ARE PROVIDED
+//* VIA SYSIN.
+//* OUTPUT TO SYSPRINT IS THE MESSAGE CARD, THE MASK CARD,
+//* THE BINARY LENGTH FIELD (CONVERTED TO TEXT OF COURSE)
+//* AND THE TEXT LENGTH FIELD RETURNED FROM GWEXEC.
+//*
+//ASMB    EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+         PRINT GEN
+* ********************************************************************
+*                                                                    *
+*   NAME : GETWTEST                                                  *
+*                                                                    *
+*   USED BY: TESTING GETWORDS MODULE                                 *
+*                                                                    *
+* INPUT : TEST MESSAGES AND EXTRACTION MASKS ARE PROVIDED            *
+*         VIA SYSIN.                                                 *
+* OUTPUT: OUTPUT TO SYSPRINT IS THE MESSAGE CARD, THE MASK CARD,     *
+*         THE BINARY LENGTH FIELD (CONVERTED TO TEXT OF COURSE)      *
+*         AND THE TEXT LENGTH FIELD RETURNED FROM GWEXEC.            *
+*                                                                    *
+* ********************************************************************
+GETWTEST CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 5
+         ST    R13,SAVER13
+* -------------------------------------------------------------------
+* REGISTER 4 IS EXPECTED TO HAVE THE GETMAINED DSECT ADDRESS
+* SO LETS CREATE THE DSECT FOR USE.
+* -------------------------------------------------------------------
+         GETMAIN R,LV=GWAREAL,SP=126
+         LR    R4,R1           USE R4 TO ADDRESS THE GETMAINED AREA
+         USING GWAREA,R4       ADDRESS GETMAINED AREA WITH THE
+*                              GWAREA TEMPLATE
+         GWDSECTI              INITIALISE THE DSECT DATA FIELDS
+* -------------------------------------------------------------------
+* Loop reading two cards from sysin, the message to be parsed then
+* the mask to be used for the parsing.
+* Do the parsing, show the result, and loop back for the next pair
+* of data cards.
+* -------------------------------------------------------------------
+         OPEN  (SYSPRINT,(OUTPUT))
+         OPEN  (SYSIN,(INPUT))
+LOOP01   GET   SYSIN
+         MVC   SYSINMSG(80),0(R1)
+         GET   SYSIN
+         MVC   SYSINMSK(80),0(R1)
+*
+* POPULATE WITH THE TEST DATA FOR TEST1, AND TEST
+         GWSTMSG MSG=SYSINMSG,LEN=78
+         GWSTMASK MASK=SYSINMSK,LEN=78
+         GWEXEC
+*
+* RETRIEVE AND SHOW THE RESULT OF THE PARSING
+         GWGETTXT DEST=MYRESULT
+         MVI   DATAOUT,C' '
+         MVC   DATAOUT+1(L'DATAOUT-1),DATAOUT
+         MVC   DATAOUT(80),SYSINMSG       MESSAGE
+         PUT   SYSPRINT,DATAOUT
+         MVC   DATAOUT(80),SYSINMSK       MASK
+         PUT   SYSPRINT,DATAOUT
+         MVI   DATAOUT,C' '
+         MVC   DATAOUT+1(L'DATAOUT-1),DATAOUT
+         MVC   DATAOUT(78),MYRESULT
+* LENGTH CHECKS
+         MVI   DATAOUT,C' '
+         MVC   DATAOUT+1(L'DATAOUT-1),DATAOUT
+         MVC   DATAOUT(20),DBGLEN        
+         L     R3,GWRESLEN
+         CVD   R3,DECIMAL
+         UNPK  DECIMAL(3),DECIMAL+6(2)
+         OI    DECIMAL+2,C'0'
+         MVC   DATAOUT+4(3),DECIMAL
+         MVC   DATAOUT+16(3),GWLENTXT
+         PUT   SYSPRINT,DATAOUT           REPORT LEN RETURNED ALSO
+         MVI   DATAOUT,C' '
+         MVC   DATAOUT+1(L'DATAOUT-1),DATAOUT
+         PUT   SYSPRINT,DATAOUT           AND BLANK LINE
+*
+* LOOP UNTIL ALL ENTRIES FROM SYSIN PROCESSED
+         B     LOOP01
+*
+* -------------------------------------------------------------------
+* When all cards read from sysin, close the file and we exit.
+* -------------------------------------------------------------------
+EOFSYSIN CNOP  0,4
+         CLOSE (SYSIN)
+         CLOSE (SYSPRINT)
+EXIT00   L     R13,SAVER13
+         LR    R1,R4    PUT ADDR BACK INTO R1 FOR FREE
+         FREEMAIN R,A=(1),LV=GWAREAL,SP=126
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+* -------------------------------------------------------------------
+* -------------------------------------------------------------------
+SAVEAREA DS    18F               REGISTER SAVE AREA
+SAVER13  DS    F                 WE ALTER IT FOR THE LINKS, SAVE
+SAVER1   DS    F                 save around wtos that use it
+DECIMAL  DC    D'0'              used to show len returned
+*
+DBGLEN   DC    CL20'LEN=nnn TEXTLEN=nnn ' show len returned
+SKIPEXM  DC    CL42'NOT SHOWING RESULT, LEN IS OBVIOUSLY WRONG'
+DATAOUT  DC    CL132' '          sysprint line
+SYSINMSG DC    CL80' '           store sysin message line  
+SYSINMSK DC    CL80' '           store sysin message mask
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,EODAD=EOFSYSIN
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=(PM),DSORG=PS,RECFM=F,            X
+               LRECL=132,BLKSIZE=132
+*
+MYRESULT DS    CL78
+         EJECT
+         GWDSECT DSECT='YES'
+         EJECT
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*              AFTER COMPARE INSTRUCTIONS
+GT       EQU   2 -                 A HIGH
+LT       EQU   4 -                 A LOW
+NE       EQU   7 -                 A NOT EQUAL B
+EQ       EQU   8 -                 A EQUAL B
+GE       EQU   11 -                A NOT LOW
+LE       EQU   13 -                A NOT HIGH
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKEDB1  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.MID.MMPF.LOADLIB(GETWTEST),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKEDB2  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.MID.MMPF.LOADLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(GETWTEST)
+ ENTRY GETWTEST
+ NAME GETWTEST(R)
+/*
+//TESTSTEP EXEC PGM=GETWTEST,COND=(0,NE)
+//STEPLIB  DD   DSN=INSTALL.MID.MMPF.LOADLIB,DISP=SHR
+//SYSABEND DD   SYSOUT=*
+//SYSUDUMP DD   SYSOUT=*
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+IEF233A M 310,MARK01,,TESTJOB,RESTORE
+&WORD1 &WORD3 &WORD4 &WORD6
+IEF233A M 310,PRIVAT,SL,TESTJOB,BACKUP
+&WORD1 &WORD3 &WORD4 &WORD6
+IEC501A M 310,MARK01,SL,6250 BPI,TESTJOB,BACKUP
+&WORD1 &WORD3 &WORD4 &WORD8
+X IEC701D M 312,VOLUME TO BE LABELLED MARK02
+&WORD2 &WORD4 &WORD9 &WORD1
+IEF233A M 310,MARK01,,TESTJOB,RESTORE
+&WORD1 &WORD3 &WORD5 &WORD6
+ANOTHER HYPHEN-TEST MESSAGE LINE
+&WORD2 &WORD3
+SHOW THE WHOLE LINE
+&MSG
+WILL THIS BREAK-ON-HYPHEN NOW
+&WORD4
+/*
+//
+./ ADD NAME=MMPFPROC
+//MMPF     PROC MMPF=00,MODE=LIVE,SYSOUT=T
+//* ******************************************************************
+//*
+//* MARKS MPF  Mark Dickinson, 2007
+//*
+//* YOU SHOULD COPY THIS MEMBER TO ONE OF YOUR SYSTEM PROCLIBS AND
+//* NAME IF MMPF  (SO YOU CAN START IT WITH 'S MMPF')
+//* CHANGE THE SYSIN DD TO THE PARMLIB DATASET YOU WILL BE STORING
+//* YOUR MESSAGE RULE DECKS IN.
+//*
+//* PARAMETERS SUPPORTED
+//*
+//*  MMPF=nn - THE MEMBER NAME TO USE FROM THE SYSIN DD, THE DEFAULT
+//*            IF NO PARM IS PROVIDED IS 00 (TO USE MEMBER MMPF00).
+//*            USE F MMPF,MMPF=nn TO CHANGE IT TO USE MEMBER MMPFnn
+//*            DYNAMICALLY AS NEEDED.
+//*  MODE=LIVE or MODE=DEBUG
+//*            DEFAULT IS LIVE. DEBUG MODE WILL NOT PERFORM ANY
+//*            AUTOMATION BUT WILL LOG WHAT IT WOULD HAVE DONE
+//*            TO THE SYSOUT
+//*  SYSOUT=c  YOU GUESSED IT, DEFAULT IS SYSOUT=T
+//*
+//* ******************************************************************
+//MMPF     EXEC PGM=MMPF,PARM='MMPF=&MMPF,&MODE'
+//SYSPRINT DD   SYSOUT=&SYSOUT     <== LOG ALL ACTIVITY  
+//SYSIN    DD   DSN=INSTALL.MID.MMPF.SRC,DISP=SHR ! NO MEMBER NAME !
+./ ADD NAME=MMPF00  
+*
+* THIS SHOULD BE COPIED TO YOUR PARM LIBRARY
+*    A N D    C U S T O M I S E D   F O R   Y O U R   S I T E
+*
+* ANY LINE STARTING WITH AN * IS A COMMENT
+* YOU CANNOT PUT COMMENTS AT THE END OF A ACTION LINE
+*
+* LNK - link to another program in your linklist
+* CMD - issue the command to the console
+* CMK - like cmd but message being processed is dommed
+* DOM - just DOM the message, assumed other automation
+*       has that mesage under control
+* WTO - added for debugging to save restarting mmpf in
+*       debug mode.
+*
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+* ---------------------------------------------------------------------
+* TAPE MOUNT MESSAGES TO BE AUTOMATED, MOUNT THE .AWS TAPES
+* YOU CAN ONLY USE THESE IF YOU ALSO HAVE MY TAPEMAN PROGRAMS INSTALLED
+* TO AUTOMATE YOUR .AWS TAPE MOUNTS.
+* ---------------------------------------------------------------------
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+IEC501A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD8
+IEF233A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD6
+* 701D IS IEHINITT REQUEST THAT TAPEMAN WILL REPLY TO THE WTOR FOR
+* WHICH IS WHY WE PROVIDE THE WTOR REPLY NUMBER HERE.
+IEC701D  LNK TAPEMAN3 &WORD2 &WORD4 &WORD9 &WORD1
+* ---------------------------------------------------------------------
+* TAPEMAN SAYING JOB IS REQUESTED A NON AUTOMATED VOLSER REQUIRING
+* MANUAL INTERVENTION FOR JOBNAME IN WORD8
+* (IF I WAS USING NON-AUTOMATED TAPED I WOULD SHUTDOWN AUTOMATION)
+* A USER MUCKING ABOUT, CANCEL THE JOB AND DOM THE MESSAGE
+* ---------------------------------------------------------------------
+TAP005A  CMK CANCEL &WORD8
+* ---------------------------------------------------------------------
+* MY TASKMON MESSAGE TRIGGERS
+* ---------------------------------------------------------------------
+MID107W  CMD R &WORD1,C
+MID111I  CMK P MMPF
+* ---------------------------------------------------------------------
+* IF THERE ARE PREVIOUS MMPF SHUTDOWN MESSAGES DOM THEM
+* ---------------------------------------------------------------------
+MID007I  DOM
+* ---------------------------------------------------------------------
+* SOME JES2 MESSAGE I WANT TO REPLY TO
+*     SETUP PRINTERS
+*     PRINTER NOT READY
+* ON HERCULES OK TO JUST REPLY START (UNLESS USING A TCPIP PRINTER
+* OF COURSE).
+* ---------------------------------------------------------------------
+$HASP190 CMD $S &WORD4
+$HASP191 CMD $S &WORD3
+* ---------------------------------------------------------------------
+* DEVICE INTERRUPTS, USE THE MMPF EXTENTION TO HANDLE THESE SO A 
+* DIFFERENT RULE CAN BE TRIGGERED PER DEVICE NUMBER
+* ---------------------------------------------------------------------
+IEE001A LNK MMPFEX   00 &WORD1&WORD2&WORD3
+* ---------------------------------------------------------------------
+* MISCELLANEOUS STUFF
+* ---------------------------------------------------------------------
+* THE MIP IPL REASON, WHEN MMPF STARTS IT CAN CLEAR THAT ONE
+IFB010D  CMD R &WORD1,U
+* ---------------------------------------------------------------------
+* DEVICE OFFLINE, REPLY DEVICE OR CANCEL.
+* ALWAYS CANCEL, USER MUST FIX THEIR JOB
+* ---------------------------------------------------------------------
+IEF238D  CMD R &WORD1,CANCEL
+* ---------------------------------------------------------------------
+* ALL DUMP DATASETS FULL, RUN MY ROUTINE TO CLEAN THEM UP
+* ---------------------------------------------------------------------
+IEA994A  CMD S DUMPFULL
+* ---------------------------------------------------------------------
+* If the response to BSPPILOT shutdown is cancel then BSPPILOT hangs.
+* So we must always reply U.                 
+* ---------------------------------------------------------------------
+BSPRD16D CMD R &WORD1,U
+BSPPILOT DOM
+*
+* KEYWORD LINE YOU SHOULD USE TO END THE DECK, SEE THE KNOWN BUGS
+* STATEMENT IN THE MAIN MMPF PROGRAM BANNER COMMENTS
+ENDDECK
+./ ADD NAME=MMPF
+//MARKA JOB (0),'ASSEMBLE MMPF',CLASS=A,MSGCLASS=A
+//* RESTART=TESTIT
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+// DD DISP=SHR,DSN=MVSSRC.SYM101.F01
+// DD DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
+//ASM.SYSIN DD *
+         TITLE 'MMPF --  MVS CONSOLE AUTOMATION --  VERSION 2.0'
+         PRINT NOGEN
+***********************************************************************
+*                                                                     *
+* MID - Mark Dickinson                                                *
+*       Another fine semi-usefull tool for MVS3.8J                    *
+*                                                                     *
+*   CONSOLE AUTOMATION SUBSYSTEM FOR MVS 3.8J                         *
+*                                                                     *
+*   AS MVS3.8J DOESN'T HAVE THE ABILITY TO RUN SUBSYSTEM CONSOLES FOR *
+*   AUTOMATION, NOR DOES IT HAVE AN MPF LIST FACILITY FOR AUTOMATION, *
+*   THIS IS MY WORKAROUND AS I WAS GETTING SICK OF CHANGING IEECVXIT  *
+*   ALL THE TIME FOR MY MESSAGE AUTOMATION                            *
+*                                                                     *
+*   IT READS THE SYSTEM CONSOLE BUFFER TO OBTAIN IT'S MESSAGES        *
+*   (BASED UPON THE SPY CODE FROM THE PYCROFT SITE) AND IT WILL       *
+*   CHECK EACH ATTENTION/ALERT MESSAGE (THOSE PREFIXED WITH A *) TO   *
+*   SEE IF THERE IS A MATCHING RULE IN THE RULES TABLE FOR IT.        *
+*                                                                     *
+*   -RULE TABLE READ FROM SYSIN, REFESHABLE (F xxx,MMPF=nn) TO RELOAD *
+*    THE EXISTING RULE FILE OR LOAD ANOTHER ONE, ALL MEMBERS MUST BE  *
+*    NAMED MMPFnn FOR THIS TO WORK OF COURSE.                         *
+*   -RULES PARSEABLE, MAY CONTAIN KEYWORDS &WORD1-20 AND &MSG         *
+*   -MAX RULR TABLE SIZE HARD CODED AS 30 RULES (TODO: GET THE        *
+*    GETMAIN WORKING WITH A LEN IN A REGISTER RATHER THAN A HARD      *
+*    CODED ONE THEN MAKE LEN A PROGRAM PARM)                          *
+*   -ALL ACTIVITY LOGGED TO SYSPRINT                                  *
+*   -15 SECOND SCREEN SCRAPE POLL (TODO: MAKE A PROGRAM PARM)         *
+*                                                                     *
+*   LIMITATIONS                                                       *
+*      IT DOESN'T GET ANY MESSAGES UNTIL AFTER THEY HIT THE CONSOLE,  *
+*      -- CANNOT SUPPRESS MESSAGES - STILL NEED IEECVXIT FOR THAT     *
+*      -- CANNOT CHANGE ROUTE CODES - STILL NEED IEECVXIT FOR THAT    *
+*      15 SECOND POLL IS NOT REALLY INSTANT AUTOMATION (BUT STILL     *
+*      FASTER THAN A MANUAL RESPONSE, MOST TIMES, AS IF A MSG HITS    *
+*      HALFWAY THRU THE TIMER PERIOD YOU ONLY WAIT 8 SECS ETC).       *
+*                                                                     *
+*   SCREEN SCRAPING BASED UPON TSO CONSOLE "SPY" TOOL                 *
+*        FROM GREG PRICE,                                             *
+*        ORIGIONALLY BY STEVE LANGLEY.                                *
+*                                                                     *
+*     THIS PROGRAM WILL PROBABLY REQUIRE BOTH THE SYS1.AMODGEN AND    *
+*     SYS1.APVTMACS MACRO LIBRARIES TO ASSEMBLE PROPERLY.             *
+*                                                                     *
+*                                                                     *
+* ----------- SUBSYSTEM COMMANDS ----------                           *
+*                                                                     *
+*      P XXX                - STOP TASK                               *
+*      F XXX,MMPF=nn        - LOAD CHANGED RULE FILE MMPFnn           *
+*                                                                     *
+* ----------- RULE FILE SYNTAX -----------                            *
+*                                                                     *
+* MSGID COMMAND TO EXECUTE                                            *
+*      COMMAND OR MESSAGE MAY CONTAIN THE KEYWORDS &WORD1 to &WORDn,  *
+*      OR THE KEYWORD &MSG                                            *
+*      - WORDS ARE CONSIDERED SERATED BY SPACE, COMMA OR HYPHEN       *
+*      - IF &MSG IS USED THEN THE FIRST 45 BYTES OF THE MSG ARE USED, *
+*        THIS IS SO I CAN MOVE MY TAPE AUTOMATION OUT OF IEECVXIT AS  *
+*        THAT CODE PUTS A LOT OF OVERHEAD IN THERE WITH GETMAINS ETC. *
+*                                                                     *
+* EXAMPLES: REFER TO SUPPLIED SAMPLE PARMLIB MEMBER MMPF00            *
+*                                                                     *
+* CHANGES                                                             *
+*   2007/10/20 - Initial version working with CMD function.           *
+*   2007/10/25 - Got the program PARM='MMPF=nn' working to override   *
+*                on startup, plus got the F MMPF=nn working.          *
+*   2007/10/27 - Added in test DOM and CMK types to allow changing a  *
+*                message to non-highlighted and change to non-high    *
+*                plus execute command respectively (still testing)    *
+*                Any rule involving a DOM will only be attempted if   *
+*                we have not yet issues any commands, this is because *
+*                if we issue a command we know the console will have  *
+*                rolled and we no longer have the correct line number *
+*                to be dom'ed. At this point we just pray no other    *
+*                external command has rolled the screen for CMK type  *
+*                (while no issue for DOM type, for CMK type we rely   *
+*                on the message being dom'ed before we trigger the    *
+*                command to avoid looping, may have to look at having *
+*                a table of messages undergoing CMK processing to     *
+*                redrive doms, but that will have it's own issues if  *
+*                there are more than one message of the same on the   *
+*                screen).                                             *
+*   2007/10/27 - Added assembly toggles for TK3.                      *
+*   2008/12/17 - Finally got around to iplementing the LNK option.    *
+*   2009/03/24 - Changed LNK so it DOM's the message that triggered   *
+*                the event. Avoids automation loops if the LNKed to   *
+*                program fails (repeatedly) to handle the event.      *
+*   2009/07/17 - Allowed for a PARM of DEBUG to also be               *
+*                passed, in which case we log the messages we are     *
+*                checking and any rule matched we found but do not    *
+*                actually perform any actions. And added the optional *
+*                LIVE parm also so the proc can use something other   *
+*                than debug and still work; the LIVE parm does        *
+*                nothing but is legal.                                *
+*   2009/10/13 - In the TK3 system the BSPPILOT WTOR and attention    *
+*                messages are prefixed @ instead of *, updated to     *
+*                allow for those also.                                *
+*                                                                     *
+* I M P O R T A N T                                                   *
+*   This has been setup for my system which may be at a different     *
+*   level to yours, as such you may need to adjust the screen offsets *
+*   being used in CHKAMSG sections; for example I do not use the      *
+*   patch that displays the date/time before each console message, so *
+*   if you have that you will need to change the code.                *
+*                                                                     *
+*                                                                     *
+* K N O W N   B U G S                                                 *
+*   Silly thing seems to always read the MMPFnn control cards twice   *
+*   for some reason on small blocksizes. In testing a test library of *
+*   blksize 9600 has no problems, but a test library of 3200 read the *
+*   cards twice. In the smaller library blksize 3200 there were 41    *
+*   cards so it should have just gone over the blocksize, but it was  *
+*   not the last card read twice but the whole file ?????.            *
+*   Still to be debugged, WORKAROUND: a card of ENDDECK at the end of *
+*   the file will now be used to stop the 'read next data block' loop *
+*   (although its not looping as such, it just does it twice rather   *
+*    than loop forever; bugger of a thing to figure out)              *
+*   --ALSO getting very close to the 4K limit, have had to truncate   *
+*   few WTOs to get it to assemble now.                               *
+*                                                                     *
+***********************************************************************
+*
+* I NEED A CUSTOMISED WTO, INSERTING JOBNAMES INTO EACH WTO TO
+* BE DISPLAYED USED UP ALL MY SYMBOL POOL, SO DO IT WITHIN THE
+* COPY OF THE WTO MACRO NOW.
+         MACRO
+&NAME    WTO2  &MESG
+         LCLC  &L1,&L2,&L3
+&L1      SETC  '$'.'&SYSNDX'.'A'
+&L2      SETC  '$'.'&SYSNDX'.'B'
+&L3      SETC  '$'.'&SYSNDX'.'C'
+         CNOP  0,4
+&NAME    MVC   *+22(8),MYJOBNAM
+         BAL   1,&L3                BRANCH AROUND MESSAGE
+&L1      DC    AL2(&L2-&L1)        TEXT LENGTH
+         DC    B'0000000000000000' MCS FLAGS
+         DC    C&MESG              MESSAGE TEXT
+&L2      EQU   *
+&L3      DS    0H
+         SVC   35
+         MEND
+         EJECT
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*              AFTER COMPARE INSTRUCTIONS
+GT       EQU   2 -                 A HIGH
+LT       EQU   4 -                 A LOW
+NE       EQU   7 -                 A NOT EQUAL B
+EQ       EQU   8 -                 A EQUAL B
+GE       EQU   11 -                A NOT LOW
+LE       EQU   13 -                A NOT HIGH
+         EJECT
+* *******************************************************************
+*
+* SET THIS VARIABLE TO 1 FOR A TURNKEY3 SYSTEM
+*    (DEFAULT IS 0 FOR MY SYSTEM)
+*
+* *******************************************************************
+*                                          <== TK3 CHANGE TO 1
+         LCLB  &OSISTK3                                              
+&OSISTK3 SETB  1       1 IS A TURNKEY3 SYSTEM, 0 IS MY SYSTEM
+* *******************************************************************
+*
+* END CUSTOMISATION FOR A TK3 SYSTEM
+*
+* *******************************************************************
+         EJECT
+MMPF     CSECT
+         B     100(R15)           BRANCH AROUND SAVE AREAS
+         DC    CL9'MMPF'          IDENTIFIER
+         DC    CL9'&SYSDATE'
+         DC    CL6'&SYSTIME'      
+SAVE     DC    18F'0'             SAVE AREA
+SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
+         STM   R14,R12,12(R13)    SAVE REGISTERS
+         LR    R12,R15            R12 = ADDR OF ENTRY POINT
+         USING MMPF,R12,R11       ADDRESABILITY TO CSECT 
+         LA    R11,SAVE           R11 = ADDR OF OUR SAVE AREA
+         ST    R13,SAVE+4         SAVE POINTER TO CALLERS SAVE AREA
+         ST    R11,8(R13)         SAVE PTR TO OUR SAVE AREA IN CALLER'S
+         LR    R13,R11            R13 = ADDR OF OUR SAVE AREA
+         LA    R11,4095(R12)      R11 WILL BE 
+         LA    R11,1(R11)         SECOND BASE REGISTER
+         SPACE 3
+***********************************************************************
+* SEE IF ANY PARMS THAT MAY OVERRIDE THE DEFAULT RULE LIST            *
+*   N O T E: GETJOBID HAS BEEN MOVED RIGHT UP HERE SO I HAVE A JOB    *
+*            NAME FOR ERROR WTOS, SO WE SAVE THE PARMLIST ADDR NOW.   *
+***********************************************************************
+         ST    R1,PARMSADR        SAVE ADDR OF PARM LIST
+         BAL   R5,GETJOBID        GET OUT JOB/TASK NAME FOR MSGS
+         L     R1,PARMSADR        NO WE HAVE A JOBNAME, CHECK PARMS
+         LTR   R1,R1              ANY PARMS TO PROCESS ?
+         BZ    NOPARM             NO PARM, USE THE DEFAULT
+         LR    R2,R1              ADDR LIST NOW IN R2      
+*
+* WELL THE BELOW WHILE NICE DOESNT WORK
+* AS WE USE A PARM='xxxx,yyy' FROM JCL WE ONLY GET THE ONE PARM
+*
+**         LA    R4,4               LOOP FOR A MAX OF 4 PARMS
+**PARMLOOP L     R5,0(,R2)          USE REG5 TO ADDRESS THE PARM
+**         WTO   MF=(E,(R5))        WTO PARM RECIEVED
+**         CLC   2(5,R5),=CL5'DEBUG'  DEBUGGING ONLY ?
+**         BNE   PARML01
+**         MVC   DEBUGON(1),CHARY
+**         B     NEXTPRM
+**PARML01  CLC   2(5,R5),=CL4'TEST'   DEBUGGING ONLY ?
+**         BNE   PARML02
+**         MVC   DEBUGON(1),CHARY
+**         B     NEXTPRM
+**PARML02  CLC   2(5,R5),=CL4'LIVE'   THE PERMITTED LIVE DUMMP PARM
+**         BNE   PARML03
+**         B     NEXTPRM
+**PARML03  CLC   2(5,R5),=CL5'MMPF='  IS IT THE MMPF PARM NN
+**         BNE   PARMERR            NO, WTO ITS A BAD PARM
+**         MVC   MEMBER+4(2),7(R5)  SAVE NN PART IN MEMBER NAME
+*** THE BELOW TM DOESN'T WORK, SO FIDDLE WITH IT
+***        TM    0(,R2),X'80'       IS IT THE LAST PARM
+**NEXTPRM  MVC   ONECHAR(1),0(R2)
+**         TM    ONECHAR,HEX80
+**         BO    BLDUCMS            YES, WE ARE DONE
+**         LA    R2,4(,R2)          NO, INCREMENT TO NEXT ADDR IN LIST
+**         BCT   R4,PARMLOOP        LOOP FOR NEXT PARM MAX R4 TIMES
+**         B     BLDUCMS
+**ONECHAR  DC    CL1' '
+**HEX80    EQU   X'80'
+**PARMERR  WTO2  'MID010E xxxxxxxx:BAD PARM IGNORED'
+**         MVC   PARMER2+12(40),2(R5)
+**PARMER2  WTO   'GOT ....+....1....+....2....+....3....+....4'
+**         B     NEXTPRM
+*
+*
+* So just expect either
+* MMPF=nn
+* MMPF=nn,DEBUG
+* MMPF=nn,LIVE
+         L     R5,0(,R2)          USE REG5 TO ADDRESS THE PARM
+         CLC   2(5,R5),=CL5'MMPF='  IS IT THE MMPF PARM NN
+         BNE   PARMERR            NO, WTO ITS A BAD PARM
+         MVC   MEMBER+4(2),7(R5)  SAVE NN PART IN MEMBER NAME
+         CLC   9(1,R5),=CL1','    ANY OTHER PARMS
+         BNE   BLDUCMS            NO, ALL IS WELL
+         CLC   10(4,R5),=CL4'LIVE'    LIVE PARM IS OK 
+         BE    BLDUCMS
+         CLC   10(5,R5),=CL5'DEBUG'   DEBUGGING ONLY ?
+         BNE   PARMERR
+         MVC   DEBUGON(1),CHARY
+         B     BLDUCMS
+*
+PARMERR  WTO2  'MID010E xxxxxxxx:BAD PARM, ABENDING'
+         MVC   PARMER2+12(40),2(R5)
+PARMER2  WTO   'GOT ....+....1....+....2....+....3....+....4'
+         ABEND 100
+*
+NOPARM   DS    0F        JUST USE DEFAULT OF MMPF00, NO NOTIFY NEEDED
+***********************************************************************
+*                                                                     *
+*          BUILD A TABLE OF UCM ADDRESSES (ONE PER CONSOLE)           *
+*                                                                     *
+***********************************************************************
+BLDUCMS  L     R4,16              R4 = ADDR OF CVT
+         USING CVT,R4
+         L     R4,CVTCUCB         R4 = ADDR OF 'CUCB' (UCM BASE)
+         DROP  R4
+         USING UCM,R4
+         L     R5,UCMVEA          R5 = ADDR OF FIRST UCM ENTRY
+         L     R6,UCMVEZ          R6 = LENGTH OF EACH UCM ENTRY
+         L     R7,UCMVEL          R7 = ADDR OF LAST UCM ENTRY
+         LA    R8,UCMTAB+4        R8 = ADDR OF UCMTAB
+         LA    R9,UCMTABE         R9 = ADDR OF END OF UCMTAB
+         XR    R10,R10            R10 = 0 (NUMBER OF VALID UCMS)
+UCMLOOP  ST    R5,0(R8)           SAVE UCM ADDRESS IN UCMTAB
+         LA    R10,1(R10)         R10 = R10 + 1  (ONE MORE UCM)
+         LA    R8,4(R8)           R8 = ADDR OF NEXT UCMTAB ENTRY
+         CR    R8,R9              DOES R8 POINT PAST END OF UCMTAB?
+         BH    UCMDONE            YES; LEAVE LOOP
+         AR    R5,R6              R5 = ADDR OF NEXT UCM ENTRY
+         CR    R5,R7              DOES R5 POINT PAST UCM ENTRIES?
+         BL    UCMLOOP            NOPE; KEEP GOING
+UCMDONE  LA    R10,1(R10)         ALLOW FOR ONE NON-CRT CONSOLE 
+         STH   R10,NUMUCMS        SAVE NUMBER OF UCMS FOUND
+         DROP  R4
+         SPACE 3
+***********************************************************************
+*                                                                     *
+*                            TOP OF LOOP                              *
+*              LOCATE SCREEN BUFFER AND PREPARE TO SCAN               *
+*          WE SHOULD TRY TO FIND AN AUTHORISED CONSOLE HERE           *
+*                                                                     *
+***********************************************************************
+NEXTCNSL LA    R5,UCMTAB          R5 = ADDR OF UCMTAB
+         L     R4,CONSOLE         R4 = CONSOLE TO BE DISPLAYED
+         CH    R4,NUMUCMS         IS NUMBER TOO HIGH?
+         BNH   GETUCM             NO, CONTINUE
+RESETCN  L     R4,OLDCONS         RESET TO OLD CONSOLE
+         ST    R4,CONSOLE         AND SAVE IT
+         WTO2  'MID001E         :UNABLE TO FIND AN AUTHORISED CONSOLE'
+         ABEND 4
+GETUCM   SLL   R4,2               MULTIPLY BY 4
+         LA    R5,0(R5,R4)        R5 = ADDR OF ADDR OF UCM
+         L     R5,0(R5)           R5 = ADDR OF UCM
+         USING UCMLIST,R5
+         L     R6,UCMXB           R6 = ADDR OF RDCM
+         USING DCMTSRT,R6
+         LTR   R6,R6              IS THIS A GRAPHICS CONSOLE?
+         BP    GRAPHICS           YES
+         LA    R5,UCMTAB          R5 = ADDR OF UCMTAB
+         B     RESETCN            RESET THE CONSOLE NUMBER
+         SPACE
+GRAPHICS EQU   *
+         TM    UCMDISP1,UCMDISPA  IS THIS A MASTER CONSOLE?
+         BNO   AUTH               NO
+         B     AUTHDONE           YES
+AUTH     TM    UCMAUTHA,UCMAUTH1  IS THIS CONSOLE SYSTEM AUTHORIZED?
+         BNO   AUTH1              NO
+         B     AUTHDONE           YES
+AUTH1    TM    UCMAUTHA,UCMAUTH2  IS IT I/O AUTHOZRIZED?
+         BNO   AUTH2              NO
+         B     AUTHDONE           YES
+AUTH2    TM    UCMAUTHA,UCMAUTH3  IS IT CONS AUTHORIZED?
+         BNO   AUTHBAD            NO
+         B     AUTHDONE
+AUTHBAD  EQU   *
+*    SHOULD NEED TO SCAN FOR NEXT CNSL HERE' AND JUMP BACK UP
+         ST    R1,SAVER1
+         L     R1,CONSOLE
+         A     R1,ONE
+         ST    R1,CONSOLE
+         L     R1,SAVER1
+         B     NEXTCNSL
+AUTHDONE EQU   *
+         L     R7,DCMADTRN        R7 = ADDR OF TDCM
+         USING STRTDCM,R7
+         SPACE 1
+***********************************************************************
+*   GETMAIN A STORAGE AREA FOR THE RULES, SAVE ADDRESS                *
+***********************************************************************
+         GETMAIN R,LV=RULETLEN,SP=126  
+         ST    R1,ADDRRULS     SAVE ADDRESS FOR LATER USE
+***********************************************************************
+*   GETMAIN A STORAGE AREA FOR THE GWDSECT, SAVE ADDRESS              *
+***********************************************************************
+         GETMAIN R,LV=GWAREAL,SP=126
+         ST    R1,ADDRGETW     SAVE ADDR FOR LATER USE
+         LR    R2,R1           USE R2 TO ADDRESS DURING INITIALISATION
+         USING GWAREA,R2       ADDRESS GETMAINED AREA WITH THE
+*                              GWAREA TEMPLATE
+         GWDSECTI              INITIALISE THE DSECT DATA FIELDS
+         DROP  R2              FREE R2 TO ADDRESS OTHER STORAGE AS
+*                              NEEDED THROUGHOUT THE PROGRAM
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*             I-O INITAILISATION AND SETUP STEPS HERE                 *
+*       (WE HAVE FOND A CONSOLE TO USE SO WE CAN CONTINUE)            *
+*                                                                     *
+***********************************************************************
+* SET UP THE COMMUNICATION WITH THE OPERATOR CONSOLE TO
+* ACCEPT OPERATOR COMMANDS
+         LA      R4,COMM             * LOAD ADDR OF COMM...
+         EXTRACT (R4),FIELDS=COMM,   * GET THE COMM AREA               X
+               MF=(E,EXTRACT1)
+         L       R4,COMM             * LOAD CONTENTS OF COMM
+         USING   COMLIST,R4          * ..TO IEZCOM
+         L       R3,COMCIBPT         * GET ADDR OF CIB
+         USING   CIBNEXT,R3          * ESTAB ADDR TO IEZCIB
+         LTR     R3,R3               * WAS CIB ADDR RETURNED
+         BZ      SETCOUNT            * NO - INIT
+         CLI     CIBVERB,CIBSTART    * IS IT START?
+         BNE     SETCOUNT            * NO - INIT
+         QEDIT   ORIGIN=COMCIBPT,    * YES - FREE IT                   X
+               BLOCK=(R3)            *
+         LTR     R15,R15             * OK ?
+         BZ      SETCOUNT            * YES - CONTINUE
+         WTO2    'MID016E xxxxxxxx:UNABLE TO ALLOCATE COMM AREA,ABEND'
+         ABEND   1
+SETCOUNT EQU     *
+         QEDIT   ORIGIN=COMCIBPT,    * SET LIMIT ON MODIFY             X
+               CIBCTR=1              * .. TO ONE
+*
+*  OPEN SYSPRINT AS OUT ACTIVITY LOG FILE
+*
+         OPEN  (SYSPRINT,OUTPUT)  WE WILL HAVE A LOG FILE
+*
+*
+*  INITIAL LOAD OF THE MESSAGE RULES FROM EXISTING MEMBER VALUE
+*
+         SR    R1,R1              R1 WILL HAVE ERRORS FROM GETSYSIN
+         BAL   R5,GETSYSIN        LOAD THE MESSAGE LIST
+         C     R1,=F'0'           ENSURE NO ERRORS
+         BE    INITOK   
+         MVC   INITWARN+37(8),MYJOBNAM
+INITWARN WTO2  'MID012E xxxxxxxx:USE F xxxxxxxx,MMPF=nn TO SELECT A RULX
+               E MEMBER'
+INITOK   WTO2    'MID002I         :INITIALISATION COMPLETE'
+         CLC   DEBUGON(1),CHARY
+         BNE   WAIT
+         WTO   '* MMPF IN DEBUG MODE *'
+***********************************************************************
+*                                                                     *
+*           READY TO START, SHOULD LOOP TO JUST BELOW HERE            *
+*                                                                     *
+***********************************************************************
+* EITHER THE TIMER WILL POP IN WHICH CASE WE DO PERIODIC THINGS,    *
+* OR WE PROCESS AN OPERATOR COMMAND                                 *
+WAIT     EQU     *
+         XC      TIMERECB,TIMERECB   * CLEAR THE STIMER EXIT'S ECB
+         LA      R15,TIMERECB        * LOAD ADDRESS OF TIMER ECB
+         ST      R15,TIMEXPRM        * STORE IT FOR TIMER EXIT TO POST
+         STIMER REAL,TIMEOUT,DINTVL=SECS15
+*
+         L       R4,COMM             * GET THE COMMTASK STUFF
+         L       R4,COMECBPT-COMLIST(,R4)  * POINT TO COMMAND ECB
+         ST      R4,ECBLIST          * POST IT TO OUR ECB LIST
+         LA      R3,TIMERECB         * POINT TO THE STIMER ECB
+         ST      R3,ECBLIST+4        * PUT THAT IN THE ECB LIST
+         OI      ECBLIST+4,X'80'     * MARK END OF LIST
+         WAIT    1,                  * WAIT FOR SOMETHING              X
+               ECBLIST=ECBLIST       * TO HAPPEN IN THIS LIST
+*                                    * FIGURE OUT WHAT IT WAS
+         TTIMER  CANCEL              * CANCEL THE TIMER FOR ANY EVENT
+*                                    * OR SOME NASTY LOOPS OCCUR
+*        CHECK THE COMMAND THAT TRIGGERED THE EVENT
+         LA      R3,TIMERECB         * POINT TO TIMER ECB
+         USING   ECB,R3              * COVER THE STIMER ECB
+         TM      ECBCC,ECBPOST       * DID THE TIMER POP?
+         BO      SCREENIO            * YES, ANOTHER SCREEN SCAN 
+         DROP    R3
+         USING   ECB,R4              * COVER THE COMMAND ECB
+         TM      ECBCC,ECBPOST       * DID WE GET A COMMAND?
+         BO      CMDPOPD             * YES, PROCESS COMMAND
+         DROP    R4
+         B       WAIT
+         EJECT 
+* ------------------------------------------------------------------- *
+*        OPERATOR P OF F COMMAND ENTERED FOR THIS JOB                 *
+* ------------------------------------------------------------------- *
+CMDPOPD  EQU     *
+         L       R4,COMM             * GET BACK R4
+         USING   COMLIST,R4          * ADDRESS IT
+         L       R3,COMCIBPT         * GET ADDR OF CIB
+         USING   CIBNEXT,R3          * ADDRESS IT
+STOP     EQU     *                   --- STOP REQUEST (P)
+* ROUTINE TO PROCESS A STOP COMMAND                                 *
+         CLI     CIBVERB,CIBSTOP     * IS IT STOP?
+         BNE     MODIFY              * NO - CHECK FOR MODIFY
+         B       ALLDONE             * IMMEDIATE STOP
+MODIFY   EQU     *
+         CLI     CIBVERB,CIBMODFY    * IS IT MODIFY ?
+         BNE     OPERROR             * NO - ERROR
+* ROUTINE TO PROCESS A PROCESS THE NEWRULES COMMAND                 *
+         CLC     CIBDATA(5),MMPFCMD  * IS IT A RELOAD REQUEST ?
+         BNE     OPERROR             * NO - ERROR THEN
+         LA      R1,CIBDATA          * OK, R1 ADRESSES CMD
+         BAL     R5,NEWRULES         *   AND GO LOAD THEM
+         B       OPCMDRET
+OPERROR  EQU     *
+         WTO2    'MID003W         :ONLY MMPF=nn IS PERMITTED'
+NEWTIMER EQU     *
+OPCMDRET EQU     *
+         QEDIT   ORIGIN=COMCIBPT,    * FREE IT                         X
+               BLOCK=(R3)            *
+         B       WAIT
+         SPACE   3
+* ------------------------------------------------------------------- *
+*                        TIMER HAS EXPIRED                            *
+* ------------------------------------------------------------------- *
+***********************************************************************
+*                                                                     *
+*            MOVE 21 LINES OF SCREEN IMAGE TO OUTPUT BUFFER           *
+*                                                                     *
+* NOTE: KEEP R8 AS COUNTER, USED IN CALLED ROUTINES FROM HERE         *
+*                                                                     *
+***********************************************************************
+*        COPY THE SCREEN BUFFER INTO LOCAL STORAGE
+SCREENIO EQU   *
+         STM   R1,R8,SCRIOSAV
+         SR    R1,R1
+         ST    R1,CMDMADE      NO COMMANDS ISSUED YET (FOR DOM CHECKS)
+         MODESET KEY=ZERO                                       
+         L     R8,DCMASCRN        R8 = ADDR OF SCREEN IMAGE BUFFER
+         LA    R4,BUF             R4 = ADDR OF OUTPUT BUFFER
+         LA    R5,M2BUFLEN        R5 = LENGTH OF OUTPUT BUF (21 LINES)
+         LA    R9,M2BUFLEN        R9 = CONSOLE BUFFER LEN   (21 LINES)
+MOVEBUFF ICM   R9,8,PAD           MAKE BLANK THE PAD CHARACTER
+         MVCL  R4,R8              MOVE CONSOLE BUFFER TO OUTPUT BUFFER
+         L     R7,DCMDOMPK        SAVE DOM TABLE ADDRESS        
+         ST    R7,DOM#ADDR             FOR THIS CONSOLE         
+         DROP  R5,R6,R7
+         MODESET KEY=NZERO
+         SPACE 5
+*        READ LINES FROM THE SCREEN BUFFER, GO CHECK EACH ONE
+         XR    R8,R8              R8 = COUNTER = 0
+         LA    R1,BUF             SET POINTER TO FIRST LINE
+         ICM   R1,8,EDITFLG       EDIT MODE
+         L     R0,=F'78'          R0 LENGTH OF OUTPUT LINE
+NEXTL    LR    R3,R1              SAVE R1 SINCE TPUT ZAPS IT
+         ST    R9,SCIOR9
+         BAL   R9,CHKAMSG         GO SEE IF THE MESSAGE IS AUTOMATED
+         L     R9,SCIOR9
+         LA    R8,1(R8)           ADD 1 TO COUNTER
+         C     R8,=F'21'          HAVE WE PRINTED LAST LINE?
+         BNE   NEXTL2             NO, KEEP GOING
+         LM    R1,R8,SCRIOSAV     YES, GET REGS BACK
+         B     WAIT                  AND BACK TO THE WAIT CODE
+NEXTL2   LA    R1,80(R3)          NOPE, POINT TO NEXT LINE
+* BELOW IS NEEDED IF WE ARE READING FROM A 3270, WHICH MY CONSOLE IS
+         MVC   0(5,R1),BLANKS     BLANK OUT 3270 CTRL CHARS
+         LA    R1,4(R1)           ADD 4 EXTRA BYTES TO SKIP CTRL CHARS
+NOT3270  L     R0,=F'78'          LOAD LENGTH OF LINE
+         ICM   R1,8,EDITFLG       EDIT MODE
+         B     NEXTL              PROCESS NEXT LINE
+         EJECT
+***********************************************************************
+*                                                                     *
+*                            ALL DONE - EXIT                          *
+*                                                                     *
+***********************************************************************
+ALLDONE  CNOP  0,4                                                  
+* TWO GETMAINED AREAS TO RELEASE, DO THAT FIRST
+         L     R1,ADDRRULS     FREE THE STORAGE USED BY RULE TABLE
+         FREEMAIN R,A=(1),LV=RULETLEN,SP=126
+         L     R1,ADDRGETW     FREE THE STORAGE USED BY GWDSECT
+         FREEMAIN R,A=(1),LV=GWAREAL,SP=126
+* CLOSE OPEN FILES, AND EXIT
+         CLOSE (SYSPRINT)
+         MVC   WTOTERM+16(8),MYJOBNAM
+WTOTERM  WTO   'MID007I xxxxxxxx:AUTOMATION TERMINATED',DESC=(2)
+         L     R13,SAVE+4         RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,0
+         BR    R14                RETURN TO SYSTEM
+         EJECT
+***********************************************************************
+*                                                                     *
+*                  USE SVC 34/241 FOR COMMANDS                        *
+*                                                                     *
+***********************************************************************
+MGCR     STM   R1,R3,SAVEMGCR
+         MVC   CMDBUF,SYSCMD      LOAD COMMAND BUFFER WITH O/S COMMAND
+SVC34JES LA    R3,79              AVOID INFINITE LOOP
+BLNKLOOP CLI   CMDBUF,C' '        LEADING BLANK(S)?
+         BNE   OKCMD              NO, OK TO USE THIS CMD
+         MVC   CMDBUF(L'CMDBUF-1),CMDBUF+1  SHIFT COMMAND TEXT LEFT
+         MVI   CMDEND,C' '        BLANK OUT OLD LAST CHARACTER
+         BCT   R3,BLNKLOOP        CHECK FOR ANOTHER BLANK
+OKCMD    LA    R3,CMDEND
+         LA    R2,79
+PARSLOOP CLI   0(R3),C' '         BLANK CHARACTER?
+         BNE   STORELEN           NO, FOUND LAST CHARACTER OF COMMAND
+         BCTR  R3,0               YES, POINT TO PREVIOUS CHARACTER
+         BCT   R2,PARSLOOP        IF R2 IS 0 ONLY NO CMD WAS ENTERED
+         WTO2  'MID004E         :DEBUG NULL COMMAND TO SVC34 IGNORED'
+         B     MGCREX             EXIT COMMAND OP  
+STORELEN LA    R2,4(0,R2)         MAKE THE LAST CHARACTER A BLANK
+         STH   R2,CMDLEN
+         SPACE
+         MODESET KEY=ZERO
+         LA    R1,CMDLEN          COMMAND BUFFER ADDRESS
+         L     R0,CONSOLE         CONSOLE ID
+         SVC   34
+         MODESET KEY=NZERO
+*         B     NEWTIMER       (MID: NEWTIMER ?)
+MGCREX   LM    R1,R3,SAVEMGCR
+         BR    R6      
+         EJECT
+* ********************************************************************
+* CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
+* PROCEDURE DEFINED TO THE STIMER CALL.
+* IT ISSUES A POST ON THE TIMER EXPIRY EVENT WHICH WILL BE PICKED UP
+* BY THE MAINLINE WAIT ON THE ECB LIST (THE POST TRIGGERS THE TIMER
+* ENTRY MATCH IN THE ECB LIST).
+* ********************************************************************
+TIMEOUT  SAVE  (14,12)
+         L     R2,TIMEXPRM
+         POST  (2)
+         RETURN (14,12)
+         SPACE 2
+***********************************************************************
+*                                                                     *
+*            READ THE CONTROL CARDS BACK INTO THE TABLE               *
+*                 WE ARE CALLED ALWAYS AS BAL R5                      *
+*                                                                     *
+* This was a nice easy subroutine until I changes it from a nice      *
+* simple sequential file xxx.xx(member) read to a partioned dsn       *
+* xxx.xx read where we have to locate the member and deblock the      *
+* records ourselves. But hey, it adds functionality.                  *
+*                                                                     *
+*                                                                     *
+* PROB -                                                              *
+*   Program is already using for addressing R3, R4, R7, R11, R12      *
+*   We need to use R2 for table addressing                            *
+*   R8 is used for getmain area addressing                            *
+*   R3 - risking it at this point, I think mainline resets it to      *
+*   the comm area. To check. Am using as record counter.              *
+*
+*   R4 - TABLE AREA ADDRESSING
+*   R6 - ADDRESSING
+*   R7 - LRECL                                                        *
+*   R8 - GETMAINED ADDR
+*   R9 - BLKLEN                                *
+*                                                                     *
+*   R1 of course gets trashed in system calls anyway so...            *
+*   So we have a register shortage here. So we save lots of values    *
+*   that would normally stay in register memory and use R0 to load    *
+*   them for arithmetic as needed rather than keeping the values in   *
+*   registers. We still need to use R1 for addressing as well so      *
+*   we save/restore it around any system calls that would trash it.   *
+*                                                                     *
+***********************************************************************
+GETSYSIN STM  R0,R15,SYSINSAV
+         SR   R1,R1
+         ST   R1,SYSINERR         NO ERROR YET
+         SR   R3,R3               IN CASE WE ABORT EARLY, NEED IT ZEROD
+*  OPEN THE FILE AND LOCATE THE MEMBER REQUESTED
+         OPEN  (SYSIN,INPUT)
+         RDJFCB SYSIN             READ IN CASE WE NEED THE DSN FOR
+*                                 ERROR MESSAGES. WE READ IT AGAIN
+*                                 CLOSER TO THE GETMAIN FOR ALL THE
+*                                 OTHER VALUED WE NEED.
+         FIND  SYSIN,MEMBER,D     LOCATE THE MEMBER.
+         LTR   R15,R15
+         BZ    GETSYS01
+         MVC   GSWTO1+16(8),MYJOBNAM
+         MVC   GSWTO1+32(8),MEMBER
+         MVC   GSWTO1+54(44),JFCBDSNM
+GSWTO1   WTO   'MID008E xxxxxxxx:MEMBER ........ NOT FOUND IN ....+....X
+               1....+....2....+....3....+....4....'
+         LA    R0,=F'1'          RECORD AN ERROR
+         ST    R0,SYSINERR
+         B     SYSINXIT 
+*  EXTRACT BLK & REC LENGTH, BLKNEN IS NEETED TO GETMAIN A BUFFER
+*  AREA WE CAN READ DATA BLOCKS INTO.
+GETSYS01 RDJFCB SYSIN
+         LTR   R15,R15
+         BZ    GETSYS02
+         WTO2  'MID017E xxxxxxxx:RDJFCB FAILED FOR DD SYSIN'
+         LA    R0,=F'1'          RECORD AN ERROR
+         ST    R0,SYSINERR
+         B     SYSINXIT 
+GETSYS02 LH    R0,JFCBLKSI           GET BLOCK LENGTH
+         LH    R7,JFCLRECL           GET LRECLNGTH
+         GETMAIN  RU,LV=(0)          R1 = AREA ADDRS, R0 = STORG SIZE
+         ST    R1,SYSGMAIN           SAVE GETMAINED ADDRESS
+         LR    R8,R1                 R8 = AREA ADDRESS , R1 IS FREE
+         LR    R9,R0                 R9 = BLK LNGTH , R0 IS FREE
+         C     R15,=F'4'             TEST RETURN CODE FOR 4
+         BNE   GETSYS03              IF NOT 4, STORAGE WAS OBTAINED.
+         WTO   'MID009E xxxxxxxx:INSUFFICIENT STORAGE AVAILABLE'
+         LA    R0,=F'1'          RECORD AN ERROR
+         ST    R0,SYSINERR
+         B     SYSINXIT
+GETSYS03 SR    R3,R3                    LINE COUNTER
+         L     R5,=F'80'                LEN OF CARD
+         L     R2,ADDRRULS
+         USING RULETABL,R2
+         LR    R4,R2                 R4 IS ADDRESSING INTO TABLE
+         ST    R1,SAVESYS1           PUT USES REGS 1,14,15
+         MVI   SYSPRLIN,C' '            ERASE MESSAGE AREA       
+         MVC   SYSPRLIN+1(L'SYSPRLIN-1),SYSPRLIN
+         PUT   SYSPRINT,SYSPRLIN
+         MVC   SYSPRLIN(32),=CL32'**** MESSAGE RULES RELOADED ****'
+         PUT   SYSPRINT,SYSPRLIN
+         L     R1,SAVESYS1           PUT USES REGS 1,14,15
+         MVI   SYSPRLIN,C' '            ERASE MESSAGE JUST POSTED
+         MVC   SYSPRLIN+1(L'SYSPRLIN-1),SYSPRLIN
+* R8 IS GETMAINED ADDR, R9 IS BLKLEN, SO R9 BECOMES END OF BLOCK ADDR
+**         AR    R9,R8             R5=HI BLK ADDRS=STRG ADRS+BLKLNGTH
+**         SR    R9,R7             R5=LOOP LIMIT=HI BLK ADDRS-LRECL
+*     LOOP THROUGH ALL THE DATA BLOCKS
+*     R7 = LRECLNGTH  R8 = SAVED AREA ADDRESS
+NEXTBLK  LR    R6,R8                 SET R6 TO THE BEGINNING OF BLOCK
+         LA    R9,1                  ONE BYTE CHAR INCREMENT IN BXLE
+INITBLK  NI    0(R6),X'00'           RESET BLOCK TO BINARY ZEROS.
+         BXLE  R6,R9,INITBLK 
+         READ  D2,SF,SYSIN,(R8)   READ A BLOCK FROM MEMBER TO BUF R8
+         CHECK D2                    WAIT FOR IO TO COMPLETE
+         LR    R10,R8                R10= ADDRESS OF MEMBER BLOCK, REC1
+         LR    R9,R10                use r9 to address block end
+         AH    R9,JFCBLKSI           to block end (what we getmained)
+NEXTREC  CLI   0(R10),X'00'          SKIP NULLS AT END OF BLOCK
+         BE    SKIPBLNK
+*        * WE REPORT ON ALL LINES READ FROM THE MMPFnn MEMBER
+         MVC   SYSPRLIN(80),0(R10)
+         ST    R1,SAVESYS1           PUT USES REGS 1,14,15
+         PUT   SYSPRINT,SYSPRLIN
+         L     R1,SAVESYS1
+*        * BUT WE ONLY STORE REAL RULES IN THE MEMORY TABLE
+         CLI   0(R10),C'*'           SKIP COMMENT LINES
+         BE    SKIPBLNK
+         CLI   0(R10),C' '           SKIP EMPTY LINES
+         BE    SKIPBLNK
+* BUGFIX AS NOTED IN THE PROGRAM COMMENTS
+         CLC   0(7,R10),=CL7'ENDDECK'
+         BE    EOFMMBR
+*        * ... A REAL ONE, STORE IT AND UPDATE POINTER/COUNTER
+         MVC   0(80,R4),0(R10)          SAVE IN TABLE AREA
+         A     R4,=F'80'                MOVE TO NEXT POSITION
+         A     R3,ONE                   INC COUNTER
+         C     R3,MAXRULES              AT MAX ?
+         BNL   EOFMMBR                  YES, STOP NOW        
+SKIPBLNK AR    R10,R7                point to next record
+         CR    R10,R9                at end of buffer ???
+         BL    NEXTREC               no, get next record
+*SKIPBLNK BXLE  R10,R7,NEXTREC        GO THRU BLOCK RECORD BY RECORD.
+*                                    R7 IS THE LRECL
+         B     NEXTBLK               THEN ONTO NEXT BLOCK
+EOFMMBR  DS    0H
+         LH    R0,JFCBLKSI           BLKSIZE WAS LEN
+         L     R1,SYSGMAIN           AND ADDR OD MEMORY TO FREE
+         FREEMAIN RU,LV=(0),A=(1)
+SYSINXIT CLOSE (SYSIN)            CLOSE FILE
+         ST    R3,RULECNT               SAVE NUM RULES READ
+         DROP  R2
+*                   SPACE OUT THE SYSPRLIN AGAIN, REMOVE OUR RUBBISH
+         MVI   SYSPRLIN,C' '           
+         MVC   SYSPRLIN+1(L'SYSPRLIN-1),SYSPRLIN
+         PUT   SYSPRINT,SYSPRLIN
+         PUT   SYSPRINT,SYSPRLIN
+         CVD   R3,DECIMAL
+         UNPK  DECIMAL(3),DECIMAL+6(2)
+         OI    DECIMAL+2,C'0'
+         MVC   SYSINWTO+25(3),DECIMAL
+         MVC   SYSINWTO+16(8),MYJOBNAM
+         MVC   SYSINWTO+45(8),MEMBER  
+SYSINWTO WTO   'MID005I ........:... RULES READ FROM ........'
+         LM    R0,R15,SYSINSAV
+         L     R1,SYSINERR       IF ANY ERRORS REPORT BACK
+         BR    R5
+*
+*        D A T A   A R E A   B I T S
+*
+SYSINSAV DS    16F
+SYSGMAIN DS    F
+SYSINERR DS    F
+         EJECT
+* ********************************************************************
+* ONLY CALLED AT INITIALISATION. IT FINDS THE NAME OF THE BATCH JOB
+* OR STARTED TASK THAT IS RUNNING THIS PROGRAM AND STORES THE NAME
+* SO IT CAN BE USED TO PREFIX ALL OUR WTO AND WTOR MESSAGES.
+* ********************************************************************
+GETJOBID EQU     *
+         STM   R1,R6,SAVEGETJ        
+         L     R1,16             ADDR OF CVT 
+         L     R1,0(R1)          ADDR OF DISPATCH QUEUE
+         L     R1,12(R1)         ADDR OF CURRENT ASCB
+         L     R1,176(R1)        ADDR OF JOBNAME
+         MVC   MYJOBNAM(8),0(R1)  MOVE JOBNAME TO JOBNAME FIELD
+         CLC   MYJOBNAM(8),=CL8'INIT'
+         BNE   GETJIDEX          NOT A BATCH JOB, SO DONE
+         LA    R5,16               ADDR OF CVT POINTER
+         L     R6,0(R5)            ADDR OF CVT
+         L     R5,0(R6)            ADDR OF TCBS
+         L     R6,4(R5)            ADDR OF 2ND TCB
+         L     R5,180(R6)          ADDR OF JSCB
+         L     R6,260(R5)          ADDR OF JCT PREFIX
+         LA    R6,24(R6)           ADDR OF JOBNAME IN JCT
+         MVC   MYJOBNAM(8),0(R6)   STORE THE JOBNAME
+GETJIDEX LM    R1,R6,SAVEGETJ
+         BR    R5
+         EJECT
+         DS    0F
+***********************************************************************
+*                                                                     *
+*    CHECK THE MESSAGE IS ADDRESSED BY R1 TO SEE IF WE AUTOMATE IT    *
+*    R8 WILL HAVE THE LINE NUMBER IN CASE WE ARE TO DOM IT            *
+*                                                                     *
+*    AT MY SITE...                                                    *
+*       OFFSET 3 HAS THE *                                            *
+*       OFFSET 4 IS THE START OF THE MESSAGE ID                       *
+*                                                                     *
+*    IF YOU HAVE ADDED THE PATCH TO DISPLAY THE TIME BEFORE EACH      *
+*    MESSAGE, OR ANY OTHER PATCH THAT CHANGES THE DISPLAY FROM THE    *
+*    DEFAULT MVS3.8J DISPLAY, Y O U WILL HAVE TO ADJUST THE OFFSETS   *
+*    ACCORDINGLY.                                                     *
+*                                                                     *
+*    CMD CARDS - FULLY IMPLEMENTED                                    *
+*    LNK CARDS - FULLY IMPLEMENTED                                    *
+*                                                                     *
+***********************************************************************
+CHKAMSG  EQU   *
+         STM   R1,R7,CHKASAVE    SAVE REGISTERS WE TRASH
+* If debugging is on, log the message line being tested
+         CLC   DEBUGON(1),CHARY      IS DEBUG ON ?
+         BNE   CHKANDBG              NO DEBUG
+*** DEBUGGING CODE AVAILABLE IF NEEDED BY A USER TO DETERMINE THE
+*** MESSAGE OFFSETS THIER CUSTOMISED CONSOLE DISPLAY USES
+         MVI   SYSPRLIN,C' '
+         MVC   SYSPRLIN(L'SYSPRLIN-1),SYSPRLIN
+         MVC   SYSPRLIN(20),=CL20'....+....1....+....2'
+         PUT   SYSPRINT,SYSPRLIN
+         L     R1,CHKASAVE       WAS TRASHED BY PUT, GET IT BACK
+         MVC   SYSPRLIN(69),0(R1)   DEBUGGING TO GET TK3 ALIGNMENT
+         PUT   SYSPRINT,SYSPRLIN
+         L     R1,CHKASAVE       WAS TRASHED BY PUT, GET IT BACK
+CHKANDBG DS    0F
+         AIF    (&OSISTK3 EQ 1).SKIP01
+         CLI   3(R1),C'*'        IS THIS AN ACTION/ATTENTION MSG ?
+         AGO   .SKIP02
+.SKIP01  ANOP
+* MID: 2010/11/14 - updated to use flag at byte 4 for TK3
+*         CLI   13(R1),C'*'       IS THIS AN TK3 ACTION/ATTENTION MSG ?
+         CLI   3(R1),C'*'       IS THIS AN TK3 ACTION/ATTENTION MSG ?
+.SKIP02  ANOP
+* MID: 2009/10/13 - updated for BSPPLIOTS @ rather that * messages
+*        BNE   CHKAMSG4            NO, NOTHING TO DO FOR THIS ONE
+         BE    CHKDOWRK
+         AIF    (&OSISTK3 EQ 1).SKIP91
+         CLI   3(R1),C'@'        BSPPILOT ACTION/ATTENTION MSG ?
+         AGO   .SKIP92
+.SKIP91  ANOP
+* MID: 2010/11/14 - updated to use flag at byte 4 for TK3
+*         CLI   13(R1),C'@'       BSPPILOT TK3 ACTION/ATTENTION MSG ?
+         CLI   3(R1),C'@'       BSPPILOT TK3 ACTION/ATTENTION MSG ?
+.SKIP92  ANOP
+         BNE   CHKAMSG4            NO, NOTHING TO DO FOR THIS ONE
+*
+* ------- AN ATTENTION/ALERT MESSAGE, SEE IF IT IS AUTOMATED -----
+CHKDOWRK L     R2,ADDRRULS       ADDRESS RULE TABLE STORAGE
+         USING RULETABL,R2
+         L     R3,RULECNT        LOOP FOR # RULES
+         C     R3,=F'0'          IF NO RULES, JUST SKIP ALL THIS
+         BE    CHKAMSG4
+         LA    R5,RULETABL       R5 TO INDEX INTO TABLE
+* IF THE MESSAGE NUMBER MATCHES ONE IN OUR TABLE AUTOMATE IT
+         AIF    (&OSISTK3 EQ 1).SKIP03
+CHKAMSG1 CLC   0(8,R5),4(R1)     RULE TABLE ENTRY MATCH MSGID ?
+         AGO   .SKIP04
+.SKIP03  ANOP
+CHKAMSG1 CLC   0(8,R5),14(R1)    RULE TABLE ENTRY MATCH TK3 MSGID ?
+.SKIP04  ANOP
+         BE    CHKAMSG2            YES, PROCESS IT AND EXIT
+* AN EXTRA TEST, ID A WTOR THE MESSAGE NUMBER WILL BE OFFSET
+* BY THREE BYTES (FOR THE NN IN NN MSGNUM, THE REPLY NUMBER)
+         AIF    (&OSISTK3 EQ 1).SKIP05
+         CLC   0(8,R5),7(R1)     RULE TABLE ENTRY MATCH MSGID ?
+         AGO   .SKIP06
+.SKIP05  ANOP
+         CLC   0(8,R5),17(R1)     RULE TABLE ENTRY MATCH MSGID ?
+.SKIP06  ANOP
+         BC    EQ,CHKAMSG2         YES, PROCESS IT AND EXIT
+* MID: 2009/10/13 - updated for BSPPLIOTS @ rather that * messages
+         AIF    (&OSISTK3 EQ 1).SKIP95
+         CLC   0(8,R5),7(R1)     RULE TABLE ENTRY MATCH MSGID ?
+         AGO   .SKIP96
+.SKIP95  ANOP
+         CLC   0(8,R5),17(R1)     RULE TABLE ENTRY MATCH MSGID ?
+.SKIP96  ANOP
+         BC    EQ,CHKAMSG2         YES, PROCESS IT AND EXIT
+* 
+         A     R5,=F'80'           NO, MOVE TO NEXT RULE ENTRY
+         BCT   R3,CHKAMSG1             AND LOOP UNTIL NO MORE RULES
+         B     CHKAMSG4
+*
+* ------- WE HAVE FOUND A MESSAGE TO BE AUTOMATED HERE -----
+CHKAMSG2 DS    0F                                              
+         CLC   DEBUGON(1),CHARY      ARE WE IN DEBUG ONLY MODE ?
+         BNE   CHKANDB2              NO, WE ARE LIVE
+         MVI   SYSPRLIN,C' '         ELSE LOG RULE ONLY
+         MVC   SYSPRLIN(L'SYSPRLIN-1),SYSPRLIN
+         MVC   SYSPRLIN(70),70(R5) 
+         PUT   SYSPRINT,SYSPRLIN
+         B     CHKAMSG4          --- AND DONE ---
+* WHAT OFFSET IS PASSED TO THE TEMPLATE PROCESSOR DEPENDS UPON
+* WHETHER WE ARE PROCESSING A CMD OR LNK COMMAND.
+CHKANDB2 CLC   9(3,R5),=CL3'LNK' LNK COMMAND TYPE ?
+         BE    CHKALNK           YES, GO DO IT
+         CLC   9(3,R5),=CL3'CMD' CMD COMMAND TYPE ?
+         BE    CHKACMD           YES, GO DO IT
+         CLC   9(3,R5),=CL3'DOM' DOM COMMAND TYPE ?
+         BE    CHKADOM           YES, GO DO IT
+         CLC   9(3,R5),=CL3'CMK' DOM THEN CMD COMMAND TYPE ?
+         BE    CHKADOM2          YES, GO DO IT
+*
+*                                NO, ILLEGAL COMMAND TYPE
+         MVC   CHKAWTO0+47(3),9(R5)
+CHKAWTO0 WTO2  'MID018E jjjjjjjj:INVALID CMDTYPE XXX IGNORED'
+         B     CHKAMSG4          --- AND DONE ---
+*
+*----------------------------------------------------------
+* DO ALL THE MESSAGE EXPANSION IN HERE. HAVE TO MOVE IT
+* OUT OF WHERE IT WAS WORKING To A SEPERATE CODE BLOCK
+* SO THE LNK CAN USE IT ALSO WITHOUT BLOWING THE ADDRESSING
+* -- BUT IT BROKE WHEN MOVED, CODE THE SAME THO, THINKING
+*    ON USE DROP LOCATIONS AT THIS POINT... R2 WAY DOWN
+*
+* RESULTS IN
+*   FOR CMD THE S XXXX expanded
+*   FOR LNK THE PGMNAME PARMS expanded
+*----------------------------------------------------------
+STODATA  ST    R6,STOSAVR6
+         ST    R1,STOSAVR1
+         L     R6,ADDRGETW       R6 TO ADDRESS GWDSECT STORAGE
+         USING GWAREA,R6
+         AIF    (&OSISTK3 EQ 1).SKIP07
+         GWSTMSG MSG=4(R1),LEN=76     STORE MESSAGE IN GWDSECT
+         AGO    .SKIP08
+.SKIP07  ANOP
+         GWSTMSG MSG=14(R1),LEN=66    STORE TK3 MESSAGE IN GWDSECT
+.SKIP08  ANOP
+         GWSTMASK MASK=13(R5),LEN=67  STORE MASK IN GWDSECT
+         GWEXEC REG=R6                POPULATE THE TEMPLATE FROM MSG
+         GWGETTXT DEST=TMPLRSLT       GET THE POPULATED COMMAND
+         MVI   SYSCMD,C' '
+         MVC   SYSCMD(L'SYSCMD-1),SYSCMD
+         L     R7,GWRESLEN
+         ST    R7,SAVEGLEN            SAVE, NEEDED AFTER DSECT DROPPED
+         EX    R7,EXSTCMD
+         DROP  R6
+* ----- LOG THE ACTION WE ARE TAKING TO SYSPRINT ------
+         MVI   SYSPRLIN,C' '
+         MVC   SYSPRLIN(L'SYSPRLIN-1),SYSPRLIN
+         MVC   SYSPRLIN(2),=CL2'<<'
+         MVC   SYSPRLIN+2(78),4(R1)
+         PUT   SYSPRINT,SYSPRLIN
+         MVC   SYSPRLIN(2),=CL2'>>'
+         MVC   SYSPRLIN+2(78),SYSCMD
+         PUT   SYSPRINT,SYSPRLIN
+* RESTORE BRANCH BACK ADDRESS AND GO BACK
+         L     R1,STOSAVR1
+         L     R6,STOSAVR6
+         BR    R6
+STOSAVR6 DS    F
+STOSAVR1 DS    F
+EXSTCMD  MVC   SYSCMD(0),TMPLRSLT
+*
+*----------------------------------------------------------
+*
+* LINK TO THE MODULE REQUESTED WITH THE PARMSTR PROVIDED
+*
+* B E T A   C O D E
+*  IVE FORGOTTEN WHAT THE VALUES PASSED TO THE GW PROCS
+*  MEAN AND NEED TO REVIEW.
+*
+*----------------------------------------------------------
+* 2009/03/24 moved chkalnk from the mvc zeros line up to
+*            here and did the checking on DOM actions, AND
+*            do a DOM on any message handled by a LNK...
+*            ...whatever is linked to needs to handle it
+*            and if needed generate an action message, but 
+*            I must DOM any LNK action for my own use as
+*            with TAPEMAN if a LNK is done on a tapemount
+*            message I must have that mount message DOM'ed
+*            to avoid a loop with non-automated tapes, that
+*            is the mount message cannot remain outstanding.
+*            So... ASSUMPTION... is the user uses LNK the
+*            program linked to will handle any error conditions,
+*            the origional trigger message will be DOM'ed.
+CHKALNK  L     R7,CMDMADE        IF WE HAVE ISSUED COMMANDS THEN THE
+         C     R7,=F'0'          SCREEN WILLED HAVE ROLLED SO WE JUST
+         BNE   CHKAMSG4          DON'T KNOW WHERE THE LINE IS NOW.
+*                                AND CANNOT ISSUE COMMAND AS THIS
+*                                RULE TYPE RELIES ON THE MSG BEING
+*                                DOM'ED SO WE DON'T REPROCESS IT.
+         BAL   R7,DOMMSG         DOM IT, R8 HAS THE LINE NUMBER
+         MVC   LNKPROG(10),ZEROS   NULL FILL PROGRAM NAME ?
+         MVC   LNKPROG(8),13(R5)   SAVE PROGRAM TO LINK FOR EPLOC
+         BAL   R6,STODATA
+*                                  MOVE PARMS DOWN OVER PGM NAME
+*         MVC   SYSCMD(L'SYSCMD-9),SYSCMD+9
+*   LEAVE TWO BYTES IN THE FRONT FOR COMPATIBILITY (THE CALLED MODULE
+*   WILL HAVE AN EXTRA TWO BYTES IN FRONT (LEN?) IF CALLED FROM JCL
+*   USING THE EXEC CARD PARM='XX' AND WE WANT THE CALLED MODULE
+*   TO ALSO BE USABLE FROM JCL.
+         MVC   SYSCMD+2(L'SYSCMD-11),SYSCMD+9
+         L     R6,SAVEGLEN         I ASSUME 2BYTES ARE LEN, SO WE
+         STH   R6,SYSCMD           STUFF THE LEN IN FRONT
+* 2008/12/16 implemented the LINK code below
+         L     R6,SAVE+4           -- save pointer to caller savearea
+         ST    R6,R13CALLR         -- ...
+         ST    R13,SAVE+4          STORE OUR R13 IN SAVE AREA
+         LA    R13,SAVE            AND LINKED MODULE IS TO USE OURS
+         LINK  EPLOC=LNKPROG,ERRET=LNKPRME1,PARAM=(SYSCMD),VL=1
+         L     R13,SAVE+4          GET OURS BACK
+         L     R6,R13CALLR         -- restore origional pointer
+         ST    R6,SAVE+4           -- ...
+         B     CHKAMSG4       -- DONE, EXIT NOW --
+LNKPRME1 MVC   LNKPRME2+16(8),MYJOBNAM
+         MVC   LNKPRME2+37(8),LNKPROG
+LNKPRME2 WTO 'MID006E ........:LINK ERROR, ........ NOT FOUND'
+         B     CHKAMSG4       -- DONE, EXIT NOW --
+*
+* DOM ONLY, DO THE DOM AND EXIT
+CHKADOM  DS    0F
+         L     R7,CMDMADE        IF WE HAVE ISSUED COMMANDS THEN THE
+         C     R7,=F'0'          SCREEN WILLED HAVE ROLLED SO WE JUST
+         BNE   CHKAMSG4          DON'T KNOW WHERE THE LINE IS NOW.
+         BAL   R7,DOMMSG         ELSE, DOM IT, R8 HAS THE LINE NUMBER
+         B     CHKAMSG4          YES, -- DONE --
+*
+* DOM THEN COMMAND, DO THE DOM AND JUST FALL THRU TO COMMAND
+CHKADOM2 DS   0F
+         L     R7,CMDMADE        IF WE HAVE ISSUED COMMANDS THEN THE
+         C     R7,=F'0'          SCREEN WILLED HAVE ROLLED SO WE JUST
+         BNE   CHKAMSG4          DON'T KNOW WHERE THE LINE IS NOW.
+*                                AND CANNOT ISSUE COMMAND AS THIS
+*                                RULE TYPE RELIES ON THE MSG BEING
+*                                DOM'ED SO WE DON'T REPROCESS IT.
+         BAL  R7,DOMMSG          DOM IT, R8 HAS THE LINE NUMBER
+* FOR A CMD TYPE RULE THE TEMPLATE OFFSET IS 13 BYTES AND WE
+* ALWAYS ISSUE THE TEMPLATE COMMAND VIA SVC 34
+CHKACMD  BAL   R6,STODATA
+         BAL   R6,MGCR           ISSUE THE COMMAND
+*        B     CHKAMSG4          AND WE ARE DONE
+CHKAMSG4 LM    R1,R7,CHKASAVE    RESTORE REGISTERS WE TRASH
+         BR    R9
+         SPACE 2
+         DROP  R2                FREE RULE TABLE POINTER NOW MSGS
+*                                HAVE BEEN EXPANDED FOR ALL OPS
+         EJECT
+***********************************************************************
+* CALLED WHEN THERE IS A REQUEST TO LOAD RULES FROM A NEW MEMBER      *
+*   R1 - THE PARM ADDR OF THE MMPF=nn (IS TRASHED HERE)               *
+*   R5 - THE RETURN ADDRESS                                           *
+* NOTES: WE ARE ONLY EVER CALLED IF R1 ADDRESSES A MMPF= STRING SO    *
+*        WE DO NOT HAVE TO CHECK THAT HERE.                           *
+***********************************************************************
+NEWRULES DS    0F
+         ST    R5,NRRTN      SAVE OUR RETURN ADDRESS, WE CLOBER IT
+         MVC   MEMBER(8),=CL8'MMPF    '    BAD BUG, BEING CLOBBERED
+         MVC   MEMBER+4(2),5(R1)
+NRLOAD   SR    R1,R1         NO ERROR IN R1 YET
+         BAL   R5,GETSYSIN   GET THE NEW DECK
+         C     R1,=F'0'      NO ERROR ?
+         BE    NRULOK
+         CLC   MEMBERO(8),=CL8'        ' IF EMPTY, INIT FAILED
+         BNE   NRBAKOUT                  ELSE WE CAN TRY A BACKOUT
+* TRY FAILSAFE MMPF00
+         CLC   MEMBER(8),=CL8'MMPF00  '
+         BE    NRABORT                   ALREADY TRIED MMPF00
+         MVC   MEMBER(8),=CL8'MMPF00  '
+         WTO2  'MID014W jjjjjjjj:TRYING DEFAULT MEMBER MMPF00 NOW'
+         SR    R1,R1
+         BAL   R5,GETSYSIN   GET THE NEW DECK
+         C     R1,=F'0'      NO ERROR ?
+         BNE   NRABORT
+         WTO2  'MID015W jjjjjjjj:WARNING, USING DEFAULT OF MMPF00'
+         B     NRULOK
+*                            ELSE NOTHING ELSE TO TRY
+NRABORT  MVC   NRABORTW+37(8),MYJOBNAM
+NRABORTW WTO2  'MID012E xxxxxxxx:USE F xxxxxxxx,MMPF=nn TO SELECT A RULX
+               E MEMBER'
+         B     NREXIT
+NRBAKOUT MVC   MEMBER(8),MEMBERO
+         MVC   MEMBERO(8),=CL8'        '
+         WTO2  'MID016W jjjjjjjj:WARNING, TRYING PREVIOUS MEMBER'
+         B     NRLOAD
+NRULOK   MVC   MEMBERO(8),MEMBER      SAVE AS A BACKOUT
+NREXIT   L     R5,NRRTN
+         BR    R5
+NRRTN    DS    F             MY RETURN ADDRESS
+         EJECT
+***********************************************************************
+*                                                                     *
+*  DOM/UNHIGHLIGHT THE MESSAGE ON LINE NN (IN R8)                     *
+*                                                                     *
+*  ON ENTRY, R7 IS RETURN ADDRESS, R8 IS MSG LINE NUMBER TO DOM       *
+*                                                                     *
+*  Added an additional check, if we have issued any commands then     *
+*  the screen will have rolled so the message to be DOMed may have    *
+*  rolled up. So if we have issued any commands we do nothing here,   *
+*  we will wait for the next timer pop interval to see if we can DOM  *
+*  the message then.                                                  *
+*                                                                     *
+***********************************************************************
+DOMMSG   DS    0F
+         ST    R8,DOMSAV          WE ALTER THIS
+         ST    R1,DOMSAV2         SYSTEM CALLS ALTER THIS
+         C     R8,=F'18'          ONLY DOM UP TO LINE 18 (FROM 0),
+         BNL   DOMMSGEX           ANYTHING ABOVE IS COMMAND AREA
+         L     R1,CMDMADE         IF WE HAVE ISSUED COMMANDS THEN THE
+         C     R1,=F'0'           SCREEN WILLED HAVE ROLLED SO WE JUST
+         BNE   DOMMSGEX           DON'T KNOW WHERE THE LINE IS NOW.
+*                                 SO EXIT, FIND IT NEXT TIMER POP.
+         A     R8,=F'1'           LINE CNT IS FROM 0, ADD 1 TO GET LINE
+         BCTR  R8,0               PREPARE R8 AS INDEX
+         SLA   R8,3               ... 8 BYTES PER CONSOLE LINE ENTRY
+         A     R8,DOM#ADDR        GET ADDR OF ENTRY FOR THIS LINE
+         MODESET KEY=ZERO
+         L     R8,4(0,R8)         LOAD R8 WITH MESSAGE NO. FOR DOM
+         MODESET KEY=NZERO
+         DOM   MSG=(R8)
+DOMMSGEX L     R1,DOMSAV2
+         L     R8,DOMSAV
+         BR    R7
+DOMSAV   DS    F
+DOMSAV2  DS    F
+         EJECT
+         LTORG
+***********************************************************************
+*                                                                     *
+*                         C O N S T A N T S                           *
+*                                                                     *
+***********************************************************************
+EXSAVCRD MVC   0(0,R2),0(R1)       EX TO SAVE IN GETMAINED AREA
+ADDRRULS DS    F                   ADDRESS OF GETMAINED RULE TABLE
+PARMSADR DS    F                   SAVE ADDR OF PROGRAM PARM LIST
+ADDRGETW DS    F                   ADDRESS OF GETMAINED GWDESCT AREA
+SAVER1   DS    F                   SAVE AREA WHEN I PLAY WITH R1
+SCIOR9   DS    F                   SAVE WHEN USED IN BAL FOR CHKAMSG
+SCRIOSAV DS    8F                  SCREENIO RTN TRASHES ALL THESE, SAVE
+SAVESYS1 DS    5F                  ANOTHER REQD SAVE AREA FOR GETSYSIN
+SAVEMGCR DS    3F                  SAVE AREA FOR MGCR
+CHKASAVE DS    7F                  SAVE AREA FOR CHKAMSG
+MAXRULES DC    F'30'               DEFAULT IS MAX OF 30 RULES
+RULECNT  DS    F                   ACTUAL NUMBER OF RULES READ
+SAVEGETJ DS    6F                  SAVE AREA FOR GETJOB ID
+SAVEGLEN DS    F                   LENGTH OF RETURNED GWFIELD FOR LNK
+R13CALLR DS    F                   TO SAVE R13 FROM SAVE AREA WHEN I
+*                                    NEED TO ALTER IT DURING LINK
+MYJOBNAM DC    CL8' '              THIS JOB OR STC NAME FOR MSGS
+LNKPROG  DS    CL8                 PROGRAM NAME TO PASS LINK EPLOC=
+ZEROS    DC    F'0'                SOME ZEROS TO TERMINATE PROGRAM NAME
+         DC    F'0'
+TMPLRSLT DS    CL81                TEMPLATE RESULT AREA, GETWORDS
+MEMBER   DC    CL8'MMPF00  '       RULESET MEMBER NAME, MUST BE A LEGAL
+*                                  NAME (IE: NOT SPACES), THIS IS THE
+*                                  DEFAULT IF ONE IS NOT PROVIDED.
+MEMBERO  DC    CL8' '              MUST BE SPACES INITIALLY, WE SAVE A
+*                                  OLD MEMBER NAME FOR FALLBACK HERE
+*                                  IF A NEW MEMBER NAME IS REJECTED...
+*                                  SO IF SPACES AT THE START AND A 
+*                                  MEMBER LOOKUP FAILS WE KNOW TO EXIT
+DEBUGON  DC    CL1'N'              DEFAULT IS DEBUGGING OFF
+CHARY    DC    CL1'Y'              USED TO REPLACE/COMAPRE ABOVE
+DOM#ADDR DS    F                   ADDRESS OF DOM # TABLE FOR THIS CNSL
+OLDCONS  DC    F'1'                PREVIOUS CONSOLE NUMBER
+CMDMADE  DS    F                   USED TO SEE IF SAFE TO DOM
+* KEEP THE BELOW FOUR EXACTLY IN PLACE, THEY ARE USED
+* IN THE SVC 34 ADDRESSING BUFFER.
+*   DC 0D'0',XL2'CMDLEN',XL2'00',C'COMMAND TEXT'
+CONSOLE  DC    F'1'                CONSOLE TO BE LOOKED AT
+CMDLEN   DC    2H'0'               HALFWORD LENGTH INDICATOR   
+CMDBUF   DC    CL78' '             SVC 34 COMMAND BUFFER       
+CMDEND   DC    CL2' '              END OF COMMAND BUFFER       
+* END SVC34 BUFFER
+SYSCMD   DC    CL80' '             EXPANDED COMMAND/PARM TEXT RESULT
+EDITFLG  DC    X'00'               TPUT EDIT FLAG
+PAD      DC    C' '                PAD CHARACTER FOR MOVEBUFF MVCL
+ONE      DC    F'1'                THE NUMBER ONE, FOR ADDITIONS
+DECIMAL  DC    D'0'
+DEBUGR1  DS    F
+         ORG
+BLANKS   DC    CL80' '
+         SPACE 5
+***********************************************************************
+*                                                                     *
+*               DISPLAY SCREEN - IMAGE BUFFER SECTION                 *
+*                                                                     *
+***********************************************************************
+BUF      DC    21CL80' '          OPERATORS SCREEN BUFFER
+         DC    14CL80' '          PLUS EXTRA FOR 3278-4
+         SPACE 5
+         LTORG
+         SPACE 5
+***********************************************************************
+*                                                                     *
+*               COMM AREA FIELDS NEEDED                               *
+*                                                                     *
+***********************************************************************
+COMM     DS    F                  COMM AREA
+TIMERECB DS    F                  THE STIMER ECB
+ECBLIST  DS    3F                 ECB LIST FOR STIMER,COM,WTOR
+TIMEXPRM DS    F                  TIMER PARAMETER
+SECS15   DC    CL8'00001500'      FIFTEEN SECONDS
+MMPFCMD  DC    CL5'MMPF=',X'00'   NEWRULES COMMAND
+EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
+         EJECT   
+***********************************************************************
+*                  CONSOLE TABLE LIST AREA                            *
+***********************************************************************
+         DS    0F
+UCMTAB   DS    F
+         DS    20F                PROVIDE SPACE FOR 20 UCM ADDRESSES
+UCMTABE  EQU   *
+NUMUCMS  DS    H
+***********************************************************************
+*                   FILE I-O DCBS AND BUFFERS                         *
+***********************************************************************
+SYSPRINT DCB   DDNAME=SYSPRINT,DSORG=PS,MACRF=PM,LRECL=132,            X
+               BLKSIZE=132,RECFM=FB
+SYSPRLIN DC    CL132' '
+*
+*
+*   D C B   B I T S   F O R   S Y S I N   P L A Y I N G
+*
+SYSIN    DCB   DDNAME=SYSIN,DSORG=PO,MACRF=R,EODAD=EOFMMBR,EXLST=EXLST
+EXLST    DS    0F
+         DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DS    0CL176
+         IEFJFCBN
+         EJECT
+***********************************************************************
+*                                                                     *
+*                           E Q U A T E S                             *
+*                                                                     *
+***********************************************************************
+M2BUFLEN EQU   21*80            LENGTH OF BUFFER 3278-2
+         EJECT
+         SPACE 3
+         CVT   DSECT=YES
+         SPACE 3
+         IKJTCB
+         SPACE 3
+         IHAPSA
+         SPACE 3
+         IKJTSB
+         SPACE 3
+         SPACE 3
+         IHAASCB
+         EJECT
+         IEERDCM
+         EJECT
+         IEECDCM 
+         EJECT
+         IEECUCM FORMAT=NEW 
+         EJECT
+         IKJPSCB 
+***********************************************************************
+*                                                                     *
+*             MORE COMM AREA FIELDS NEEDED                            *
+*                                                                     *
+***********************************************************************
+         IEZCOM                      * COMM AREA
+         IHAECB                      * ECB
+         DSECT
+         IEZCIB                      * CIB
+         DSECT
+***********************************************************************
+*                                                                     *
+*             DSECT NEEDED TO LINK TO THE GETWORDS MODULE             *
+*                                                                     *
+***********************************************************************
+         GWDSECT DSECT='YES'         * MY GETWORDS DSECT AREA
+***********************************************************************
+*
+*
+***********************************************************************
+*   THE RULE TABLE AREA. THIS IS A GETMAINED AREA OF RULETLEN         *
+*   SO YOU CAN INCREASE UP TO THE 4K LIMIT AS NEEDED                  *
+***********************************************************************
+         DSECT
+RULETABL DS    CL2400                30*80
+RULETLEN EQU   *-RULETABL
+         END   MMPF
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=INSTALL.MID.MMPF.LOADLIB(MMPF),DISP=SHR
+//
+./ ADD NAME=MMPFEX00
+* --------------------------------------------------------------------
+* MMPFEX - MMPF Extesion 
+* ruleset called by MMPFEX when invoked from a LNK from MMPF
+*
+* Uses the same SYSIN DD as MMPF (is triggered from MMPF so has the
+* same environment) so this control file must be in the same PDS
+* library as the MMPF ruleset resides.
+* --------------------------------------------------------------------
+*
+* 00CINTREQ - Interrupt event on the 00C card reader
+* On my windows instance of hercules the card reader goes into
+* an interrupt state until a valid JCL card is submitted through
+* it (it doesn't use the socket interface). This rule will on
+* that interrupt event submit dummy.jcl (just a comment card)
+* with the EOF parm to reset the card reader.
+* MMPF event is IEE001A
+RULE:00CINTREQ
+LNK devinit 00C dummy.jcl eof
+* back to listening on port 3505 only on my linux server
+*LNK devinit falcon:3505 sockdev ascii trunc eof
+*
+* Always end the control file with ENDDECK
+ENDDECK
+./ ADD NAME=MMPFEX
+//MARKA JOB (0),'ASSEMBLE MMPFEX',CLASS=A,MSGCLASS=A
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+// DD DISP=SHR,DSN=MVSSRC.SYM101.F01
+//ASM.SYSIN DD *
+         TITLE 'MMPFEX --  MMPFV2 EXTENSION --  VERSION 0.2'
+         PRINT NOGEN
+***********************************************************************
+*                                                                     *
+* MMPFEX -                                                            *
+*     PART OF THE MMPF UTILITY BY MARK DICKINSON                      *
+*                                                                     *
+* THIS IS AN EXTENSION TO THE MMPF TOOL I NEEDED TO CREATE TO HANDLE  *
+* MORE COMPLEX SITUATIONS THAN JUST HAVING A STANDARD RESPONSE TO     *
+* AN EVENT.                                                           *
+*  -- IT ALLOWS MULTIPLE ACTIONS FOR AN EVENT                         *
+*  -- IT ALLOWS DIFFENET ACTIONS TO BE TAKEN FOR THE SAME MESSAGE     *
+*     NUMBER WITHOUT THE NEED FOR ANY COMPLEX IF/ELSE RULES NEEDED    *
+*     AS A UNIQUE RULE KEY CAN BE GENERATED USING EXISTING MMPF       *
+*     FUNCTIONS WHEN TRIGGERING THIS PROGRAM                          *
+*     IE: THE MESSAGES                                                *
+*         IEE001A 00C,INT REQ,.....                                   *
+*         IEE001A 00D,INT REQ,.....                                   *
+*        CAN BE PASSED TO THIS FROM MMPF WITH &WORD1&WORD2 RESULTING  *
+*        IN TWO UNIQUE RULE KEYS                                      *
+*         IEE001A00C                                                  *
+*         IEE001A00D                                                  *
+*        SO DIFFERENT HANDLING CAN BE DONE WITHOUT ANY LOGIC SUCH AS  *
+*        IF 00C DO STEP A, IF 00D DO STEP B ETC.                      *
+*                                                                     *
+* THIS SHOULD ONLY EVER BE INVOKED VIA A MMPF RULE, ALTHOUGH IT       *
+* WILL PERFECTLY WELL FROM BATCH FOR TESTING.                         *
+*                                                                     *
+* ONLY EXPECT ONE PARM OF 60 BYTES MAX                                *
+* PARM MUST BE                                                        *
+* ....+....1....+....2....+....3....+....4....+....5....+....6        *
+* NN XXXXXXXXXX                                                       *
+*    NN        - THE NAME OF THE MMPFEXnn MEMBER TO PARSE             *
+*    XXXXXXXXX - ANY TEXT THAT MUST MATCH THE TEXT IN THE RULE KEY    *
+*                EXACTLY. VARIABLE LENGTH BUT ENTIRE PARM MUST NOT    *
+*                EXCEED 60 BYTES.                                     *
+*                                                                     *
+*                                                                     *
+* THE SYSIN DATASET PROVIDED (IN THE CASE OF RUNNING UNDER MMPF IT    *
+* WILL SHARE THE MMPF SYSIN DD ALLOCATED) MUST CONTAIN A MEMBER       *
+* NAMED MMPFEXnn WHERE nn MATCHED THE NN ON THE PARM CARD.            *
+*                                                                     *
+* THE SYSIN MEMBER CARD RULES ARE                                     *
+* * CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC                                 *
+* RULE:XXXXXXXXX                                                      *
+* CMD YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY                                 *
+* LNK YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY                                 *
+* RULE:XXXXXXXXX                                                      *
+* CMD YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY                                 *
+* LNK YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY                                 *
+* RULE:XXXXXXXXX                                                      *
+* WTO SOME DISPLAY TEXT                                               *
+* ENDDECK                                                             *
+*                                                                     *
+* (1) * - INDICATES A COMMENT LINE, CCCCCC... IS ANY TEXT             *
+* (2) RULE:XXXXXXXXX - INDICATES THE START OF A RULE ENTRY, THE       *
+*     XXXXXXXXX IS TESTED FOR A MATCH AGAINST THE RULE KEY PROVIDED   *
+*     ON THE PROGRAM PARM                                             *
+* (3) CMD INDICATES THAT COMMAND YYYYYY... IS TO BE ISSUED AS A       *
+*     CONSOLE COMMAND IF IT IS WITHIN A RULE MATCH                    *
+* (4) LNK INDICATES HERCCMD IS TO BE INVOKED WITH THE YYYYYYYYY....   *
+*     USED AS THE PROGRAM PARM TO HERCCMD                             *
+* (5) WTO WILL WRITE THE MESSAGE TEXT TO THE CONSOLE, CAN BE USED     *
+*     TO PROVIDE SOME SORT OF OPERATOR/USER HELP; ADDED TO REMIND ME  *
+*     TO START THE TK3 TELNET SESSION :-)                             *
+* (6) ENDDECK, NEEDS TO BE THE LAST DATA CARD IN THE MEMBER           *
+* (-) MULTIPLE CMD AND LNK CARDS CAN BE BUNDLED UNDER A RULE ENTRY    *
+*     THERE MAY BE UP TO 5 IN TOTAL                                   *
+* (-) IF MORE THAN ONE RULE MATCH IS FOUND COMMANDS ARE PROCESSED     *
+*     FOR THEM ALL                                                    *
+*                                                                     *
+* NOTE: INVALID CARDS WILL BE QUIETLY DISCARDED WITHOUT NOTIFICATION  *
+*                                                                     *
+* KNOWN ISSUES                                                        *
+* (A) NOT AN ISSUE, IT WILL ABEND S013-BC IF YOU USE A SYSIN DD *     *
+*     CARD STREAM. THAT IS ACCEPTABLE AS WE ARE TRYING TO OPEN A      *
+*     DSORG=PO DATASET SO WHAT DO YOU EXPECT !.                       *
+*     IEC141I 013-BC,IGG0199G,MARKA,TESTIT9,SYSIN                     *
+*     WOULD BE NICE TO TRAP IT, BUT I DON'T                           *
+*     TRAPS ON A DSORG=PS OK BUT WILL ABEND ON THE CARD STREAM.       *
+*     WILL NOT BE FIXED, IT IS DESIGNED TO BE CALLED ONLY FROM MMPF   *
+*     WHICH ALLOCATES THE SYSIN, AS A PDS. JUST DON'T RUN StANDALONE. *
+*                                                                     *
+* CHANGE HISTORY                                                      *
+* 0.1 - 2009/04/25 created the extension for use by MMPF              *
+* 0.2 - 2010/12/18 added the option to WTO in the control deck        *
+*                                                                     *
+***********************************************************************
+* I NEED A CUSTOMISED WTO, INSERTING JOBNAMES INTO EACH WTO TO
+* BE DISPLAYED USED UP ALL MY SYMBOL POOL, SO DO IT WITHIN THE
+* COPY OF THE WTO MACRO NOW.
+         MACRO
+&NAME    WTO2  &MESG
+         LCLC  &L1,&L2,&L3
+&L1      SETC  '$'.'&SYSNDX'.'A'
+&L2      SETC  '$'.'&SYSNDX'.'B'
+&L3      SETC  '$'.'&SYSNDX'.'C'
+         CNOP  0,4
+&NAME    MVC   *+22(8),MYJOBNAM
+         BAL   1,&L3                BRANCH AROUND MESSAGE
+&L1      DC    AL2(&L2-&L1)        TEXT LENGTH
+         DC    B'0000000000000000' MCS FLAGS
+         DC    C&MESG              MESSAGE TEXT
+&L2      EQU   *
+&L3      DS    0H
+         SVC   35
+         MEND
+         EJECT
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*              AFTER COMPARE INSTRUCTIONS
+GT       EQU   2 -                 A HIGH
+LT       EQU   4 -                 A LOW
+NE       EQU   7 -                 A NOT EQUAL B
+EQ       EQU   8 -                 A EQUAL B
+GE       EQU   11 -                A NOT LOW
+LE       EQU   13 -                A NOT HIGH
+         EJECT
+MMPFEX   CSECT
+         B     100(R15)           BRANCH AROUND SAVE AREAS
+         DC    CL9'MMPFEX'        IDENTIFIER
+         DC    CL9'&SYSDATE'
+         DC    CL6'&SYSTIME'      
+SAVE     DC    18F'0'             SAVE AREA
+SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
+         STM   R14,R12,12(R13)    SAVE REGISTERS
+         LR    R12,R15            R12 = ADDR OF ENTRY POINT
+         USING MMPFEX,R12         ADDRESABILITY TO CSECT 
+         LA    R11,SAVE           R11 = ADDR OF OUR SAVE AREA
+         ST    R13,SAVE+4         SAVE POINTER TO CALLERS SAVE AREA
+         ST    R11,8(R13)         SAVE PTR TO OUR SAVE AREA IN CALLER'S
+         LR    R13,R11            R13 = ADDR OF OUR SAVE AREA
+         SPACE 3
+***********************************************************************
+* ONLY EXPECT ONE PARM OF 60 BYTES MAX                                *
+* PARM MUST BE                                                        *
+* ....+....1....+....2....+....3....+....4....+....5....+....6        *
+* NN XXXXXXXXXX                                                       *
+*    NN        - THE NAME OF THE MMPFEXnn MEMBER TO PARSE             *
+*    XXXXXXXXX - ANY TEXT THAT MUST MATCH THE TEXT IN THE RULE KEY    *
+*                EXACTLY. VARIABLE LENGTH BUT ENTIRE PARM MUST NOT    *
+*                EXCEED 60 BYTES.                                     *
+***********************************************************************
+         ST    R1,PARMSADR        SAVE ADDR OF PARM LIST
+         BAL   R5,GETJOBID        GET OUT JOB/TASK NAME FOR MSGS
+         L     R1,PARMSADR        NOW WE HAVE A JOBNAME, CHECK PARMS
+
+         L     R1,0(,R1)           POINT TO PARM
+         LH    R0,0(,R1)           GET LENGTH OF PARM
+         STH   R0,PARMLEN          SAVE PARM LEN
+         LTR   R0,R0               IF ZERO THEN NO PARM
+         BZ    NOPARM
+*        LR    R2,R1              ADDR LIST NOW IN R2      
+*        L     R5,0(,R2)          USE REG5 TO ADDRESS THE PARM
+*        WTO   MF=(E,(R5))        WTO PARM RECIEVED
+*  WE NEED A FULL 60 BYTE PARM, SPACE FILL IF NEEDED
+*  PLANB - TARGET IS A DC SPACE FILLED SO JUST MOVE PARMLEN
+*         MVC   PARMDATA(60),2(R1) SAVE PARM DATA
+         SR    R5,R5
+         LH    R5,PARMLEN
+         S     R5,ONE     DEC BY 1, DONT WANT LEN FIELD COUNTED
+         EX    R5,EXPRMSAV           SAVE PARM DATA FOR LEN IN R0
+         MVC   MEMBER+6(2),PARMDATA  SAVE NN PART IN MEMBER NAME
+         B     GOTPARM
+         SPACE 1
+EXPRMSAV MVC   PARMDATA(0),2(R1)
+PARMLEN  DC    F'0'
+         SPACE 1
+NOPARM   WTO2  'MID020E xxxxxxxx:NO PARM GIVEN TO MMPFEX'
+         B     ALLDONE
+GOTPARM  CNOP  0,4
+         BAL   R5,GETSYSIN        LOAD THE RULE LIST
+         L     R3,SYSINERR
+         C     R3,ZEROS           ANY ERROR ON SYSIN PROCESSING
+         BNE   ALLDONE               YES, EXIT, WTOS ALREADY DONE
+         L     R3,RULECNT         WERE ANY RULES FOUND
+         C     R3,ZEROS           
+         BNE   INITOK                YES, SOMETHING TO DO
+         MVC   GOTPARME+16(8),MYJOBNAM   NO, ERROR WTO NEEDED
+         MVC   GOTPARME+44(30),PARMDATA+3
+GOTPARME WTO   'MID021E xxxxxxxx NO MMPFEX RULE FOR ....+....1....+....X
+               2....+....3'
+         B     ALLDONE
+INITOK   DS    0F
+***********************************************************************
+*                                                                     *
+*   - EXECUTE ALL THE COMMANDS FOUND                                  *
+*     VALIDITY CHECKING OF LNK AND CMD DONE WHEN SYSIN IS READ        *
+*                                                                     *
+***********************************************************************
+         LA    R4,CMDTABLE       ADDRESS CMDTABLE
+*                                R3 STILL HAS RULECNT
+NEXTCMD  MVC   SYSCMD(68),4(R4)  STORE COMMAND TO PLAY WITH
+         CLC   0(3,R4),=CL3'LNK' IS IT A LINK
+         BE    ISALNK
+         CLC   0(3,R4),=CL3'WTO' IS IT A WTO
+         BE    ISAWTO
+ISACMD   BAL   R5,MGCR           ISSUE THE COMMAND
+         B     ISANEXT           ANY MORE ?
+ISALNK   BAL   R5,LINKDO         ISSUE THE HERCCMD LINK
+         B     ISANEXT           ANY MORE ?
+ISAWTO   BAL   R5,WTODO          OUTPUT THE WTO
+*   AND  B     ISANEXT           ANY MORE ?
+ISANEXT  A     R4,=F'80'         POINT TO NEXT CMD ADDR
+         S     R3,ONE            DEC RULES LEFT COUNTER
+         C     R3,=F'0'          ANY LEFT ?
+         BH    NEXTCMD           YES, DO THE NEXT
+         B     ALLDONE           WE HAVE FINISHED
+***********************************************************************
+*                                                                     *
+*                            ALL DONE - EXIT                          *
+*                                                                     *
+***********************************************************************
+ALLDONE  CNOP  0,4                                                  
+         L     R13,SAVE+4         RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,0
+         BR    R14                RETURN TO SYSTEM
+         EJECT
+***********************************************************************
+*                                                                     *
+* Open SYSIN, locate the member name we are interested in, read       *
+* through the member searching for a matching ruleset, if found       *
+* store up to maxrules commands into the cmdtable for that rule.      *
+*                                                                     *
+*   R3 - COUNTER OF RULE COMMANDS FOUND                               *
+*   R4 - TABLE AREA ADDRESSING FOR CMDTABLE OFFSET                    *
+*   R6 - ADDRESSING THROUGH THE IO BLOCK                              *
+*   R7 - LRECL                                                        *
+*   R8 - GETMAINED ADDR                                               *
+*   R9 - BLKLEN                                                       *
+*                                                                     *
+***********************************************************************
+GETSYSIN DS   0F
+         STM  R0,R15,SYSINSAV
+         SR   R3,R3               IN CASE WE ABORT EARLY, NEED IT ZEROD
+         ST   R3,SYSINERR         AS ITS 0 ALREADY, NO ERRORS SET ALSO
+         LA   R4,CMDTABLE         R4 ADDRESSES INTO CMDTABLE
+*  OPEN THE FILE AND LOCATE THE MEMBER REQUESTED
+         OPEN  (SYSIN,INPUT)
+         RDJFCB SYSIN             OPEN DOESN'T ERROR ON MISSING DD SO
+*                                 USE RDJFCP (ALSO NO ERROR !) TO GET
+*                                 INFO, IF NULL ASSUME NO OPEN, WE 
+*                                 WILL CHECK IT IS A PDS ANYWAY
+         CLI   JFCDSORG,JFCORGPO Partioned dataset ?
+         BE    GETSYS00
+         WTO2  'MID022E xxxxxxxx SYSIN DD NOT A PDS OR DD MISSING'
+         L     R4,ONE             STORE WE HAD AN ERROR
+         ST    R4,SYSINERR
+         B     SYSINXI2           DIDNT OPEN, NO DD, SKIP CLOSE REQUEST
+GETSYS00 FIND  SYSIN,MEMBER,D     LOCATE THE MEMBER.
+         LTR   R15,R15
+         BZ    GETSYS01
+         MVC   GSWTO1+16(8),MYJOBNAM
+         MVC   GSWTO1+32(8),MEMBER
+GSWTO1   WTO   'MID023E xxxxxxxx:MEMBER ........ NOT FOUND FOR MMPFEX'
+         L     R4,ONE             STORE WE HAD AN ERROR
+         ST    R4,SYSINERR
+         B     SYSINXIT          EXIT IMMEDIATELY
+*  EXTRACT BLK & REC LENGTH, BLKNEN IS NEETED TO GETMAIN A BUFFER
+*  AREA WE CAN READ DATA BLOCKS INTO.
+GETSYS01 CNOP  0,4
+*GETSYS01 RDJFCB SYSIN
+*         LTR   R15,R15
+*         BZ    GETSYS02
+*         WTO2  'MID028E xxxxxxxx:RDJFCB FAILED FOR DD SYSIN'
+*         B     SYSINXIT
+GETSYS02 LH    R0,JFCBLKSI           GET BLOCK LENGTH
+         LH    R7,JFCLRECL           GET LRECLNGTH
+         GETMAIN  RU,LV=(0)          R1 = AREA ADDRS, R0 = STORG SIZE
+         ST    R1,SYSGMAIN           SAVE GETMAINED ADDRESS
+         LR    R8,R1                 R8 = AREA ADDRESS , R1 IS FREE
+         LR    R9,R0                 R9 = BLK LNGTH , R0 IS FREE
+         C     R15,=F'4'             TEST RETURN CODE FOR 4
+         BNE   GETSYS03              IF NOT 4, STORAGE WAS OBTAINED.
+         WTO   'MID024E xxxxxxxx:INSUFFICIENT STORAGE AVAILABLE'
+         L     R4,ONE             STORE WE HAD AN ERROR
+         ST    R4,SYSINERR
+         B     SYSINXIT
+GETSYS03 SR    R3,R3                 RULES FOUND, START AT ZERO
+         L     R5,=F'80'             DATA CARDS SHOULD BE 80 BYTES
+NEXTBLK  LR    R6,R8                 SET R6 TO THE BEGINNING OF BLOCK
+         LA    R9,1                  ONE BYTE CHAR INCREMENT IN BXLE
+INITBLK  NI    0(R6),X'00'           RESET BLOCK TO BINARY ZEROS.
+         BXLE  R6,R9,INITBLK 
+         READ  D2,SF,SYSIN,(R8)   READ A BLOCK FROM MEMBER TO BUF R8
+         CHECK D2                    WAIT FOR IO TO COMPLETE
+         LR    R10,R8                R10= ADDRESS OF MEMBER BLOCK, REC1
+         LR    R9,R10                use r9 to address block end
+         AH    R9,JFCBLKSI           to block end (what we getmained)
+NEXTREC  CLI   0(R10),X'00'          SKIP NULLS AT END OF BLOCK
+         BE    SKIPBLNK
+         CLI   0(R10),C'*'           SKIP COMMENT LINES
+         BE    SKIPBLNK
+         CLI   0(R10),C' '           SKIP EMPTY LINES
+         BE    SKIPBLNK
+* BUGFIX AS NOTED IN THE PROGRAM COMMENTS
+         CLC   0(7,R10),=CL7'ENDDECK'
+         BE    EOFMMBR
+*   CLC   0(5,R10),=CL5'RULE:'  NEW RULE CARD IS LEGAL
+* OPPS, A MISSING : IN THE CONTROL FILE AND IT STORES THE
+* COMMANDS FOR THE NEXT RULE AS WELL. 
+* NOW ONLY CHECK FOR RULE RATHER THAN RULE: TO BE A LITTLE
+* BIT SAFER.
+         CLC   0(4,R10),=CL4'RULE'   NEW RULE CARD IS LEGAL
+         BE    RULEOK
+         CLC   0(3,R10),=CL3'LNK'    LNK IS LEGAL
+         BE    RECOK
+         CLC   0(3,R10),=CL3'CMD'    CMD IS LEGAL
+         BE    RECOK
+         CLC   0(3,R10),=CL3'WTO'    WTO IS LEGAL
+         BE    RECOK
+*                                    ANYTHING ELSE IS ILLEGAL
+         B     SKIPBLNK
+*        IS IT A RULE CARD WE NEED TO TEST
+         DS    0F
+RULEOK   CLC   PARMDATA+3(60),5(R10)  RULE KEY MATCH PARMDATA ?
+         BNE   RULEOFF               NO, IF NEW RULE OR NOMATCH N
+         MVI   INRULE,C'Y'           YES, DOING A NEW RULE
+         B     SKIPBLNK              NOTHING ELSE FOR THIS LINE
+RULEOFF  MVI   INRULE,C'N'           RULE OFF, NOT IN MATCH
+         B     SKIPBLNK              NOTHING ELSE FOR THIS LINE
+*        * ... A REAL ONE, STORE IT AND UPDATE POINTER/COUNTER
+RECOK    CLI   INRULE,C'Y'           DOING A RULE ?
+         BNE   SKIPBLNK              NO SO SKIP OVER
+*                                    YES NEED TO STORE IT
+         MVC   0(80,R4),0(R10)          SAVE IN TABLE AREA
+         A     R4,=F'80'                MOVE TO NEXT POSITION
+         A     R3,ONE                   INC COUNTER
+         C     R3,MAXRULES              AT MAX ?
+         BNL   EOFMMBR                  YES, STOP NOW        
+SKIPBLNK AR    R10,R7                point to next record
+         CR    R10,R9                at end of buffer ???
+         BL    NEXTREC               no, get next record
+         B     NEXTBLK               THEN ONTO NEXT BLOCK
+EOFMMBR  DS    0H
+         LH    R0,JFCBLKSI           BLKSIZE WAS LEN
+         L     R1,SYSGMAIN           AND ADDR OD MEMORY TO FREE
+         FREEMAIN RU,LV=(0),A=(1)
+SYSINXIT CLOSE (SYSIN)            CLOSE FILE
+SYSINXI2 ST    R3,RULECNT               SAVE NUM RULES READ
+         LM    R0,R15,SYSINSAV
+         BR    R5
+*
+*        D A T A   A R E A   B I T S
+*
+SYSINSAV DS    16F
+SYSGMAIN DS    F
+SYSINERR DS    F
+         EJECT
+* ********************************************************************
+* ONLY CALLED AT INITIALISATION. IT FINDS THE NAME OF THE BATCH JOB
+* OR STARTED TASK THAT IS RUNNING THIS PROGRAM AND STORES THE NAME
+* SO IT CAN BE USED TO PREFIX ALL OUR WTO AND WTOR MESSAGES.
+* ********************************************************************
+GETJOBID EQU     *
+         STM   R1,R6,SAVEGETJ        
+         L     R1,16             ADDR OF CVT 
+         L     R1,0(R1)          ADDR OF DISPATCH QUEUE
+         L     R1,12(R1)         ADDR OF CURRENT ASCB
+         L     R1,176(R1)        ADDR OF JOBNAME
+         MVC   MYJOBNAM(8),0(R1)  MOVE JOBNAME TO JOBNAME FIELD
+         CLC   MYJOBNAM(8),=CL8'INIT'
+         BNE   GETJIDEX          NOT A BATCH JOB, SO DONE
+         LA    R5,16               ADDR OF CVT POINTER
+         L     R6,0(R5)            ADDR OF CVT
+         L     R5,0(R6)            ADDR OF TCBS
+         L     R6,4(R5)            ADDR OF 2ND TCB
+         L     R5,180(R6)          ADDR OF JSCB
+         L     R6,260(R5)          ADDR OF JCT PREFIX
+         LA    R6,24(R6)           ADDR OF JOBNAME IN JCT
+         MVC   MYJOBNAM(8),0(R6)   STORE THE JOBNAME
+GETJIDEX LM    R1,R6,SAVEGETJ
+         BR    R5
+         EJECT
+***********************************************************************
+* Trims leading spaces off the command buffer and shifts
+* it left as needed.
+* Returns the actual text length in R1
+*
+* CALLED WITH BAL R6 (FROM ROUTINES ALREADY CALLED USING R5 SO
+* DON'T TOUCH R5 HERE).
+***********************************************************************
+GETSTRLN LA    R3,79              AVOID INFINITE LOOP
+BLNKLOOP CLI   SYSCMD,C' '        LEADING BLANK(S)?
+         BNE   OKCMD              NO, OK TO USE THIS CMD
+         MVC   SYSCMD(L'SYSCMD-1),SYSCMD+1  SHIFT COMMAND TEXT LEFT
+         MVI   SYSCMD+L'SYSCMD-1,C' '  BLANK OUT OLD LAST CHARACTER
+         BCT   R3,BLNKLOOP        CHECK FOR ANOTHER BLANK
+OKCMD    LA    R3,SYSCMD+L'SYSCMD-1
+         LA    R2,79
+PARSLOOP CLI   0(R3),C' '         BLANK CHARACTER?
+         BNE   STORELEN           NO, FOUND LAST CHARACTER OF COMMAND
+         BCTR  R3,0               YES, POINT TO PREVIOUS CHARACTER
+         BCT   R2,PARSLOOP        IF R2 IS 0 ONLY NO CMD WAS ENTERED
+         B     GETSTREX           EXIT COMMAND OP  
+STORELEN LA    R2,4(0,R2)         MAKE THE LAST CHARACTER A BLANK
+GETSTREX ST    R2,STRLEN          SAVE LEN
+         BR    R6
+         EJECT
+***********************************************************************
+*                                                                     *
+*                  USE SVC 34/241 FOR COMMANDS                        *
+* CALLED WITH BAL R5
+*                                                                     *
+***********************************************************************
+* ====================================================================
+* CURRENT PROBS (WORKAROUND IS WORKING)
+* EVEN THOUGH DEBUGGING SEEMS TO INDICATE THE LENGTH IS A 4 BYTES TO
+* LONG (IN THE DEBUG WTO OUTPUT ANYWAY) THE ACTUAL COMMAND IS GETTING
+* THE LAST BYTE TRUNCATED.
+* TEMPORARY WORKAROUND: IN THE CODE AT MGCRGO I ADD ONE TO THE LENGTH
+* TO BE USED BY SVC34, THAT WORKS UNTIL I GET BORED AND REVIST THIS.
+* ====================================================================
+MGCR     STM   R1,R3,SAVEMGCR
+         BAL   R6,GETSTRLN
+         L     R1,STRLEN
+         C     R1,ZEROS
+         BNE   MGCRGO
+         WTO2  'MID025E xxxxxxxx NULL COMMAND IN MMPFEX CARD'
+         B     MGCREX
+*MGCRGO   STH   R1,CMDLEN
+* BUGFIX, ADD ONE BYTE TO COUNT, DUNNO WHAT MGCR IS DOING WITH
+* THE LAST BYTE BUT IT KEEPS DROPPING IT.
+MGCRGO   A     R1,ONE
+         STH   R1,CMDLEN
+         MVC   CMDBUF,SYSCMD      LOAD COMMAND BUFFER WITH O/S COMMAND
+         MODESET KEY=ZERO
+         LA    R1,CMDLEN          COMMAND BUFFER ADDRESS
+         L     R0,CONSOLE         CONSOLE ID
+         SVC   34
+         MODESET KEY=NZERO
+MGCREX   LM    R1,R3,SAVEMGCR
+         BR    R5      
+         EJECT
+***********************************************************************
+*
+* LINK TO THE MODULE REQUESTED WITH THE PARMSTR PROVIDED
+* ONLY SUPPORT LINK TO HERCCMD FROM THIS MODULE
+* ENTRY VIA BAL R5
+*
+* SYSCMD HAS COMMAND, OFFSET THAT BACK BY 2 BYTES AS THE
+* LENGTH NEEDS TO BE INSERTED INTO THE PARM FIELD WE
+* USE FOR THE LINK.
+*
+***********************************************************************
+LINKDO   DS    0F
+         STM   R1,R9,LINKDOR5        LINK TRASHED LOTS OF REGISTERS
+*                                    ACTUALLY THE CALLED PROGRAM 
+*                                    PROBABLY DID
+         BAL   R6,GETSTRLN           GET STRING LEN IN R1
+         L     R1,STRLEN
+         C     R1,ZEROS
+         BNE   LINKGO
+         WTO2  'MID025E xxxxxxxx NULL COMMAND IN MMPFEX CARD'
+         B     LINKDONE
+LINKGO   DS    0F
+         STH   R1,HERCCMDL         SET LEN OF PARM TO USE
+         LINK  EP=HERCCMD,ERRET=LNKPRME1,PARAM=(HERCCMDL),VL=1
+*    OK, DONE
+         B     LINKDONE
+LNKPRME1 CNOP  0,4
+         WTO2  'MID026E ........:LINK ERROR, HERCCMD NOT FOUND'
+LINKDONE LM    R1,R9,LINKDOR5        GET BACK GOOD REGISTERS
+         BR    R5
+LINKDOR5 DS    9F
+         EJECT
+***********************************************************************
+* A RULE REQUESTED A WTO, SO WTO THE FIRST 50 BYTES                   *
+*                                                                     *
+* AS THE WTO TRASHED R1 ANYWAY WE USE THAT TO INDEX THE MOVE OF THE   *
+* TEXT STRING TO THE WTO BUFFER (AS WE MUST RESTORE R1 ON EXIT        *
+* BECAUSE OF THE WTO ANYWAY.                                          *
+*                                                                     *
+***********************************************************************
+WTODOREG DS    F
+WTODO    DS    0F
+         ST    R1,WTODOREG
+         LR    R1,R4
+         A     R1,=F'4'
+         MVC   WTODOTEX+8(50),0(R1)
+WTODOTEX WTO   '....+....1....+....2....+....3....+....4....+....5'
+         L     R1,WTODOREG
+         BR    R5
+         EJECT
+***********************************************************************
+*                                                                     *
+*                      DATA AREAS NEEDED                              *
+*                                                                     *
+***********************************************************************
+         LTORG
+PARMSADR DS    F                   SAVE ADDR OF PROGRAM PARM LIST
+SAVEMGCR DS    3F                  SAVE AREA FOR MGCR
+RULECNT  DS    F                   ACTUAL NUMBER OF RULES READ
+SAVEGETJ DS    6F                  SAVE AREA FOR GETJOB ID
+R13CALLR DS    F                   TO SAVE R13 FROM SAVE AREA WHEN I
+*                                    NEED TO ALTER IT DURING LINK
+MYJOBNAM DC    CL8' '              THIS JOB OR STC NAME FOR MSGS
+INRULE   DC    C'N'                INDICATES IF RULE PROCESSING
+ZEROS    DC    F'0'                SOME ZEROS FOR COMPARES
+MEMBER   DC    CL8'MMPFEX00'       RULESET MEMBER NAME, MUST BE A LEGAL
+         DC    X'0'                ENSURE MEMBER FIELD IS TERMINATED
+STRLEN   DS    1F                  STORE LEN OF STRING TESTED
+*                                  NAME (IE: NOT SPACES).              
+PARMDATA DC    CL63' '             SAVE PARM DATA PASSED (60+NNspace)
+         DS    0F                  WORD ALIGN
+MAXRULES DC    F'5'                DEFAULT IS MAX OF 5 CMDS PER RULE
+CMDTABLE DS    CL400               80x5, MAXRULES RULE STORAGE
+*
+* KEEP THE BELOW FOUR EXACTLY IN PLACE, THEY ARE USED
+* IN THE SVC 34 ADDRESSING BUFFER.
+*   DC 0D'0',XL2'CMDLEN',XL2'00',C'COMMAND TEXT'
+CONSOLE  DC    F'1'                CONSOLE TO BE LOOKED AT
+CMDLEN   DC    2H'0'               HALFWORD LENGTH INDICATOR   
+CMDBUF   DC    CL78' '             SVC 34 COMMAND BUFFER       
+CMDEND   DC    CL2' '              END OF COMMAND BUFFER       
+* END SVC34 BUFFER
+*
+* HERCCMDL AND SYSCMD TO REMAIN IN THIS ORDER, HERCCMDL IS
+* USED TO PROVIDE THE PARMLEN IN SYSCMD WHEN HERCCMD IS LINKED
+HERCCMDL DS    AL2                 USED BY HERCCMD FOR CMDLEN
+SYSCMD   DC    CL80' '             CMD BUFF FOR LINK
+ONE      DC    F'1'                THE NUMBER ONE, FOR ADD/DELETE
+         SPACE 3
+*
+*
+*   D C B   B I T S   F O R   S Y S I N   M O D I F Y I N G
+*
+SYSIN    DCB   DDNAME=SYSIN,DSORG=PO,MACRF=R,EODAD=EOFMMBR,EXLST=EXLST
+EXLST    DS    0F
+         DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DS    0CL176
+         IEFJFCBN
+         END   MMPFEX
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=INSTALL.MID.MMPF.LOADLIB(MMPFEX),DISP=SHR
+//
+./ ADD NAME=$INSTALL
+//MARKINST JOB  (0),'INSTALL MMPF',CLASS=A,MSGCLASS=A
+//*
+//* THIS JOB COPIES THE ASSEMBLED MODULES, CONTROL 
+//* MEMBERS AND THE PROC INTO YOUR SYSTEM LIBRARIES.
+//* DO NOT RUN IT UNTIL YOU HAVE REVIEWED WHAT IS 
+//* BEING DONE HERE.
+//*
+//* CUSTOMISE THE TARGET (OUTN) DD CARDS TO SUIT
+//* WHERE YOU WANT THE FILES INSTALLED.
+//* THE PROCLIB (OUT4) MUST BE IN YOUR JES2 PROCEDURE
+//* LIBRARY LIST. ACTUALLY ALL LIBRARIES MUST BE IN YOUR
+//* SYSTEMS APPROPRIATE SEARCH LISTS.
+//*
+//* YES MMPF AAND MMPFEX  M U S T  BE IN A APF AUTHORISED
+//* LIBRARY, THEY NEED TO ISSUE CONSOLE COMMANDS IN ORDER
+//* TO AUTOMATE ANYTHING
+//* GETWORDS  M U S T  NOT BE IN AN APF AUTHORISED
+//* LIBRARY. IT DOESN'T NEED ANY SPECIAL ACCESS AND 
+//* SHOULD NOT HAVE IT.
+//*
+//* COPIES MMPF AND MMPFEX TO A APF AUTHORISED LOADLIB
+//* COPIES GETWORDS A NON-APF-AUTHORISED LOADLIB
+//* COPIES CONTROL MEMBERS MMPF00 AND MMPFEX00 TO PARMLIB
+//* COPIES MMPFPROC TO A PROCLIB AS MEMBER MMPF
+//*
+//* ----WARNING----
+//* I HAVEN'T ACTUALLY TESTED THIS JOB, THE SRCLIB 
+//* COPY BITS ANYWAY; AS I DON'T WANT TO ACCIDENTALLY
+//* OVERWRITE MY EXTENSIVE CUSTOMISATIONS TO THE
+//* DEFAULT PROCEDURE AND CONTROL MEMBERS
+//* IT SHOULD WORK THOUGH
+//*
+//*
+//COPY     EXEC PGM=IEBCOPY
+//SYSPRINT DD   SYSOUT=*
+//LOADLIB  DD   DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB
+//SRCLIB   DD   DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
+//OUT1     DD   DISP=SHR,DSN=SYS9.LINKLIB
+//OUT2     DD   DISP=SHR,DSN=SYS9.LINKLIB.APFAUTH
+//OUT3     DD   DISP=SHR,DSN=SYS9.PARMLIB
+//OUT4     DD   DISP=SHR,DSN=SYS9.PROCLIB
+//SYSIN    DD   *
+ COPY INDD=LOADLIB,OUTDD=OUT1
+ SELECT MEMBER=GETWORDS
+ COPY INDD=LOADLIB,OUTDD=OUT2
+ SELECT MEMBER=MMPF
+ SELECT MEMBER=MMPFEX
+ COPY INDD=SRCLIB,OUTDD=OUT3
+ SELECT MEMBER=MMPF00
+ SELECT MEMBER=MMPFEX00
+ COPY INDD=SRCLIB,OUTDD=OUT4
+ SELECT MEMBER=(MMPFPROC,MMPF)
+/*
+//
+./ ADD NAME=$ASSEMBL
+//MARKASM  JOB  (0),'ASSEMBLE LMODS',CLASS=A,MSGCLASS=A
+//*
+//* THIS JOB WAS RUN WHEN THE INSTALL LIBRARIES WERE CREATED
+//*
+//* IT CAN BE RUN AS NEEDED TO RE-ASSEMBLE THE MODULES INTO
+//* THE INSTALLATION LOAD LIBRARY. IT WILL NOT TOUCH YOUR
+//* SYSTEM DATASETS.
+//*
+//* TO COPY FROM THE INSTALLATION FILES TO YOUR SYSTEM
+//* LIBRARIES REFER TO THE $INSTALL MEMBER
+//*
+//ASSEMBLE EXEC PGM=IEBGENER
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DSN=INSTALL.MID.MMPF.SRC(GETWORDS),DISP=SHR
+//         DD   DSN=INSTALL.MID.MMPF.SRC(MMPF),DISP=SHR
+//         DD   DSN=INSTALL.MID.MMPF.SRC(MMPFEX),DISP=SHR
+//         DD   DSN=INSTALL.MID.MMPF.SRC(GETWTEST),DISP=SHR
+//SYSUT2   DD   SYSOUT=(A,INTRDR)
+//SYSIN    DD   DUMMY
+//
+./ ADD NAME=$TESTGW
+//MARKTEST JOB  (0),'TEST PARSE',CLASS=A,MSGCLASS=A
+//*
+//* THIS IS KNOWN NOT TO WORK.
+//* IT IS A WORK IN PROGRESS TO TEST THE PARSING LIBRARY
+//* IT WILL SOC4 IF RUN
+//*
+//* TODO:
+//*   - GET IT WORKING
+//*   - CHANGE IT SO MESSAGES AND RULES TO BE TESTED ARE 
+//*     VIA SYSIN SO IT CAN REALLY TEST THINGS
+//*
+//TESTPARS EXEC PGM=GETWTEST
+//STEPLIB  DD   DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB
+//
+./ ENDUP
+ZZ
+//INSTALL2 EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DISP=SHR,DSN=INSTALL.MID.MMPF.DOC
+//SYSUT2   DD DISP=SHR,DSN=INSTALL.MID.MMPF.DOC
+//SYSIN    DD DATA,DLM=ZZ
+./ ADD NAME=INSTALL
+**********************************************************************
+*                          HOWTO INSTALL                             *
+**********************************************************************
+
+If you are reading this member then you have already run the job deck
+to create the install files. The rest of the install is just as easy.
+
+The term "install prefix" used here refers to th installation prefix
+you selected and the MMPF part (ie: INSTALL.MARK.MMPF).
+
+There should have been a .SRC, .LOADLIB and .DOC file created.
+
+
+(1) --- check the programs assempled correctly ---
+
+That job should also have assembled four modules into the install prefix 
+LOADLIB file during the dataset creation and load job. Three are required
+so check that file to ensure there have been load modules created for
+ GETWORDS
+ MMPF
+ MMPFEX
+
+
+(2) --- customise install prefix SRC member $INSTALL ---
+
+In the created install prefix SRC file is a member named $INSTALL.
+
+That will copy required files to
+- an APF authorised load library dataset
+- a non-APF authorised load library dataset
+- a system procedure library
+- a system parmlib library
+
+CUSTOMISE the dataset names on the //OUTxx DD cards to reflect
+the dataset names used on your system.
+
+Then run the job in $INSTALL.
+Check it completed OK.
+
+(3) --- start it ---
+
+You are done, issue the "S MMPF" command.
+
+If it doesn't start you didn't follow the steps above.
+
+**********************************************************************
+*                    END OF HOWTO INSTALL                            *
+**********************************************************************
+./ ADD NAME=MMPF
+**********************************************************************
+*              DOCUMENTATION FOR MMPF PROCEDURE                      *
+**********************************************************************
+
+What is MMPF ?
+==============
+A message automation tool that automates ACTION messages waiting for
+attention on the system console.
+It only automates ACTION/ATTENTION messages !.
+
+It reads the system console buffer to find messages it needs to check
+for automation (based on the SPY code available from Greg Price). Thats
+the main reason it only processes attention messages, anything else may
+have rolled off the console display.
+
+So why use it given that limitation ?. These are the main advantages of
+using it rather than doing all your automation in IEECVXIT
+
+(A) it provides built-in message parsing (attempting tricky stuff like
+    that inside IEECVXIT is a good way of filling system dump datasets)
+(B) it allows the automation rules to be updated on the fly, including
+    on the fly changing between parmlib member rulesets which is great
+    for testing. Using IEECVXIT each change must be implemented for
+    testing by IPL'ing using CLPA so MMPF has a huge advantage here.
+(C) as it's not inside IEECVXIT it can WTO; and more importantly use
+    files (for me that means I can access my VSAM tape catalogue from
+    MMPF and fully automate all tape mounts).
+(D) as well as issuing console commands it can safely (and easily) link
+    to other modules (programs) in the linklist to provide additional
+    features (such as MMPFEX covered in a seperate documentation member
+    in this file)
+(E) it will allow (using MMPFEX) not just console commands but also
+    Hercules commands (such as devinit) to be used in an automation
+    response to a message
+
+Hopefully those are enough reasons to start with.
+
+
+The MMPF procedure
+==================
+
+A sample MMPF procedure is supplied as MMPFPROC in the installation SRC
+file. This will be copied to one of your procedure libraries and named
+MMPF when you run the $INSTALL job in the SRC file.
+
+You should probably start MMPF with your normal started tasks, for
+TK3 users that will either be from COMMND00 or the JES2PARM member.
+
+
+Staring MMPF
+============
+
+S MMPF[,MMPF=nn][,MODE=DEBUG][,SYSOUT=x]
+
+    MMPF=nn     - selects the parmlib member to be used
+                  the default is 00 (which will use MMPF00)
+    MODE=DEBUG  - starts MMPF in DEBUG mode
+                  in this mode no automation is done, it will just log
+                  to sysout what would have been done
+                  the default is MODE=LIVE
+    SYSOUT=x    - change the default SYSOUT class for application 
+                  message logging, all actions performed are logged
+                  to sysout for review
+                  the default print class is A
+
+Note: reguardless of the sysout class used the actual STC job will
+      always be written to the sysout class specified in the JES2
+      parms as the started task sysout class. The sysout class
+      used by the procedure is only for the activity logging.
+
+
+Commands that can be issued to MMPF
+===================================
+
+P MMPF         - stop MMPF
+
+F MMPF,MMPF=nn - load a new rule table, will load member MMPFnn
+                 this allows rules to be changed on the fly
+
+
+**********************************************************************
+*            END DOCUMENTATION FOR MMPF PROCEDURE                    *
+**********************************************************************
+./ ADD NAME=MMPF00
+**********************************************************************
+*              DOCUMENTATION FOR MMPFnn MEMBER                       *
+**********************************************************************
+
+The MMPFnn member is used for automating events that can be handled
+with a single action.
+
+For more complicated rules the MMPFnn rule would be used to pass the
+request to the MMPFEX module via the LNK command, refer to the MMPFEX
+documentation member for information on that (note: MMPFEX can also
+issue Hercules commands such as devinit if needed which MMPF cannot)
+
+The nn in the MMPFnn can be any two alphanumeric characters, the 
+default member used when MMPF starts is MMPF00.
+
+MMPFnn Data card rules
+======================
+There are three types of data cards
+(1) a line with * in position 1 is as always a comment line
+(2) an automation control card, the automation data card rules are
+  - The first 8 bytes are the message id that triggers the event
+  - space
+  - action type to perform, one of CMD, CMK, DOM or LNK
+  - space
+  - Then the parameters for the action to be performed
+(3) ENDDECK reserved work. This should be at the end of your
+    parm member (see BUGS documentation member for why)
+
+The CMD action
+--------------
+   For a CMD action, it is a console command to be issued, the
+   command that will be issued is built following the message
+   expansion rules discussed below
+
+The CMK action
+--------------
+   The CMK action is almost identical to the CMD action with the 
+   single exception being that the message will be DOM'ed on all
+   consoles prior to the command being issued.
+   This is used for messages that would not automatically be DOM'ed
+   by the command you will run as the action, but that you don't
+   want to repeatedly trigger on.
+
+The DOM action
+--------------
+   The result of the DOM action is the message will be DOM'ed on all
+   consoles. Use this to remove attention messages you will be taking
+   no action on
+
+The LNK action
+--------------
+   For a LNK action the action to be performed is an 8 byte module
+   (program) name followed by the parameters to be passed to the
+   module. The parameters can be build using the message expansion
+   rules that are discussed below.
+   The module being linked to must be in a load library in the system
+   linklist for it to be found.
+
+Message expansion rules
+=======================
+Each message being processed can be referenced by word number,
+keywords &WORD1 through &WORD20 are available for that.
+This means you do not need to code any message processing in any
+program or command you are invoking, it can all be done here.
+
+In addition the reserved variable &MSG will return the first
+45 bytes of the message string.
+
+For example for message: XXX0000 SOMETHING NAMED FRED HAS BROKEN
+               the rule: XXX0000 CMD C &WORD4
+               would issue the console command 'C FRED'
+
+IMPORTANT:
+The output generated by the message expansion will never exceed
+78 bytes, it will be truncated if necessary.
+
+E X A M P L E     R U L E S
+===========================
+These are an example only. Refer to the install SRC file for an
+example member that can be copied onto place on your site.
+
+* ---------------------------------------------------------------------
+* TAPE MOUNT MESSAGES TO BE AUTOMATED, MOUNT THE .AWS TAPES
+* YOU CAN ONLY USE THESE IF YOU ALSO HAVE MY TAPEMON PROGRAMS INSTALLED
+* ---------------------------------------------------------------------
+IEC501A LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD8
+IEF233A LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD6
+IEC701D LNK TAPEMAN3 &WORD2 &WORD4 &WORD9 &WORD1
+* ---------------------------------------------------------------------
+* MY TASKMON MESSAGE TRIGGERS
+* ---------------------------------------------------------------------
+MID107W CMD R &WORD1,C
+MID111I CMD P MMPF
+* ---------------------------------------------------------------------
+* IF THERE ARE PREVIOUS MMPF SHUTDOWN MESSAGES DOM THEM
+* ---------------------------------------------------------------------
+MID007I DOM
+* ---------------------------------------------------------------------
+* SOME JES2 MESSAGE I WANT TO REPLY TO
+* ---------------------------------------------------------------------
+$HASP190 CMD $S &WORD4
+$HASP191 CMD $S &WORD3
+* ---------------------------------------------------------------------
+* MISCELLANEOUS STUFF
+IFB010D CMD R &WORD1,U
+IFB040I CMK S DUMPEREP
+IFB060E CMK S DUMPEREP
+IEA994A CMD S DUMPFULL
+* ---------------------------------------------------------------------
+* DEVICE INTERRUPTS, USE THE MMPF EXTENTION TO HANDLE THESE
+* ---------------------------------------------------------------------
+IEE001A LNK MMPFEX 00 &WORD1&WORD2&WORD3
+* ---------------------------------------------------------------------
+* DEVICE OFFLINE MESSAGE, IF A DISK IS OFFLINE FIX THE JOB !
+IEF238D CMD R &WORD1,CANCEL
+* ---------------------------------------------------------------------
+* KEYWORD LINE YOU SHOULD USE TO END THE DECK, SEE THE KNOWN BUGS
+ENDDECK
+
+**********************************************************************
+*           END OF DOCUMENTATION FOR MMPFnn MEMBER                   *
+**********************************************************************
+./ ADD NAME=MMPFEX00
+**********************************************************************
+*              DOCUMENTATION FOR MMPFEXnn MEMBER                     *
+**********************************************************************
+Purpose
+=======
+The origional purpose was to provide a way to issue different
+commands for a message depending upon th object the message was
+refering to.
+
+I needed it to allow me to issue different commands for a device
+interrupt event depending upon the device name in the message.
+The message number triggering MMPF would be the same for every
+device interrupt message but I needed to issue different commands
+depending for card reader recovery than I would for terminal
+recovery for example.
+
+So MMPFEX was born.
+
+It simply requires a specific and unique enough rule for each 
+rule name to provide an exact match for the rule to be executed;
+so allowing different rules to run for different objects without
+the complication of if/else rules.
+
+Requirements
+============
+(1) The MMPFEXnn control member MUST be in the same parmlib as the
+    MMPFnn member (as the DD card is the one used by MMPF which calls
+    this module). It does not need to use the same nn identifier
+    however as the nn to be used is specified by the MMPF rule that
+    invokes the MMPFEX module
+(2) To issue Hercules commands you must have installed the DIAG8
+    programatic interface HERCCMD provided by Grzes Plucinski into
+    an APF authorised library.
+    (I obtained it at http://www.grzes.com/herccmd.aws)
+
+Limitations
+===========
+(1) The MMPFEX module is designed solely to issue commands
+    note: a WTO option was also added later as a 'helper'.
+(2) A maximum of 5 (five) commands are permitted per rule.
+
+
+How to invoke MMPFEX from a MMPFnn rule
+=======================================
+MMPFEX is invoked using the standard MMPFnn LNK command as documented
+in the MMPFnn documentation member.
+
+The program parameters that need to be passed to MMPFEX are
+- A two byte nn to identify the MMPFEXnn proclib member that is to
+  be searched for a matching rule
+- a space
+- The rule name to be searched for (maximum 56 bytes)
+
+Note that no variable data is passed, the rule name to be matched is
+expected to be unique for the message-number/object-name and a static
+set of commands are going to be issues for that unique event.
+
+An example would be
+  Message: IEE001A nnn,INT REQ,.....
+  Rule: IEE001A LNK MMPFEX   00 &WORD2&WORD3&WORD4
+
+  Would invoke a different rule for each nnn device
+     for device 00C rule 00CINTREQ
+     for device 00D rule 00DINTREQ
+     etc
+  and no if/else needed anywhere to complicate things when a
+  different response is needed for a different device.
+
+
+MMPFEXnn Data card rules
+========================
+There are four types of data cards
+(1) a line with * in position 1 is as always a comment line
+(2) a RULE header card
+     - the first 5 bytes must be RULE:
+     - the next 56 bytes must be the unique rule name
+(3) the commands to be issued for the prior rule 
+     - the first 3 bytes are the action type, CMD, LNK or WTO
+          CMD issues a MVS console command
+          LNK issues a Hercules command via the HERCCMD module
+          WTO writes a WTO the the MVS consoles
+     - a space
+     - the command to be issued (or text to be WTOed)
+(4) ENDDECK reserved work. This should be at the end of your
+    parm member (see BUGS documentation member for why)
+
+
+E X A M P L E     R U L E S
+===========================
+These are an example only. Refer to the install SRC file for an
+example member that can be copied onto place on your site.
+
+* ---------------------------------------------------------------------
+* On a 00C intterupt submit a dummy JCL job
+* dummy.jcl is expected to exist in the hercules working directory
+RULE:00CINTREQ
+LNK devinit 00C dummy.jcl eof
+*
+* On an intterupt on 00D just take it offline
+RULE:00DINTREQ
+CMD V 00D,OFFLINE
+CMD S DEALLOC
+*
+* Oops, 009 is the telnet console for TK3, forgot to start it again
+RULE:009INTREQ
+WTO PLEASE START THE TELNET SESSION FOR TK3
+*
+* Allways end with an ENDDECK statement
+ENDDECK
+* ---------------------------------------------------------------------
+**********************************************************************
+*              DOCUMENTATION FOR MMPFEXnn MEMBER                     *
+**********************************************************************
+./ ADD NAME=BUGS
+**********************************************************************
+*                  KNOWN BUGS - 20 Jan 2013                          *
+**********************************************************************
+MMPF
+====
+(1) In a dataset where there are not enough message rules to fill more
+    than the first block in the file for some reason the PDS read
+    routines I have coded read the block twice (store double the rules
+    expected). Where the message rules do need more than one data block
+    it works just fine ?.
+    The workaround, as seen in my example ruleset above, is to code an
+    ENDDECK card at the end of the ruleset. This indicates to the
+    program not to read any further cards.
+    As an aside, I have found the ENDDECK command quite usefull for
+    testing, I can move rules below it for safekeeping when I don't
+    want to use them but don't want to lose them, so have no need to
+    bother fixing this bug.
+(2) A blank comma seperated field (ie: ,,) will return , rather than
+    a blank field in message parsing. I am happy with that as I would
+    home somthing is always returned for a field; documented here as
+    it may not be what you expect.
+
+MMPFEX
+======
+(1) The repeat read error for MMPF applies, you must have an ENDDECK
+    statement in your MMPFEXnn parmlib member.
+**********************************************************************
+*                      END OF KNOWN BUGS                             *
+**********************************************************************
+ZZ
+//*
+//* ----------------------------------------------------
+//* THIS STEP WILL ASSEMBLE THE PROGRAMS FROM THE
+//* SOURCE FILE INTO An INSTALL LOADLIB TO VERIFY THAT
+//* THE PROGRAMS WILL ASSEMBLE CORRECTLY ON YOUR STSTEM.
+//* THERE IS AN INSTALL MEMBER YOU SHOULD CUSTOMISE
+//* TO COPY THE ASSEMBLED PROGRAMS TO YOUR LIVE SYSTEM.
+//* ----------------------------------------------------
+//ASSEMBLE EXEC PGM=IEBGENER,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DSN=INSTALL.MID.MMPF.SRC($ASSEMBL),DISP=SHR
+//SYSUT2   DD   SYSOUT=(A,INTRDR)
+//SYSIN    DD   DUMMY
+//
