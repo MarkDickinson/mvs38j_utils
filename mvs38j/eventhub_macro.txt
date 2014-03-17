@@ -1,0 +1,837 @@
+//MARKJ JOB (0),'STORE',CLASS=A,MSGCLASS=T
+//*
+//* REPLACE macro with the latest copy.
+//* If you have not already installed the macro, use a RESTART
+//* step to ADDNEW... and CHANGE THE DATASET NAME OF COURSE
+//*
+//* SCRATCH THE OLD MEMBER
+//DELOLD EXEC PGM=IEHPROGM
+//SYSPRINT DD SYSOUT=*
+//DD1    DD DISP=SHR,UNIT=3350,VOL=SER=PUB000
+//SYSIN  DD *
+ SCRATCH VOL=3350=PUB000,DSNAME=MARK.PROD.LIB.MACROS.ASM,              X
+               MEMBER=EVENTHUB
+/*
+//*
+//* STORE THE NEW MEMBER
+//ADDNEW EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+//SYSUT2 DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+//SYSIN DD DATA,DLM=ZZ
+./ ADD NAME=EVENTHUB
+         MACRO 
+&NAME    EVENTHUB &ACTION=DELETE,&TYPE=,&ID=,&HANDLER=,&ECB=,&CMDBUF=, X
+               &EOF=,&HSECS=
+.*
+.*  B E T A    ---    B E T A    
+.*
+.* TARGET O/S : MVS3.8J (Turnkey3)
+.* Macro Version: 0.001
+.* Requires: SYS1.MACLIB, SYS1.AMODGEN
+.* Origional Author: Mark Dickinson, 2014
+.*
+.* PURPOSE:
+.* Macro to manage multiple timers, wtors, action-msgs, and
+.* operator commands... to make it simple to use multiples of
+.* these (ie: multiple wtors and timers outstanding is now
+.* easy to manage even for novices) in an assembler program.
+.* 
+.*   -- DONE:multiple outstanding WTORs can be replied to in any order
+.*   -- DONE:multiple timers can be queued
+.*   -- DONE:operator commands via COMM interface available
+.*   -- TODO: test action messages, test delete code, 
+.*            and cleanup code
+.*            And maybe let macro issue WTOR and action messages
+.*            instead of just tracking the message id of the
+.*            caller generated messages 
+.*
+.* CRITICAL NOTES:
+.* Every event handler that is branched to is branched to
+.* with return address stored in R1 (handlers to use BR R1 to
+.* return to their caller).
+.* You must ensure that if your program expects (as it should)
+.* to return to the EVENTHUB code that your handler routines
+.* save R1 and restore it before using BR R1 to return to the
+.* eventhub code.
+.* R1 was a deliberate choice. It's trashed by most S/370
+.* assembler macros so any good coder should be used to
+.* saving and restoring it, by expecting it to be trashed :-)
+.*
+.*  Current status :Functional, still enhancing and cleaning up. 
+.*                  *COMM (F)modify and (P)park commands working
+.*                  *Timers are expiring OK, STILL TO DO, TEST day    
+.*                   rollover will work over midnight period
+.*                  *WTORs are working correctly
+.*                  -Action message operation, not tested
+.*                  -Manual event delete actions not tested,
+.*                   still intend to implement a user 'textid'
+.*                   to make managing event ids easier (and can
+.*                   then consolidate inline event erasure into
+.*                   the evdelete routine).
+.*  Known bugs: need to space out WTOR reply buffers between
+.*              use as old contents remain in buffer. Not a
+.*              major issue but seen in test program.
+.*              need to check response len in (F)modify command
+.*              as test pgm just WTOs out entire buffer len and
+.*              if reply was shorter can be junk in buffer. Not
+.*              a major issue but seen in test program.
+.*              **Limited to 8 entries** I will getmain the table
+.*              after this is fully working to increase that but
+.*              want all the code working and 'cleaned up' first.
+.*
+.*  Plus in trying to make it simple I have made it overly
+.*  complicated. Need to clean it up a lot.
+.*  Need to make use of the textid field I am adding, that
+.*  may change to the key for add/delete requests as it would
+.*  be more readable/usable.
+.*
+.* ------ Syntax ------
+.*   See supplied test program for examples
+.*
+.*   EVENTHUB ACTION=CREATE[,HANDLER=code,EOF=code,CMDBUF=buffer]
+.*          Initialise data areas depending on whats required
+.*          If handler coded here, create comm area and is the
+.*          name of the code block to process operator commands
+.*          eof is the exit routine to terminate the program when
+.*          an operator enters the Park command.
+.*          cmdbuff is where the text from a modify command will
+.*          be made available to the caller
+.*
+.*   EVENTHUB ACTION=ADD,TYPE=TIMER,HSECS=100s/secs,
+.*     HANDLER=label of handler routine
+.*          Create a new timer queued entry, macro manages
+.*          issuing the correct timer
+.*
+.*   EVENTHUB ACTION=ADD,TYPE=WTOR,ID=reg holding wtor id,
+.*     HANDLER=codelabel,ECB=??
+.*          Track a new WTOR message (caller issues WTOR first)
+.*
+.*   EVENTHUB ACTION=ADD,TYPE=ACTMSG,ID=reg holding msg id
+.*          Track an action message (caller issues message)
+.*
+.*   EVENTHUB ACTION=WAIT
+.*          Wait for any outstanding event
+.*
+.*   EVENTHUB ACTION=DESTROY[,EXIT=code]
+.*          Delete all outstanding events, table and code will
+.*          remain as will the comm area
+.*          EXIT is code to jump to when done, if not provided
+.*          next instruction will be executed
+.*          TODO exit should be the comm park command if we are
+.*               using a comm area; enforce 'exit' on create ???
+.*          NOTE: when destroy releases getmained area EXIT will
+.*          be required as we must release comm area also
+.*
+.*   EVENTHUB ACTION=DSECTS
+.*          Create the DSECTS needed by the generated code
+.*
+.*  NOTES:
+.*  - Allows multiple timer events and multiple outstanding WTORs
+.*  - When a TIMER is added it will call STIMER with the correct
+.*    value based on which timer is next scheduled
+.*  - When a TIMER is deleted the next will be scheduled with
+.*    the correct value of the next timer queued
+.*  - This macro builds the ECB wait list and performs the WAIT
+.*  - This macro creates the interface for operator P/F commands
+.*    as part of initialisation, if a handler for that is specified
+.*
+.*
+.*
+         AIF   ('&ACTION' EQ 'DSECTS').EVDSECT
+         AIF   ('&ACTION' NE 'CREATE' AND '&ACTION' NE 'ADD' AND       X
+               '&ACTION' NE 'DELETE' AND '&ACTION' NE 'DESTROY' AND    X
+               '&ACTION' NE 'WAIT' AND '&ACTION' NE 'DSECTS').EVERRA
+         AIF   ('&ACTION' NE 'CREATE').EVACT01
+         B     EVINIT      Code jump to init routine
+***********************************************************************
+* Storage areas and code created for ACTION=CREATE
+***********************************************************************
+EVMAXEV  EQU   8           Max events allowed, just 8 until changed
+*                          to use getmain
+EVCUREV  DS    1F          Current events queued
+EVGMAINA DS    1F          Address of getmained memory
+EVSPARE  DC    F'0'        Event entry not in use
+EVWTOR   DC    F'1'        Wtor ecent type
+EVTIMER  DC    F'2'        Timer event type
+EVHIMSG  DC    F'3'        Highlighted message needing DOMing
+* To avoid blowing out the symbol table with lots of use of
+* =F'0' and =F'1' throughout the code use variables for those
+* so only two symbol table entries are needed instead of about 40.
+EVFONE   DC    F'1'        Number 1, used often so use variable
+EVFZERO  DC    F'0'        Number 0, used often so use variable
+EVFFOUR  DC    F'4'        Number 4, used often so use variable
+EVONEDAY DC    F'8640000'  Number of hsecs in one day
+EVDBL    DC    D'0'        Used for bin/text conversion (debugging)
+.* Event table map - will one day be getmained,
+.*                   max 254 bytes while inlined.
+EVTABLE  EQU   *           Table starts here
+EVTYPE   DS    1F          Event type
+EVTAGID  DS    1F          Event tag (timer id, wtor id, msgid etc)
+EVHANDLR DS    1F          Address of event handler code
+EVECBDAT DS    1F          ECB data field for the element
+EVTIMRID DS    2F          Timer trigger time (time bin)
+EVUSRID  DS    CL4         User defined text tag so callers can use
+*                          a key meaninfull to them in invocation
+EVLEN    EQU   *-EVTABLE
+         ORG   EVTABLE
+EVBUFFER DS    CL(EVLEN*EVMAXEV) Table len * max entries
+         ORG
+EVLENF   DS    F            used in offset calcs, loaded with EVLEN
+EVREGSAV DS    16F
+*
+EVECBNUM DS    F            number of extries in active ecb list
+TIMERECB DS    F            THE STIMER ECB
+*                           (evmaxev + 1 in case com used)
+         DS    0D           Align
+*ECBLIST  DS    21F          ECB LIST FOR STIMER,COM,WTOR
+ECBLIST  DS    (EVMAXEV+1)F'0' ECB LIST FOR STIMER,COM,WTOR
+EVUSECOM DS    1F           0=no COMM area, <>0address of comm handler
+TIMEXPRM DS    F            TIMER PARAMETER
+EVHNDTIM DS    F            Address of handler for next timer
+* 32 bit 100ths second values for timer handling
+* (or 4byte simple fullword is easier to understand)
+EVNXTTIM DC    B'00000000000000000000000000000000' default to timer
+EVTIMZRO DC    B'00000000000000000000000000000000' zeros for init/test
+EVYRMAX  DC    XL4'0299365F' year 2199 dec 31, initial year value
+*                          used in timer searches for a lower value
+**MARK   IHAECB DSECT=NO   ECB needed for timer as well as comm
+.*
+.* If a HANDLER has been provided for the CREATE request then
+.* we are expected to manage the COMM area so create the data
+.* areas needed for that, else skip those data fields.
+         AIF   ('&HANDLER' EQ '').EVINITA 
+*
+***********************************************************************
+*                                                                     *
+*               COMM AREA FIELDS NEEDED                               *
+*                                                                     *
+***********************************************************************
+EVPARKA  DS    F            Address to branch to on Park command
+COMM     DS    F            COMM AREA address
+EVCMDBFA DS    F            Address of COMM command buffer to use
+EVCMDBFL DS    F            Length of COMM command buffer to use
+EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
+         LTORG
+         DS    0F           Align
+.EVINITA ANOP
+         LTORG
+* ********************************************************************
+* CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
+* PROCEDURE DEFINED TO THE STIMER CALL.
+* IT ISSUES A POST ON THE TIMER EXPIRY EVENT WHICH WILL BE PICKED UP
+* BY THE MAINLINE WAIT ON THE ECB LIST (THE POST TRIGGERS THE TIMER
+* ENTRY MATCH IN THE ECB LIST).
+* ********************************************************************
+TIMEOUT  SAVE  (14,12)
+         L     R2,TIMEXPRM
+         POST  (2)
+         RETURN (14,12)
+***********************************************************************
+* CALL BAL R1,EVDESTRY
+* R3 USED AS LOOP COUNTER
+***********************************************************************
+EVDESTRY STM   R0,R3,EVREGSAV
+         TTIMER CANCEL           Cancel any timers (ok if none active)
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVDEST1  L     R0,0(R2)
+         C     R0,EVSPARE        If zero is not in use
+         BE    EVDEST9
+         C     R0,EVWTOR         Wtor to be cancelled ?
+         BNE   EVDEST2           No
+         L     R1,4(R2)          Get the wtor message id
+         DOM   MSG=(R1),REPLY=YES  REPLY=YES AS IT IS A WTOR
+         B     EVDEST9           And done for this entry
+EVDEST2  C     R0,EVTIMER        Timer to be cancelled ?
+         BE    EVDEST9           Yes, done, timer cancelled at start
+EVDEST3  C     R0,EVHIMSG        Highlighted message to DOM
+         BNE   EVDEST9           No
+         L     R1,4(R2)          Get the wtor message id
+         DOM   MSG=(R1)          Dom the message
+EVDEST9  LA    R0,0              Set field to no longer in use
+         ST    R0,0(R2)          
+         A     R2,EVLENF         Any more entries to check ?
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVDEST1
+         LA    R0,0              Zero events queued now
+         ST    R0,EVCUREV        so save that value
+         LM    R0,R3,EVREGSAV
+         BR    R1
+***********************************************************************
+*   CALL BAL R1,EVDELETE
+*   ON ENTRY R4 HAS THE ID THE CALLER PASSED
+*   R3 USED AS LOOP COUNTER
+***********************************************************************
+EVDELETE STM   R0,R4,EVREGSAV
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVDEL1   L     R0,0(R2)          Is entry in use ?
+         C     R0,EVFZERO
+         BNE   EVDEL9            No, skip checks
+         L     R1,4(R2)          Get entry id value
+         CR    R1,R4             Is it an id match ?
+         BNE   EVDEL9            No match, go check next
+         C     R0,EVWTOR         Wtor to be cancelled ?
+         BNE   EVDEL2            No
+         DOM   MSG=(R1),REPLY=YES  REPLY=YES AS IT IS A WTOR
+         B     EVDEL8
+EVDEL2   C     R0,EVTIMER        Timer to be cancelled ?
+         BNE   EVDEL3            No
+         TTIMER CANCEL           Cancel any active timer
+         B     EVDEL8
+EVDEL3   C     R0,EVHIMSG        Hilighted msg to be cancelled ?
+         BNE   EVDEL9            No
+         DOM   MSG=(R1)          Dom the message
+*        B     EVDEL8
+EVDEL8   LA    R1,0         All values in entry to be reset
+         ST    R1,0(R2)     mark entry as unused
+         ST    R1,4(R2)     it tag to not set
+         ST    R1,8(R2)     handler address to 0
+         ST    R1,12(R2)    ECB data area
+         ST    R1,16(R2)    the two timer values to 0
+         ST    R1,20(R2)    the two timer values to 0
+         MVC   24(4,R2),=CL4'    '  clear evusrid field
+         L     R1,EVCUREV        Less one event now
+         S     R1,EVFONE
+         ST    R1,EVCUREV
+         B     EVDELX            Done
+EVDEL9   A     R2,EVLENF         Any more entries to check ?
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVDEL1
+EVDELX   LM    R0,R4,EVREGSAV
+         BR    R1
+***********************************************************************
+*   CALL BAL R1,EVADD    
+*      R3 USED AS LOOP COUNTER
+*   ON ENTRY
+*      R4 HAS THE ID THE CALLER PASSED
+*      R5 HAS THE EVENT TYPE
+*      R6/R7 HAS TIME VALUE IF EVTYPE IS TIMER
+*      R8 HAS EVENT HANDLER ADDRESS
+*      R9 HAS ECB ADDRESS IF WTOR
+***********************************************************************
+EVADD    L     R3,EVCUREV
+         LA    R2,EVMAXEV      If already at max cannot proceed
+         CR    R3,R2
+         BNL   EVADDMX
+*                              Find a free entry
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVADD1   L     R0,0(R2)          Is entry in use ?
+         C     R0,EVFZERO
+         BE    EVADD2            No, use this one
+         A     R2,EVLENF         Any more entries to check ?
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVADD1
+EVADDMX  WTO   '*ERROR* MAX EVENT TABLE ENTRIES EXCEEDED'
+         B     EVADDEX
+EVADD2   L     R3,EVCUREV      Increment events queued counter
+         A     R3,EVFONE
+         ST    R3,EVCUREV
+         ST    R5,0(R2)        Save event type
+         ST    R4,4(R2)        Save event id tag
+         ST    R8,8(R2)        Save event handler addr
+         MVC   24(4,R2),=CL4'    '  clear evusrid field
+         C     R5,EVTIMER      Timer type ?
+         BE    EVADD3            yes, save time registers
+         LA    R6,0              no, zero in time fields
+         ST    R6,16(R2)            
+         ST    R6,20(R2)
+         B     EVADD4
+EVADD3   C     R7,EVONEDAY     is > max hsecs in one day ?
+         BNH   EVADD3A         no  - ok
+         S     R7,EVONEDAY     yes - subtract 1 days hsecs
+         A     R6,EVFONE           - and add 1 day to date
+EVADD3A  ST    R6,16(R2)       Save time reg 1 date
+         ST    R7,20(R2)       Save time reg 2 time bin
+         B     EVADDEX
+EVADD4   C     R5,EVWTOR       WTOR type ?
+         BNE   EVADDEX           no, done
+         ST    R9,12(R2)         yes, save ECB address
+         LA    R2,0              reuse R2, must set value at ecb addr
+         ST    R2,0(R9)          ...to 0 to show ECB not triggered
+EVADDEX  BR    R1
+***********************************************************************
+* Called BAL R1 so exit using R1
+* Find the lowest timer value (if any) and calculate timer string
+* to use in stimer call.
+* MARK - not fully tested yet
+*    to test - day rollovers
+***********************************************************************
+EVFNDTIM STM   R0,R6,EVFNDTR     Save R1 return branch address
+         TIME  BIN 
+         L     R4,EVYRMAX        Use a whoppingly high year (max)
+         LR    R5,R0             Save time part for compares
+         MVC   EVNXTTIM,EVTIMZRO Default is no timer found
+         LA    R6,0              Use R6 to indicate none found
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVFNDT1  L     R0,0(R2)          Is entry in use ?
+         C     R0,EVTIMER        and is it a timer entry
+         BNE   EVFNDT2           Not a timer, skip time checks
+         L     R1,16(R2)    date part
+         CR    R1,R4             date > current min ?
+         BH    EVFNDT2              yes, already found a lower
+         CR    R1,R4             date = current min ?
+         BE    EVFNDT1B             yes, time checks reqd
+         LR    R4,R1                no, date is <, use date/time
+         L     R5,20(R2)            time part
+         LA    R6,1                 indicate timer found to use
+         B     EVFNDT2              and keep scanning
+EVFNDT1B L     R1,20(R2)    date = current min, check times
+         CR    R1,R5             time > current min
+         BH    EVFNDT2              yes, already have lower
+         LR    R5,R1                else save new lower time
+         LA    R6,1                 indicate timer found to use
+EVFNDT2  A     R2,EVLENF         Any more entries to check ?
+         S     R3,EVFONE             sub 1 from counter
+         C     R3,EVFZERO            at zero yet ?
+         BH    EVFNDT1               no, more to check
+*        Does R6 indicate a value was found
+         LA    R1,1
+         CR    R6,R1             is R6 set to 1 ?
+         BNE   EVFNDT3           no, no timers were found
+*        Else R4 and R5 have the lowest date/time found
+*
+*        Logic used here is to subtract trigger time from
+*        current time to get difference... to avoid any
+*        negative number in the result if the trigger date is
+*        different to the current date add one day to the
+*        timer trigger value before the subtract.
+*        (a) if the time is > 1 day in future who cares, the
+*            logic when the timer triggers will find no match
+*            and reissue a new timer
+         TIME  BIN
+         CR    R1,R4             todays date
+         BNH   EVFNDT2A          yes
+         A     R5,EVONEDAY       no, add 1 day to time part
+EVFNDT2A SR    R5,R0             get hsecs diff
+         ST    R5,EVNXTTIM       use as timer
+EVFNDT3  LM    R0,R6,EVFNDTR     Get back the registers we trashed
+         BR    R1                And back to caller
+EVFNDTR  DS    7F                Save area for registers trashed above
+***********************************************************************
+* The actual initialisation code for ACTION=CREATE
+* Called by macro with no aditional parameters
+***********************************************************************
+         DS    0F           !! align
+EVINIT   STM   R1,R3,EVREGSAV
+         LA    R1,EVLEN     store table length into a var to use in
+         ST    R1,EVLENF    all code offset calculations
+         LA    R1,0         init table entries to zeros
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVINIT1  ST    R1,0(R2)     mark entry as unused
+         ST    R1,4(R2)     it tag to not set
+         ST    R1,8(R2)     handler address to 0
+         ST    R1,12(R2)    ECB data area
+         ST    R1,16(R2)    the two timer values to 0
+         ST    R1,20(R2)    the two timer values to 0
+         MVC   24(4,R2),=CL4'    '  clear evusrid field
+         A     R2,EVLENF
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVINIT1
+         ST    R1,EVCUREV      Zero entries at present
+         ST    R1,EVUSECOM     Default is no COMM area in use
+.* If we have a handler we need data areas and code blocks
+         AIF   ('&HANDLER' NE '').EVINITC
+.* And if we don't we need the two dummy code blocks here
+         B     EVINIT3         Branch over dummy procs
+         DS    0F
+EVSETCM1 B     EVWAIT1
+         DS    0F
+EVCOMTST B     EVWAIT7B
+         AGO   .EVINITX
+.*
+.* If here we need to define the code blocks that will process
+.* commands entered via the comm area.
+.EVINITC ANOP
+         AIF   ('&EOF' EQ '' OR '&CMDBUF' EQ '').EVERRF 
+* ---------------------------------------------------------------------
+* We are expected to create the interface to let operators issue
+* P and F commands against this program if we do not branch over this.
+* ---------------------------------------------------------------------
+         B     EVINIT2     skip code and data areas needed for this
+*
+* Called from initialisation code if COMM area is used
+         DS    0F         Align
+EVSETCM1 L     R1,EVECBNUM         so one more ECB entry in list
+         A     R1,EVFONE
+         ST    R1,EVECBNUM         
+*
+         L     R4,COMM             * GET THE COMMTASK STUFF
+         L     R4,COMECBPT-COMLIST(,R4)  * POINT TO COMMAND ECB
+         ST    R4,0(R5)            * POST IT TO OUR ECB LIST
+         A     R5,EVFFOUR   R5 to address next ECBLIST entry
+         B     EVWAIT1      continue in main codeline
+*
+* Called from WAIT code if COMM area is used
+* See if a operator command was entered via the comm area
+* If that was the trigger go and branch to command handler
+         DS    0F           Align
+EVCOMTST CNOP  0,4
+         L     R4,COMM
+         L     R4,COMECBPT-COMLIST(,R4) Point to command ECB
+         USING ECB,R4              * COVER THE COMMAND ECB
+         TM    ECBCC,ECBPOST       * DID WE GET A COMMAND?
+         BNO   EVWAIT7B            * NO, BACK TO MAIN CODE
+         DROP  R4
+* else yes, we have a command entered
+         L       R4,COMM             * GET BACK R4
+         USING   COMLIST,R4          * ADDRESS IT
+         L       R3,COMCIBPT         * GET ADDR OF CIB
+         USING   CIBNEXT,R3          * ADDRESS IT
+*                                    --- STOP REQUEST (P) ?
+* ROUTINE TO PROCESS A STOP COMMAND                                 *
+         CLI     CIBVERB,CIBSTOP     * IS IT STOP?
+         BNE     MODIFY              * NO - CHECK FOR MODIFY
+         L       R1,EVPARKA          * YES, BRANCH TO PARK ADDRESS
+         BR      R1
+OPERROR  WTO     'ONLY PARK(P) AND MODIFY(F) COMMANDS ARE PERMITTED'
+         QEDIT ORIGIN=COMCIBPT,BLOCK=(R3)  Free the comm CIB buffer
+         B       EVWAIT7B            and carry on checks
+MODIFY   EQU     *
+         CLI     CIBVERB,CIBMODFY    * IS IT MODIFY ?
+         BNE     OPERROR             * NO - ERROR
+* Save the text the operator entered where the user wanted it
+* And branch to the user handler routine
+         L     R6,EVCMDBFA  get address of command buffer
+         L     R1,EVCMDBFL  length of buffer for EX
+         EX    R1,EVEXMVC1  move cibdata to addr in r6, length r1
+         QEDIT ORIGIN=COMCIBPT,BLOCK=(R3)  Free the comm CIB buffer
+         L     R6,EVUSECOM  get address of handler
+         C     R6,EVFZERO   check non-zero addr
+         BE    EVWAITEA     oops, no address stored
+         BALR  R1,R6        jump to handler at r6, r1 may return
+         B     EVWAIT7B     jump back to main WAIT code
+* EX in here, must be between using and drop statements
+* or assembly fails with addressability errors, as CIBDATA
+* is in an addressable dsect and not in our code area
+EVEXMVC1 MVC   0(0,R6),CIBDATA    EX to move CIBDATA
+         DROP  R4
+         DROP  R3
+*
+* Note: above code does not fall through to here,
+*       it should have branched back to the mainline EVWAIT7B
+EVINIT2  LA    R1,&EOF
+         ST    R1,EVPARKA
+         LA    R1,&HANDLER
+         ST    R1,EVUSECOM     We will use the COMM area
+         LA    R1,&CMDBUF      Save address of buffer to get commands
+         ST    R1,EVCMDBFA 
+         LA    R1,L'&CMDBUF    Save length of command buffer
+         ST    R1,EVCMDBFL
+* Ok, we need to find/setup the comm area we will be using
+         CNOP  0,4             Need alignment
+         LA    R4,COMM         - address of comm
+         EXTRACT (R4),FIELDS=COMM,MF=(E,EXTRACT1) get comm area
+         L     R4,COMM         - address of comm
+         USING COMLIST,R4      - to iezcom
+         L     R3,COMCIBPT     - get addr of cib
+         USING CIBNEXT,R3      - address it
+         LTR   R3,R3           - was cib addr obtained
+         BZ    EVINIT2A        - no, init
+         CLI   CIBVERB,CIBSTART - is it start ?
+         BNE   EVINIT2A        - no, init
+         QEDIT ORIGIN=COMCIBPT,BLOCK=(R3) - yes, free it
+         LTR   R15,R15         - ok ?
+         BZ    EVINIT2A        - yes, continue
+         WTO   'EVENTHUB: UNABLE TO ALLOCATE COMM AREA, ABEND 1'
+         ABEND 1
+EVINIT2A QEDIT ORIGIN=COMCIBPT,CIBCTR=1 - set modify limit to 1
+         DROP  R3
+         DROP  R4
+*        And we have a comm area now
+.EVINITX ANOP
+EVINIT3  LM    R1,R4,EVREGSAV
+         AGO   .EVMEXIT 
+.* Are we destroying all active table entries ?
+.EVACT01 AIF   ('&ACTION' NE 'DESTROY').EVACT02
+.* ---------------------------------------------------
+.* Call the destroy routine for ACTION=DESTROY
+.* ---------------------------------------------------
+         BAL   R1,EVDESTRY
+         AGO   .EVMEXIT 
+.EVACT02 AIF   ('&ACTION' NE 'DELETE').EVACT03
+         AIF   ('&ID' EQ '' OR '&TYPE' EQ '').EVERRB 
+         AIF   ('&ID EQ '4' OR '&ID' EQ 'R4').EVACT21
+         ST    R4,EVTEMP
+         LR    R4,&ID
+.EVACT21 ANOP
+         BAL   R1,EVDELETE
+         AIF   ('&ID EQ '4' OR '&ID' EQ 'R4').EVACT22
+         L     R4,EVTEMP
+.EVACT22 ANOP
+         AGO   .EVMEXIT 
+.EVACT03 AIF   ('&ACTION' NE 'ADD').EVACT04
+.* ---------------------------------------------------
+.* Call the add routine for ACTION=ADD,TYPE=xx,ID=xx
+.*   EVENTHUB ACTION=ADD,TYPE=TIMER,HSECS=doublewordfield
+.*   EVENTHUB ACTION=ADD,TYPE=WTOR,ID=wtorid,HANDLER=,ECB=
+.*   EVENTHUB ACTION=ADD,TYPE=ACTMSG,ID=reg holding msg id
+.* ---------------------------------------------------
+         STM   R0,R15,EVREGSAV
+         AIF   ('&TYPE' EQ 'TIMER').EVACT31
+         AIF   ('&ID' EQ '' OR '&TYPE' EQ '').EVERRC 
+         AIF   ('&TYPE' EQ 'WTOR').EVACT32
+         AIF   ('&TYPE' EQ 'ACTMSG').EVACT33
+         AGO   .EVERRE  
+.EVACT31 ANOP
+         AIF   ('&HANDLER' EQ '').EVERRE 
+         AIF   ('&HSECS' EQ '').EVERRG 
+         AIF   (&HSECS GT 864000).EVERRH
+         LA    R8,&HANDLER  handler to jump to
+         TIME  BIN
+         LA    R6,0            hsecs parm to decimal and add it
+         A     R6,=F'&HSECS'   to the current time
+         AR    R0,R6           which is in R0
+         LR    R6,R1        time bin date part
+         LR    R7,R0        time bin time part
+         LR    R4,R0        id to be time bin time part
+         L     R5,EVTIMER   this is a timer type
+         BAL   R1,EVADD
+         LM    R0,R15,EVREGSAV
+         AGO   .EVMEXIT 
+.* TYPE=WTOR OR TYPE=ACTMSG
+.* .... WTOR NEEDS HANDLER + ECB, ACTMSG DOES NOT, APART FROM THAT
+.*      THE CODE IS COMMON
+.EVACT32 ANOP
+         AIF   ('&HANDLER' EQ '').EVERRE 
+         AIF   ('&ECB' EQ '').EVERRE 
+         L     R5,EVWTOR    this is a wtor type
+         LA    R8,&HANDLER
+         LA    R9,&ECB
+         AGO   .EVACT34
+.EVACT33 ANOP
+         L     R5,EVHIMSG   this is a action message type
+         LA    R8,0
+.EVACT34 ANOP
+         LR    R4,&ID
+         BAL   R1,EVADD
+         LM    R0,R15,EVREGSAV
+         AGO   .EVMEXIT 
+.* ---------------------------------------------------
+.* ACTION CAN ONLY BE WAIT
+.* Build the wait list based upon whether we accept
+.* operator commands, how many WTORs are outstanding,
+.* and the next timer to expire from the timer list
+.* if there are timers queued. And then WAIT.
+.* ---------------------------------------------------
+.EVACT04 AIF   ('&ACTION' NE 'WAIT').EVERRA 
+EVWAIT   CNOP  0,4
+         XC    TIMERECB,TIMERECB   Clear timer ECB even if not used
+*                                  as it gets tested for anyway
+         LA    R1,0
+         ST    R1,EVECBNUM         no entries in ECB list yet
+         LA    R5,ECBLIST          R5 to address into ECBLIST
+* If we have anything to do will be events queued and comm area
+         C     R1,EVUSECOM         if usecomm is 0 no comm area
+         BE    EVWAIT0
+         LA    R1,1                else comm area so at least 1 entry
+EVWAIT0  A     R1,EVCUREV          Add count of any events in list 
+         C     R1,EVFZERO          If zero, no events or comm
+         BE    EVWAITER            So error
+*        Do we need to monitor the COMM area ?
+         LA    R2,0
+         L     R1,EVUSECOM
+         CR    R1,R2
+         BE    EVWAIT1      No comm area in use
+         B     EVSETCM1     Else COMM area into ECB list
+*        Note: EVSETCM1 branches to EVWAIT1 when done
+*        Are there any WTORs to wait for ?
+EVWAIT1  CNOP  0,4
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVWAIT2  L     R1,0(R2)     is entry a wtor type
+         C     R1,EVWTOR   
+         BNE   EVWAIT3      no, move on to next entry
+         L     R4,12(R2)    Addr of WTOR ECB data area
+         ST    R4,0(R5)     POST ADDR IT TO OUR ECB LIST
+         LA    R1,0
+         ST    R1,0(R4)     SET VALUE AT ADDR TO 0 (NOT TRIGGERED)
+         L     R1,EVECBNUM  And one more ECB entry in list
+         A     R1,EVFONE
+         ST    R1,EVECBNUM         
+         A     R5,EVFFOUR   R5 to address next ECBLIST entry
+EVWAIT3  A     R2,EVLENF
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVWAIT2
+*        Do we have any timers to watch ?. Set timer to next to occur
+         BAL   R1,EVFNDTIM         See if any timers to trigger
+         CLC   EVNXTTIM,EVTIMZRO   If zeros, no timers
+         BE    EVWAIT4
+         XC    TIMERECB,TIMERECB   * CLEAR THE STIMER EXIT'S ECB
+         LA    R15,TIMERECB        * LOAD ADDRESS OF TIMER ECB
+         ST    R15,TIMEXPRM        * STORE IT FOR TIMER EXIT TO POST
+         STIMER REAL,TIMEOUT,BINTVL=EVNXTTIM
+         LA    R3,TIMERECB         * POINT TO THE STIMER ECB
+         ST    R3,0(R5)            * PUT THAT IN THE ECB LIST
+         L     R1,EVECBNUM         so one more ECB entry in list
+         A     R1,EVFONE
+         ST    R1,EVECBNUM         
+         A     R5,EVFFOUR    R5 to address next ECBLIST entry
+*        Terminate the ECBLIST
+EVWAIT4  CNOP  0,4
+         L     R1,EVECBNUM
+         C     R1,EVFZERO         May be zero, if no COMM and all
+         BNH   EVWAITER           timers finally expire, exit if so
+         S     R5,EVFFOUR    R5 back to last used list entry
+         OI    0(R5),X'80'         * MARK END OF LIST
+         WAIT  1,ECBLIST=ECBLIST   * WAIT FOR SOMETHING IN LIST
+*                                  * FIGURE OUT WHAT IT WAS
+*        CHECK THE COMMAND THAT TRIGGERED THE EVENT
+* Was the timer triggered ?
+         CLC   EVNXTTIM,EVTIMZRO   If zeros, no timers
+         BE    EVWAIT7                   so skip test
+         TTIMER CANCEL             * CANCEL THE TIMER FOR ANY EVENT
+         LA    R3,TIMERECB         * POINT TO TIMER ECB
+         USING ECB,R3              * COVER THE STIMER ECB
+         TM    ECBCC,ECBPOST       * DID THE TIMER POP?
+         BNO   EVWAIT7             * No, skip timer check loop
+         DROP  R3
+* Scan for timer entries, may be multiple that expired at this time
+         LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVWAIT5  L     R1,0(R2)     is entry a timer type
+         C     R1,EVTIMER  
+         BNE   EVWAIT6      no, move on to next entry
+* compare timer entry value against current time
+* if <= has expired so call handler and erase entry
+         TIME  BIN
+         C     R1,16(R2)    Check date part
+         BL    EVWAIT6      Current date < Timer date, skip
+         C     R0,20(R2)    Check time parts
+         BL    EVWAIT6      Current time < Timer time, skip
+*        Else, Timer entry scheduled time < Current time
+         L     R4,8(R2)     Addr of handler code
+         LA    R1,0         clear entry to zeros now
+         ST    R1,0(R2)     Event type to 0 (evspare)
+         ST    R1,4(R2)     clear event tag
+         ST    R1,8(R2)     clear handler code address
+         ST    R1,12(R2)    clear ecb address field
+         ST    R1,16(R2)    clear timer word 1
+         ST    R1,20(R2)    clear timer word 2
+         L     R1,EVCUREV        Less one event now
+         S     R1,EVFONE
+         ST    R1,EVCUREV
+         C     R4,EVFZERO   check non-zero addr
+         BE    EVWAITEA     oops, no address stored
+         BALR  R1,R4        return on R1, target code at R4
+EVWAIT6  A     R2,EVLENF    and keep checking for others
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVWAIT5
+* See if a operator command was entered via the comm area
+* If that was the trigger go and branch to command handler
+EVWAIT7  B     EVCOMTST   code or dummy proc depening on create method
+*
+* Then see if any WTOR responses were made
+* scan the ECB list to find what WTOR triggered...
+* assume address pointed to by ecb list is no longer zero value
+* ...then scan the event table to find the handler for that WTOR
+*    by finding match on address found in ecb list
+* Hmm, easier, also pointed to my our event list so rather
+* than search ecblist then eventtable for match, just search
+* event table  -- BAD IDEA, all wtors are treated as replied to ????
+EVWAIT7B LA    R2,EVTABLE
+         LA    R3,EVMAXEV
+EVWAIT8  L     R1,0(R2)     is entry a wtor type
+         C     R1,EVWTOR   
+         BNE   EVWAIT9      no, move on to next entry
+         L     R4,12(R2)    Addr of WTOR ECB data area
+         TM    0(R4),X'40'  Is ECB post flag set ?
+         BNO   EVWAIT9      No, this one not triggered
+***      L     R4,0(R4)     If value in there not zero, it changed
+***      C     R4,EVFZERO
+***      BE    EVWAIT9      else if 0 not this one
+*        branch to handler for this, return permitted via R1
+         L     R4,8(R2)     Addr of handler code
+*        Mark wtor entry as deleted/actioned before branching
+         LA    R1,0
+         ST    R1,0(R2)     Event type to 0 (evspare)
+         ST    R1,4(R2)     clear event tag
+         ST    R1,8(R2)     clear handler code address
+         ST    R1,12(R2)    clear ecb address field
+         ST    R1,16(R2)    clear timer word 1
+         ST    R1,20(R2)    clear timer word 2
+         L     R1,EVCUREV   Less one event now
+         S     R1,EVFONE
+         ST    R1,EVCUREV
+         C     R4,EVFZERO   check non-zero addr
+         BE    EVWAITEA     oops, no address stored
+         BALR  R1,R4        can return on R1, target code at R4
+EVWAIT9  A     R2,EVLENF
+         S     R3,EVFONE
+         C     R3,EVFZERO
+         BH    EVWAIT8
+* Branch back to wait on any events still in out event table
+         B     EVWAIT
+EVWAITEA WTO   'EVENTHUB ATTEMPT TO BRANCH TO ADDR ZERO, BLOCKED'
+         B     EVWAITEX
+EVWAITER WTO   'EVENTHUB WAIT REQUESTED WHEN NO EVENTS WERE QUEUED'
+         B     EVWAITEX
+EVWAITE2 WTO   'EVENTHUB QUEUED 0 EVENTS, PROGRAM LOGIC ERROR'
+EVWAITEX CNOP  0,4
+         AGO   .EVMEXIT 
+.* ---------------------------------------------------
+.* Some fields MUST be in DSECTs and cannot be
+.* inline data fields. To make it easier this
+.* option will create the mappings for those areas
+.* Both IEZCIB and IEZCOM are only required if the
+.* COMM area is being used but at this point as I am
+.* trying to make this easy to use include them always
+.* Maybe later add a seperate ACTION= to load dsects
+.* needed for comm and keep this seperate for non-comm
+.* ---------------------------------------------------
+.EVDSECT ANOP
+         DSECT
+         IEZCIB      CIB is s dynamically allocated
+*                    by the OS. we only need
+*                    it if we are using the comm area
+*                    but cant link it to action-create
+*                    so just create it always
+         IEZCOM      COMM Area, also only needed if we
+*                    are using the COMM area
+         IHAECB      ECB fields needed for timer/wtor etc
+         AGO   .EVMEXIT 
+.* ---------------------------------------------------
+.* Macro error messages
+.* ---------------------------------------------------
+.EVERRA  MNOTE 12,'ACTION MUST BE INIT/ADD/DELETE/DESTROY/WAIT/DSECTS'
+         MNOTE 12,'ACTION PROVIDED WAS &ACTION'
+         MEXIT           
+.EVERRB  MNOTE 12,'FOR ACTION=DELETE BOTH TYPE AND ID ARE REQUIRED'
+         MEXIT           
+.EVERRC  MNOTE 12,'FOR ACTION=ADD BOTH TYPE AND ID ARE REQUIRED'
+         MEXIT           
+.EVERRD  MNOTE 12,'FOR ACTION=ADD TYPE IS TIME/OPER/WTOR/ACTMSG'
+         MEXIT           
+.EVERRE  MNOTE 12,'HANDLER REQUIRED FOR ADD OF TYPE=TIMER/WTOR'
+         MEXIT           
+.EVERRF  MNOTE 12,'HANDLER, CMDBUF AND EOF NEEDED FOR COMM PROCESSING'
+         MEXIT           
+.EVERRG  MNOTE 12,'HSECS VALUE REQUIRED FOR TIMER REQUEST'
+         MEXIT           
+.EVERRH  MNOTE 12,'HSECS VALUE CANNOT BE LARGER THAN 864000 (ONE DAY)'
+         MEXIT           
+.* Macro ends
+.EVMEXIT ANOP
+         MEND
+./ ENDUP
+ZZ
+//*
+//* COMPRESS THE LIBRARY
+//COMPRESS EXEC PGM=IEBCOPY,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+//SYSUT2 DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+//SYSIN DD *
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+/*
+//

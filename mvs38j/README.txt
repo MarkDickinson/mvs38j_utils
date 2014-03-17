@@ -35,6 +35,14 @@ DATEPROG.txt    - UTILITY LIBRARY/PROGRAMS/MACROS used by many of my
                   version, newer and bugfix versions will be on
                   my website before they reach here.
 
+EVENTHUB        - BETA - S/370 macro
+                  MACRO to easily provide MVS3.8J assembler programs
+                  with COMM area processing, multiple WTORs, and
+                  multiple timers
+                  eventhub_macro.txt - the MACRO
+                  eventhub_test_program.txt - demo program and the
+                  only documentation at this point
+
 IPLINFO.txt     - I wanted more info logged that the default reason
                   for ipl the OS provides (which we have all disabled
                   anyway). This records the ipltime, ipl volser and cuu

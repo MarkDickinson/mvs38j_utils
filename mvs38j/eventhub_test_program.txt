@@ -1,0 +1,169 @@
+//MARKA JOB (0),'ASM',CLASS=A,MSGCLASS=T
+//*
+//* CHANGE LOAD LIBRARY NAME FROM MARK.LIB.LOAD
+//* CHANGE MARK.PROD.LIB.MACROS.ASM TO THE LIBRARY YOU INSTALLED
+//* THE EVENTHUB MACRO INTO.
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB 
+// DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//* DD DISP=SHR,DSN=MVSSRC.SYM101.F01
+//ASM.SYSIN DD *
+***********************************************************************
+* TEST PRGRAM TO EXERCISE THE EVENTHUB MACRO
+* TESTS...
+*  - INIT IS DONE AS SHIPPED TO USE THE COMM AREA, AN EXAMPLE OF
+*    NOT USING THE COMM AREA IS COMMENTED JUST BELOW THAT. USING
+*    THE COMM AREA USE 'P JOBNAME' TO END THE DEMO, WITHOUT IT
+*    YOU MUST REPLY 'END' TO THE SECOND WTOR TO END THE PROGRAM.
+*  - OPERATOR F AND P COMMANDS PROCESSED VIA THE COMM AREA
+*    IN THIS DEMO A F(modify) COMMAND ENTERED WILL HAVE THE COMMAND
+*    WTO'ED AND CARRY ON. THE P(park) COMMAND WILL ALWAYS JUMP TO THE
+*    EOF POINT SPECIFIED BY INIT (NORMALLY TO END THE PROGRAM).
+*  - MULTIPLE OUTSTANDING WTORS, EACH WTOR REPLY JUMPS TO ITS OWN
+*    REPLY PROCESSING CODE, WHICH IN THIS DEMO JUST RE-ISSUES THE
+*    WTOR... SHOWS HOW TO EASILY KEEP MULTIPLE WTORS IN USE.
+*    REPLYING 'END' TO THE SECOND WTOR WILL END THE TEST PROGRAM.
+*  - MULTIPLE TIMERS TO SHOW MULTIPLE TIMERS CAN BE EASILY QUEUED 
+*    UNDER MVS3.8J USING THIS MACRO. AS WITH WTORS EACH TIMER WILL
+*    JUMP TO IT'S OWN HANDLER WHEN IT EXPIRES. FOR THIS DEMO THE
+*    FIVE MINUTE TIMER IS RE-QUEUED AND THE SEVEN MINUTE TIMER IS
+*    ALLOWED TO EXPIRE OFF
+*  - THE EXIT BLOCK SHOWS CALLING EVENTHUB WITH THE DESTROY ACTION
+*    WHICH WILL CANCEL ALL OUTSTANDING QUEUED EVENTS AND CLEAN UP
+*    RESOURCES FOR A CLEAN EXIT
+*
+*    C R I T I C A L
+*    All event HANDLERs are called with the return address in R1
+*    So save R1 before modifying it it handlers, amd return to the
+*    EVENTHUB code is by BR R1 ( well BR any reg as long as it has what
+*    was passed in R1 when the handler was called :-) )
+***********************************************************************
+         PRINT NOGEN
+TESTPROG CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+* INITIALISE:
+*
+* If HANDLER/EOF/CMDBUF are provided COMM area is processed
+* If they are omitted COMM area is not processed, simple isn't it
+*
+* testing, with COMM area, operator F and P commands are accepted
+         EVENTHUB ACTION=CREATE,HANDLER=OPCMD,EOF=EXIT,CMDBUF=OPCMDBUF
+* testing, no comm area, comment out create action for comm area
+* if you uncomment this ensure you comment the line above
+***      EVENTHUB ACTION=CREATE
+*
+* WTORS
+*
+* add two WTORs so we can show multithreaded WTORs
+* The WTOR macro returns the message id in R1... that MUST be the ID=
+* And the ECB must be the ECB= must be the ECB field used by the WTOR
+         WTOR  'REPLY TO TEST WTOR 1',WTORREP1,L'WTORREP1,WTORECB1
+         EVENTHUB ACTION=ADD,TYPE=WTOR,ID=R1,HANDLER=WTOREX1,          X
+               ECB=WTORECB1
+         WTOR  'REPLY TO TEST WTOR 2',WTORREP2,L'WTORREP2,WTORECB2
+         EVENTHUB ACTION=ADD,TYPE=WTOR,ID=R1,HANDLER=WTOREX2,          X
+               ECB=WTORECB2
+*
+* TIMERS
+*
+* add a timer, 30000 is 5 mins in hsecs
+         EVENTHUB ACTION=ADD,TYPE=TIMER,HANDLER=TIMEEXP1,              X
+               HSECS=30000
+* add a second timer, 42000 is 7 mins in hsecs
+         EVENTHUB ACTION=ADD,TYPE=TIMER,HANDLER=TIMEEXP2,              X
+               HSECS=42000
+* wait for any event trigger now. The generated code will
+* be in control until either
+*    (a) a park command is issued (if using COMM area)
+*    (b) the reply 'END' is given to the second WTOR
+*    (c) no events are left queued in which case we return to
+*        this code (which cannot happen if
+*        the comm area is being used... to see that use no
+*        comm area and let WTORs and timers expire)
+         EVENTHUB ACTION=WAIT
+* EXIT
+EXIT     CNOP  0,4
+         EVENTHUB ACTION=DESTROY
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+*
+* Example of accessing operator commands
+OPCMDBUF DS    CL80
+OPSAVER1 DS    F
+OPCMD    ST    R1,OPSAVER1
+         MVC   OPWTO+19(40),OPCMDBUF
+OPWTO    WTO   'OP CMD WAS:....+....1....+....2....+....3....+....4'
+         L     R1,OPSAVER1
+         BR    R1          --- back to caller
+*
+* Example of WTOR processing
+WTSAVER1 DS    F
+WTORECB1 DS    1F
+WTORREP1 DC    CL30' '
+WTORECB2 DS    1F
+WTORREP2 DC    CL30' '
+WTOREX1  ST    R1,WTSAVER1
+         MVC   WTOREX1A+25(30),WTORREP1
+WTOREX1A WTO   'WTOR 1 REPLY WAS:....+....1....+....2....+....3'
+* Re-issue the wtor
+         WTOR  'REPLY TO TEST WTOR 1B',WTORREP1,L'WTORREP1,WTORECB1
+         EVENTHUB ACTION=ADD,TYPE=WTOR,ID=R1,HANDLER=WTOREX1,          X
+               ECB=WTORECB1
+         L     R1,WTSAVER1
+         BR    R1
+*
+WTOREX2  ST    R1,WTSAVER1
+         MVC   WTOREX2A+25(30),WTORREP2
+WTOREX2A WTO   'WTOR 2 REPLY WAS:....+....1....+....2....+....3'
+* Re-issue the wtor
+         WTOR  'REPLY END TO EXIT PROGRAM',WTORREP2,L'WTORREP2,WTORECB2
+         CLC   WTORREP2(3),=CL3'END'   If reply is END, then exit
+         BE    EXIT
+         EVENTHUB ACTION=ADD,TYPE=WTOR,ID=R1,HANDLER=WTOREX2,          X
+               ECB=WTORECB2
+         L     R1,WTSAVER1
+         BR    R1
+*
+* Timer processing examples
+DATESAV1 DS    F      save R1 return addr, WTO trashes it
+TIMEEXP1 ST    R1,DATESAV1
+         WTO   'TIMER 1 TRIGGERED, DO STUFF FOR TIMER1 HERE'
+*        In this DEMO re-issue another 5 minute timer
+         EVENTHUB ACTION=ADD,TYPE=TIMER,HANDLER=TIMEEXP1,              X
+               HSECS=30000
+         L     R1,DATESAV1
+         BR    R1
+DATESAV2 DS    F      save R1 return addr, WTO trashes it
+TIMEEXP2 ST    R1,DATESAV2
+         WTO   'TIMER 2 TRIGGERED, DO STUFF FOR TIMER2 HERE'
+         L     R1,DATESAV2
+         BR    R1
+*
+SAVEAREA DS    18F
+         EVENTHUB ACTION=DSECTS
+         YREGS
+         END
+/*
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(TESTPROG),DISP=SHR
+//*
+//TESTIT   EXEC PGM=TESTPROG,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSUDUMP DD   SYSOUT=*
+//SYSABEND DD   SYSOUT=*
+//
