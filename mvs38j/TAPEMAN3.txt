@@ -1,4 +1,4 @@
-//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=A
+//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T
 //* **************************************************************
 //*
 //*         INSTALLATION JOB FOR TAPEMAN3
@@ -41,29 +41,18 @@
 //*       Datasets with this prefix are where everything will be
 //*       installed and programs assembled into.
 //* 
-//*
-//* ----- ADDITIONAL STEPS FOR TURNKEY3 USERS -----
-//*   This may be relevant for other users also, but I have
-//*   put this in specifically for TK3 users as this is what I had
-//*   to do to get this job to run on a TK3 system.
-//* 
-//*  (3)
-//*   globally change 3330 to 3350, there are no 3330 packs on a
-//*   TK3 system and they are used as work packs in my supplied JCL.
-//*   If you don't do that you will be asked to mount a 3330 pack.
-//* 
-//*  (4)
-//*   Search for job MARKASM1, then for DD OBJLIB.
-//*   Change the TRK,(2,2) to TRK,(10,5) for that one occurence
-//*   to avoid a SB37 abend when the assembly is done
-//*
-//*
 //* --- after that is done you can run this job ---
 //*
 //* After this job is run all the install libraries will have
 //* been created and loaded, plus all the programs assembled
 //* into the install load library ready for you to copy to
 //* your system load libraries.
+//* IMPORTANT: If you are using RAKF and denied access to all
+//*            for the default PROD batch group (as you should)
+//*            all the assemblies kicked off will fail with
+//*            security denies. Edit the .SRC dataset to add a
+//*            user=/password= fields in each member and 
+//*            manulally submit to populate the install linklib
 //*
 //* **************************************************************
 //*
@@ -123,15 +112,16 @@ RECTMPL  DC    CL6' '         VOLSER         (6)
 DBSLEN   EQU   *-RECTMPL
          MEND
 ./ ADD NAME=TAPEMAN3
-//MARKASM  JOB (0),'TAPEMAN',CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
+//MARKASM  JOB (0),'TAPEMAN',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN       FOR IHAECB
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  DATA,DLM=ZZ
@@ -140,7 +130,7 @@ DBSLEN   EQU   *-RECTMPL
 * TAPEMAN : Mark Dickinson, December 2008                            *
 *                                                                    *
 * T A P E M A N     T O O L K I T                                    *
-*     Tapeman - Version 3.03 - June 2012                             *
+*     Tapeman - Version 3.04 - April 2014                            *
 * T A P E M A N     T O O L K I T                                    *
 *                                                                    *
 *                                                                    *
@@ -209,7 +199,11 @@ DBSLEN   EQU   *-RECTMPL
 *                        not one we have catalogued (may have been   *
 *                        created manually by op for this onetime fix)*
 *                        --- GOTO 3. ---                             *
-*                  Yes - exit, do nothing, mount stays outstanding   *
+*                  Yes - cancel job requesting the mount             *
+*                        --- END ---                                 *
+*                  Neither - if operator does not reply in 10mins    *
+*                        the job is cancelled so automation resumes  *
+*                        --- END ---                                 *
 *            Yes - Use that scratch volser found                     *
 *                        --- GOTO 3. ---                             *
 *                                                                    *
@@ -369,20 +363,16 @@ DBSLEN   EQU   *-RECTMPL
 *              can cancel a job asking for a non-automated volser.   *
 * OLD MSG : TAP005A NOT AUTOMATED, MANUALLY MOUNT vvvvvv ON cuu      *
 * NEW MSG : TAP005A MANUALLY MOUNT vvvvvv ON cuu, JOB JJJJJJJJ       *
+* ------- Version 3.04 -------                                       *
+*    2014/04 - Minor tweak, for lights out the operator prompt to    *
+*              provide a volser when there is no scratch tapes       *
+*              available not has a timer to go to the cancel job     *
+*              step rather than waiting forever for a operator reply *
+*              Required to stop my MMPF waiting forever on this pgm. *
 *                                                                    *
 **********************************************************************
          EJECT   
 TAPEMAN3 CSECT
-* WE NEED MORE THAN ONE BASE REGISTER, REPLACED BELOW WITH
-*        STM   R14,R12,12(13)
-*        BALR  R12,R0
-*        USING *,R12
-*        LA    R15,SAVEAREA
-*        ST    R15,8(R13)
-*        ST    R13,4(R15)
-*        LR    R13,R15
-*
-* THIS
          STM   R14,R12,12(R13)    SAVE REGISTERS
          LR    R12,R15            R12 = ADDR OF ENTRY POINT
          USING TAPEMAN3,R12,R11   ADDRESABILITY TO CSECT
@@ -392,7 +382,6 @@ TAPEMAN3 CSECT
          LR    R13,R11            R13 = ADDR OF OUR SAVE AREA
          LA    R11,4095(R12)      R11 WILL BE
          LA    R11,1(R11)         SECOND BASE REGISTER
-* END REPLACEMENT
          SPACE 5
 *        --- GET THE PARM FIELD PASSED ---
 *        WE ONLY EXPECT ONE PARM SO NO NEED TO CHECK FOR MORE
@@ -1033,26 +1022,55 @@ $IOAREA  DS   CL200' '  OUR VSAM FILE ONLY HAS 132 BYTE RECORDS
 *           START OF WTOR SPECIFIC STUFF
 * If no scratch tapes were found in the VSAM file then we
 * must prompt the operators for one to use.
-* If the operator replies witha volser we continue on and
+* If the operator replies with a volser we continue on and
 * use it. 
 * If the operator replies cancel, we attampt to cancel the
 * job that wanted the tape before we exit, that will probably
 * fail if there are multiple jobs with the same name on the
 * input queue but should work fine normally.
+* if no response to the WTOR within 10 mins we cancel the job
 * -----------------------------------------------------------
 SAVEWTOR DS    1F
 WTORECB  DS    1F
+TIMERECB DS    1F
+TIMEXPRM DS    1F     EVENT TO POST
+WTORECBL DS    2F     ECB LIST, 2 ENTRIES
+WTORMSID DS    1F
+         DS    0D     BELOW MUST BE DOUBLEWORD ALLIGNED
+WTORMAX  DC    CL8'00100000'   hhmmss-10ths of secs
 WTORREPL DC    CL6' '
 WTORONER WTO   'VSAM I-O ERROR'
 WTORPROC WTO   'TAP096W *** NO SCRATCH TAPES ARE AVAILABLE ***'
+         STIMER REAL,WTORTIMO,DINTVL=WTORMAX
+         LA    R1,TIMERECB
+         ST    R1,TIMEXPRM
          MVC   WTORTEXT+57(8),JOBNAME    
          XC    WTORECB,WTORECB
-WTORTEXT WTOR  'TAP097A ENTER TAPE VOLSER TO USE FOR JOB xxxxxxxx',    X
+         XC    TIMERECB,TIMERECB
+WTORTEXT WTOR  'TAP097A ENTER TAPE VOLSER TO USE FOR JOB xxxxxxxx, OR CX
+               ANCEL, YOU HAVE 10 MINS TO RESPOND BEFORE JOB IS CANCELEX
+               D',                                                     X
                WTORREPL,L'WTORREPL,WTORECB
-         WAIT  1,ECB=WTORECB
+         ST    R1,WTORMSID                SAVE WTOR MESSAGE ID
+         LA    R1,WTORECB                 STORE WTOR ECB IN ECB LIST
+         ST    R1,WTORECBL
+         LA    R1,TIMERECB                STORE TIMER ECB IN ECB LIST
+         ST    R1,WTORECBL+4
+         OI    WTORECBL+4,X'80'           MARK END OF ECBLIST
+         WAIT  1,ECBLIST=WTORECBL         WAIT FOR SOMETHING IN LIST
+         TTIMER CANCEL                    ALWAYS CANCEL TIMERS
+         LA    R1,TIMERECB                SEE IF THE TIMER POPPED
+         USING ECB,R1
+         TM    ECBCC,ECBPOST              WAS IT ?
+         BO    WTORKILL                   YES, JUMP DIRECTLY TO CANCEL
+         DROP  R1
+* ELSE IT WAS A WTOR RESPONSE
          CLC   WTORREPL(6),CANCEL         IF NOT CANCEL THEN CONTINUE
          BNE   WTORCONT
-         MVC   CMDCANCL+6(8),JOBNAME      THE JOBNAME TO CANCEL
+         B     WTORJOBC                   OP CANCEL NO WTOR OUTSTANDING
+WTORKILL L     R1,WTORMSID                OR FOR TIMER TRIGGER WE MUST
+         DOM   MSG=(R1),REPLY=YES         CANCEL THE WTOR
+WTORJOBC MVC   CMDCANCL+6(8),JOBNAME      THE JOBNAME TO CANCEL
          STM   R0,R1,SAVESVCR             SAVE REGS AND ISSUE CANCEL
          MODESET KEY=ZERO,MODE=SUP
          SR   R1,R1
@@ -1072,6 +1090,15 @@ WTORTAPE WTO   'TAP008I USING TAPE vvvvvv'
 *                                  VSAM FILE UPDATE FAILS AS THIS TAPE
 *                                  MAY NOT BE IN OUR DBS.
          B     HERCCMD         USE THIS VOLSER FOR MOUNT AND UPDATE
+* BELOW TRIGGERED ON TIMER TIMEOUT, POSTS TO THE ENTRY WATCHED
+* BY THE ECBLIST.
+WTORTIMO SAVE  (14,12)
+         L     R2,TIMEXPRM        IT IS THE TIMER EVENT WE ARE POSTING
+         POST  (2)                POST THE TIMER EVENT, DO NO MORE !!!
+         RETURN (14,12)           STIMER EXIT END, RETURN CONTROL
+         SPACE 2
+         IHAECB                   NEEDED FOR ECBLIST STUFF 
+         EJECT  
 * -----------------------------------------------------------
 *              END OF WTOR SPECIFIC STUFF
 * -----------------------------------------------------------
@@ -1097,7 +1124,7 @@ R15      EQU   15
 ZZ
 //SYSPUNCH DD  SYSOUT=*
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//    DSN=&&OBJLIB,SPACE=(TRK,(10,2))
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=1',
 //             REGION=1024K,COND=(0,NE)
@@ -1119,7 +1146,7 @@ ZZ
 /*
 //
 ./ ADD NAME=TAPEMCUU
-//MARKASM  JOB (0),'TAPEMCUU',CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
+//MARKASM  JOB (0),'TAPEMCUU',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)
@@ -1161,7 +1188,7 @@ ZZ
 *          you must change the tapevols dd dataset name to the
 *          name of your tape database of course.
 *
-*          //DEMOJOB  JOB  (0),'DEMO TAPEMCUU',CLASS=A,MSGCLASS=A
+*          //DEMOJOB  JOB  (0),'DEMO TAPEMCUU',CLASS=A,MSGCLASS=T
 *          //*
 *          //* OOPS, SEE 
 *          //* WE MUST RUN TAPEMCUU OUTSIDE THE CURENT BATCH JOB
@@ -1173,7 +1200,7 @@ ZZ
 *          //SYSPRINT DD   SYSOUT=*
 *          //SYSUT2   DD   SYSOUT=(A,INTRDR)
 *          //SYSUT1   DD   DATA,DLM=ZZ
-*          //TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=A
+*          //TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=T
 *          //STEPMCUU EXEC PGM=TAPEMCUU,PARM='487'
 *          //TAPEVOLS DD DISP=OLD,
 *          //          DSN=VSAM.INSTALL.TAPEMAN33.VVDS.VOLSERS
@@ -1323,7 +1350,7 @@ R15      EQU   15
 ZZ
 //SYSPUNCH DD  SYSOUT=*
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//    DSN=&&OBJLIB,SPACE=(TRK,(10,2))
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=1',
 //             REGION=1024K,COND=(0,NE)
@@ -1346,16 +1373,16 @@ ZZ
 /*
 //
 ./ ADD NAME=TAPEMDES
-//MARKASM  JOB (0),'TAPEMDES',CLASS=A,MSGCLASS=A,        
+//MARKASM  JOB (0),'TAPEMDES',CLASS=A,MSGCLASS=T,        
 //   MSGLEVEL=(1,1)                                               
 //ASM     EXEC PGM=IFOX00,                                         
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)                                       
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB                             
 //         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330                         
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330                         
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330                         
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350                         
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350                         
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350                         
 //SYSTERM  DD  SYSOUT=*                                             
 //SYSPRINT DD  SYSOUT=*                                             
 //SYSIN    DD  *                                                    
@@ -1536,7 +1563,7 @@ EOFSYSIN CLOSE (SYSIN)
 *        R15 HAS WHETHER WE MANAGED TO OPEN IT OR NOT
          LTR   R15,R15
          BZ    OPENEDOK
-         WTO   'TAPEM001E *ERROR* CANNOT OPEN CATALOG'
+         WTO   'TAPM009E *ERROR* CANNOT OPEN CATALOG'
          B     EXIT00
 *-----------------------------------------------------------*
 * WAS OPENED OK, READ THE RECORD USING THE EXACT KEY
@@ -1736,7 +1763,7 @@ R15      EQU   15
 /*                                                           
 //SYSPUNCH DD  SYSOUT=*                                      
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,            
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))                         
+//    DSN=&&OBJLIB,SPACE=(TRK,(10,2))                         
 //LKED1   EXEC PGM=IEWL,                                     
 //             PARM='XREF,LIST,LET,TEST,AC=0',               
 //             REGION=1024K,COND=(0,NE)                      
@@ -1757,7 +1784,7 @@ R15      EQU   15
 /*                         
 //                   
 ./ ADD NAME=TAPEMEXP
-//MARKASM  JOB (0),'TAPEMEXP',CLASS=A,MSGCLASS=A,
+//MARKASM  JOB (0),'TAPEMEXP',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -1765,9 +1792,9 @@ R15      EQU   15
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN
 //         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -2218,7 +2245,7 @@ R15      EQU   15
 /*
 //SYSPUNCH DD  SYSOUT=*
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//    DSN=&&OBJLIB,SPACE=(TRK,(10,2))
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=0',
 //             REGION=1024K,COND=(0,NE)
@@ -2239,16 +2266,16 @@ R15      EQU   15
 /*
 //
 ./ ADD NAME=TAPEMSCR
-//MARKASM  JOB (0),'TAPEMSCR',CLASS=A,MSGCLASS=A,
+//MARKASM  JOB (0),'TAPEMSCR',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -2287,6 +2314,8 @@ TAPEMSCR CSECT
          ST    R13,4(R15)
          LR    R13,R15
          SPACE 2
+         LA    R1,0                 SET COUNTER TO ZERO
+         ST    R1,COUNTER
          OPEN  (SYSPRINT,(OUTPUT))
          LTR   R15,R15
          BZ    OPEN2
@@ -2320,10 +2349,9 @@ OPENEDOK DS    0F
 READNEXT LA    R7,DBSLEN                  ALWAYS TRY FOR MAX LEN
          STH   R7,$RECLEN
          BAL   R14,MODIFY
-*READNEXT BAL   R14,MODIFY
          GET   RPL=(R2)
          CLC   $IOAREA+16(5),=CL5'00000'  IS IT ALREADY SCRATCH ?
-         BE    READNEXT                     YES DO NOTHING
+         BE    BUMPCNT                      YES DO NOTHING
          CLC   $IOAREA+16(5),DATENOW      IS EXP-DATE < TODAY ?
          BNL   READNEXT                     NO DO NOTHING
 *
@@ -2344,12 +2372,24 @@ READNEXT LA    R7,DBSLEN                  ALWAYS TRY FOR MAX LEN
          MVC   SYSPRLIN(L'LOGSCR),LOGSCR
          MVC   SYSPRLIN+7(6),$IOAREA        VOLSER SCRATCHED INTO MSG
          PUT   SYSPRINT,SYSPRLIN            RECORD IT
+BUMPCNT  L     R3,COUNTER
+         A     R3,=F'1'
+         ST    R3,COUNTER
          B     READNEXT                     AND CONTINUE READING
          SPACE 2
 * WE GET HERE FROM THE VSAM ERROR HANDLER OR THE VSAM FILE EOF
 * HANDLER.
 EXIT     LA    R2,IFGACB            CLOSE THE VSAM DATASET
          CLOSE ((R2))
+         L     R2,COUNTER           WTO SCRATCH TAPES AVAILABLE
+         CVD   R2,COUNTERD
+         UNPK  COUNTERD(3),COUNTERD+6(2)
+         OI    COUNTERD+2,C'0'
+EXITDAT1 SPACEOUT SYSPRLIN
+         MVC   SYSPRLIN(27),=CL27'nnn SCRATCH TAPES AVAILABLE'
+         MVC   SYSPRLIN(3),COUNTERD
+         MVC   EXITDAT2+16(3),COUNTERD
+EXITDAT2 WTO   'TAP009I nnn SCRATCH TAPES AVAILABLE'
 EXIT50   CLOSE (SYSPRINT)           CLOSE SYSPRINT
          SPACE 1
 EXIT99   L     R13,4(R13)           STANDARD EXIT CODE
@@ -2516,6 +2556,8 @@ EXL001   EXLST LERAD=VSERROR,SYNAD=VSERROR,EODAD=VSEOF
 *-----------------------------------------------------------*
 * DATA AREAS USED                                           *
 *-----------------------------------------------------------*
+COUNTERD DS   D     WORK AREA FOR CVD/UNPK OF COUNTER
+COUNTER  DS   1F    COUNT SCRATCH TAPES LEFT
 FEEDBACK DS   0F
 $RC      DS   H
 $VSRC    DS   H
@@ -2602,7 +2644,7 @@ R15      EQU   15
 /*
 //SYSPUNCH DD  SYSOUT=*
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//    DSN=&&OBJLIB,SPACE=(TRK,(10,2))
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=0',
 //             REGION=1024K,COND=(0,NE)
@@ -2623,7 +2665,7 @@ R15      EQU   15
 /*
 //
 ./ ADD NAME=TAPEMUTL
-//MARKASM  JOB (0),'TAPEMUTL',CLASS=A,MSGCLASS=A,
+//MARKASM  JOB (0),'TAPEMUTL',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -2631,9 +2673,9 @@ R15      EQU   15
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN
 //         DD  DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -3263,7 +3305,7 @@ R15      EQU   15
 /*
 //SYSPUNCH DD  SYSOUT=*
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//    DSN=&&OBJLIB,SPACE=(TRK,(10,2))
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=0',
 //             REGION=1024K,COND=(0,NE)
@@ -3429,19 +3471,12 @@ MAJOR LIMITATION
   http://mdickinson.dyndns.org/hercules/downloads/mmpf.php
   
 ./ ADD NAME=@BUGS
-NOT A BUG, AN ADVISORY
-======================
-I HAVE CHANGED ALL THE DSET PREFIXES FROM UTILS TO INSTALL,
-I MAY HAVE MISSED A FEW DATASETS.
-IF ANY INSTALL STEP ERRORS CHECK FOR A BAD PREFIX IN THE JOB.
-
-NOW ONTO KNOWN APLLICATION BUGS
-
 KNOWN BUGS                                                            
 ==========                                                         
-THERE ARE THREE KNOWN ISSUES.                                       
-ISSUE 2. IS NOT AN ISSUE WITH THE TAPEMAN TOOLKIT BUT WITH HOW THE 
-O/S LOCKS FILES. WORKAROUND PROVIDED.                               
+THERE ARE FOUR KNOWN ISSUES.                                       
+ISSUE 2. IS NOT AN ISSUE WITH THE TAPEMAN TOOLKIT BUT WITH HOW THE
+O/S LOCKS FILES. WORKAROUND PROVIDED.
+ISSUE 4. IS A DESIGN LIMITATION, NOT A BUG
 
 1. (LOW) HANDLING WHEN THE VSAM DATASET WASN'T PROPERLY CLOSED       
    AS TAPEMAN ABSULUTELY MUST RUN TO MOUNT TAPES, WHEN IT             
@@ -3508,6 +3543,13 @@ O/S LOCKS FILES. WORKAROUND PROVIDED.
  - IEECVXIT DOES A 'P MMPF' IF A JOBS 'WAITING ON DATASET' MESSAGE
    CONTAINS THE TAPEMAN3 VSAM DATABASE, AND MY TASKMON PROGRAM STARTS
    IT AGAIN, UP TO YOU HOW YOU DO IT.
+
+4. (LOW) NOT A BUG, A LIMITATION
+   TAPEMSCR (DAILY SCRATCH JOB) REPORTS ON THE NUMBER OF FREE SCRATCH
+   TAPES AVAILABLE, AS CODED IT IS LIMITED TO REPORTING UP TO 999
+   TAPES (THREE DIGITS). I WILL NEVER HAVE THAT MANY SO DO NOT INTEND
+   TO DO ANYTHING ABOUT THAT UNLESS THERE IS A USER REQUEST FOR IT.
+
 ./ ADD NAME=@FILES
 These are all the files provided with the TAPEMAN distribution,
 and a desription of what each member within the files is used
@@ -3683,7 +3725,7 @@ Appendix C - installtion checklist (very short)
    tape from Gregs site above and try this.
    The target needs to be a 3350 linklib dataset.
 
-//IEBCOPYR JOB (001),'RESTORE HERCCMD',CLASS=A,MSGCLASS=A
+//IEBCOPYR JOB (001),'RESTORE HERCCMD',CLASS=A,MSGCLASS=T
 //RELOAD  EXEC PGM=IEBCOPY,REGION=1024K
 //SYSPRINT DD  SYSOUT=*
 //TAPEIN   DD  UNIT=TAPE,DISP=OLD,DSN=GRZES.HERCCMD,
@@ -3917,7 +3959,7 @@ A.3 - create a new catalogue and dataspace
   used for any VSAM files you wish to create. The rest of the pack
   will be allocated as VSAM dataspace
 
-//SYSPROGU JOB 'MID',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=A
+//SYSPROGU JOB 'MID',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
 //*
 //* 3330 - 404 CYLS, 19 TRKS PER CYLS      = TOTAL 7676 TRACKS
 //*        I USED 15 TRKS FOR VTOC         - REMAINING 7661 TRACKS
@@ -4071,7 +4113,7 @@ Note: the TAPEMCUU parm is used to select device 487, in STEP2 the
 
 Example Job using TAPEMCUU
 ==========================
-//DEMOJOB  JOB  (0),'DEMO TAPEMCUU',CLASS=A,MSGCLASS=A
+//DEMOJOB  JOB  (0),'DEMO TAPEMCUU',CLASS=A,MSGCLASS=T
 //*
 //* WE MUST RUN TAPEMCUU OUTSIDE THE CURENT BATCH JOB
 //* NOW THAE WE HAVE OBSOLETED THE TAPEMAN PROC AND
@@ -4084,7 +4126,7 @@ Example Job using TAPEMCUU
 //SYSPRINT DD   SYSOUT=*
 //SYSUT2   DD   SYSOUT=(A,INTRDR)
 //SYSUT1   DD   DATA,DLM=ZZ
-//TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=A
+//TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=T
 //STEPMCUU EXEC PGM=TAPEMCUU,PARM='487'
 //TAPEVOLS DD DISP=OLD,
 //          DSN=VSAM.INSTALL.TAPEMAN33.VVDS.VOLSERS
@@ -4135,7 +4177,7 @@ test program it does no verification on the date field passed.
                 sample jobdeck for running this.
 ---------------------------------------------------------------------
 
-//MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=A
+//MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=T
 //TAPEMUTL EXEC PGM=TAPEMUTL
 //TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
@@ -4176,7 +4218,7 @@ sample jobdeck for running this.
 
 The contents of that member are below
 
-//MARKDSCR JOB  (0),'DAILY TAPE SCRATCH',CLASS=A,MSGCLASS=A
+//MARKDSCR JOB  (0),'DAILY TAPE SCRATCH',CLASS=A,MSGCLASS=T
 //*
 //* SHOULD BE RUN DAILY TO EXPIRE TAPED IN THE SCRATCH POOL
 //* THAT HAVE PASSED THEIR EXPIRY DATES.
@@ -4215,7 +4257,7 @@ you use to restore these files down, there are sample jobs
                 sample jobdeck for running this.
 ---------------------------------------------------------------------
 
-//MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=A
+//MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=T
 //TAPEMUTL EXEC PGM=TAPEMUTL
 //TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
@@ -4256,7 +4298,7 @@ QQ
 //SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.INSTALL
 //SYSIN DD DATA,DLM=QQ
 ./ ADD NAME=CREATEDB
-//MARKALLC JOB  (0),'ALLOC DATA FILE',CLASS=A,MSGCLASS=A
+//MARKALLC JOB  (0),'ALLOC DATA FILE',CLASS=A,MSGCLASS=T
 //* ************************************************************
 //*
 //* $CREATDB: CREATE THE DATA FILE NEEDED BY TAPEMAN.
@@ -4302,7 +4344,7 @@ QQ
 /*
 //
 ./ ADD NAME=CTAPEMAN
-//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=A
+//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=T
 //* -----------------------------------------------
 //* COPY THE TAPEMAN PROGRAMS THAT ARE AUTHORISED
 //* TO AN APF AUTHORISED LIBRARY
@@ -4322,7 +4364,7 @@ QQ
 /*
 //
 ./ ADD NAME=CUTILS
-//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=A
+//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=T
 //* --------------------------------------------------------
 //* COPY THE TAPEMAN UTILITY PROGRAMS THAT DO NOT NEED
 //* TO BE APF AUTHORISED INTO A PROGRAM LIBRARY THAT IS
@@ -4354,7 +4396,7 @@ QQ
 //SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.CONTROL
 //SYSIN DD DATA,DLM=QQ
 ./ ADD NAME=DAILYSCR
-//MARKDSCR JOB  (0),'DAILY TAPE SCRATCH',CLASS=A,MSGCLASS=A
+//MARKDSCR JOB  (0),'DAILY TAPE SCRATCH',CLASS=A,MSGCLASS=T
 //*
 //* SHOULD BE RUN DAILY TO EXPIRE TAPED IN THE SCRATCH POOL
 //* THAT HAVE PASSED THEIR EXPIRY DATES.
@@ -4365,7 +4407,7 @@ QQ
 //SYSPRINT DD   SYSOUT=*
 //
 ./ ADD NAME=TAPLABEL
-//MARKTAPE JOB (0),'LABEL TAPES',CLASS=A,MSGCLASS=A
+//MARKTAPE JOB (0),'LABEL TAPES',CLASS=A,MSGCLASS=T
 //*
 //* THIS IS A SAMPLE JOB SHOWING HOW TO LABEL TAPES IN A BATCH JOB.
 //* THE TAPE FILES MUST HAVE BEEN PREVIOUSLY CREATED WITH HETINIT
@@ -4417,7 +4459,7 @@ TAPE1 INITT SER=MARK30,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
 /*
 //
 ./ ADD NAME=UTLADD
-//MARKADD  JOB  (0),'ADD TAPES',CLASS=A,MSGCLASS=A
+//MARKADD  JOB  (0),'ADD TAPES',CLASS=A,MSGCLASS=T
 //*
 //* ADD SOME NEW SCRATCH TAPES INTO THE VSAM FILE
 //*
@@ -4459,7 +4501,7 @@ INSERT MARK30
 /*
 //
 ./ ADD NAME=UTLDEL
-//MARKDEL  JOB  (0),'DELETE TAPES',CLASS=A,MSGCLASS=A
+//MARKDEL  JOB  (0),'DELETE TAPES',CLASS=A,MSGCLASS=T
 //*
 //* DELETE EXISTING TAPES FROM THE VSAM FILE
 //*
@@ -4473,7 +4515,7 @@ DELETE MARK02
 /*
 //
 ./ ADD NAME=UTLEXP
-//MARKEXP  JOB  (0),'TAPE EXPIRY MAINT',CLASS=A,MSGCLASS=A
+//MARKEXP  JOB  (0),'TAPE EXPIRY MAINT',CLASS=A,MSGCLASS=T
 //*
 //* CHANGE EXPIRY DATES ON SELECTED TAPES IN THE VSAM FILE
 //* CARD SYNTAX IS 'TAPE-VOLSER SPACE NEW-YYDDD EXPIRY'
@@ -4489,7 +4531,7 @@ MARK03 10001
 /*
 //
 ./ ADD NAME=UTLLIST
-//MARKLIST JOB  (0),'LIST TAPES',CLASS=A,MSGCLASS=A
+//MARKLIST JOB  (0),'LIST TAPES',CLASS=A,MSGCLASS=T
 //*
 //* LIST TAPE ENTRIES FROM THE TAPE CATALOG FILE.
 //*
@@ -4509,7 +4551,7 @@ LIST MARK01
 /*
 //
 ./ ADD NAME=UTLSCR
-//MARKSCR  JOB  (0),'SCRATCH TAPES',CLASS=A,MSGCLASS=A
+//MARKSCR  JOB  (0),'SCRATCH TAPES',CLASS=A,MSGCLASS=T
 //*
 //* FORCE AN ALLOCATED TAPE TO BECOME AN EXPIRED TAPE
 //* NOTES: ONLY AFFECTS CATALOGUE ENTRY, DOESN'T CHANGE ANY
