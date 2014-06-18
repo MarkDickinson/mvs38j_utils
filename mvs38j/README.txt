@@ -17,6 +17,12 @@ COBRENUM.txt    - renumbers (or inserts) sequence numbers needed for MVT
                   COBOL source members so I don't have to bother keeping
                   them in sequence manually when editing the members
 
+DASDSCAN.txt    - check all online dasd volumes to make sure they are
+                  not getting low on freespace. where possible checks
+                  that files on the dasd volser are not using too many
+                  extents (program source comments explain the 
+                  'where possible' and refer to the appropriate manual.
+
 DATEPROG.txt    - UTILITY LIBRARY/PROGRAMS/MACROS used by many of my
                   programs. If you download anything from here you will
                   probably need this. It will one day be the only date
