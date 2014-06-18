@@ -1,0 +1,1195 @@
+//MARKA JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=G,
+// USER=MARK,PASSWORD=MVS38J
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+// DD DISP=SHR,DSN=MVSSRC.SYM101.F01
+// DD DISP=SHR,DSN=SYS2.MACLIB          YREGS
+//ASM.SYSIN DD *
+***********************************************************************
+*        
+* DASDSCAN : MARK DICKINSON
+*            (A WORK IN PROGRESS, WHAT IS IMPLEMENTED WORKS)
+*            SEE THE 'CREDITS' COMMENT BLOCK FOR WHERE BITS OF CODE
+*            CAME FROM.
+*        
+*            THIS PROGRAM IS INTENDED FOR MVS3.8J SYSTEMS (TURNKEY3)
+*            AND WILL PROBABLY NOT WORK ON LATER OPERATING SYSTEMS.
+*            AS ALWAYS - USE AT YOUR OWN RISK.
+* ---> PROGRAM IS NOT RE-ENTRANT
+* ---> PROGRAM DOES NOT NEED TO BE AUTHORISED
+*        
+* PURPOSE :  ON A MVS3.8J (TURNKEY3) SYSTEM
+*            - SCAN UCB CHAIN FOR ALL ONLINE DASD VOLSERS
+*            - FOR EACH REPORT IF FREE SPACE IS GETTING LOW,
+*              INDICATING FILES MAY NEED TO BE MOVED
+*            - FOR EACH CHECK EVERY FILE ON THE DISK AND REPORT IF
+*              THE FILE USES MORE THAN 10 EXTENTS, INDICATING FILES
+*              MAY NEED TO BE RESIZED (SEE **2** BELOW)
+* LIMITATIONS:
+*    **1** DOES NOT CHECK VSAM DATASPACES (YET, TODO ONE DAY)
+*    **2** CANNOT DYNALLOC ONTO RESERVED/PRIVATE VOLUMES
+*          SEE KNOWN ISSUES POINT 1. THAT LIMITATION IS DOCUMENTED
+*          IN THE IBM MANUAL REFERENCED THERE. SO NO CHECKING
+*          OF FILE SPACE USAGE IS DONE FOR THOSE.
+*        
+* THRESHOLDS USED (THAT MAY INDICATE A PENDING PROBLEM)
+*    -DISKS MUST HAVE AT LEAST 100 AVAILABLE DSCBS
+*    -DISKS MUST HAVE AT LEAST 50 CYLS IN LARGEST EXTENT
+*    -DISKS SHOULD NOT BE FRAGMENTED TO MORE THAN 25 EXTENTS
+*    -DISK FILES MUST NOT USE MORE THAN 10 EXTENTS 
+*
+* REPORTING DD DESRIPTIONS
+*    DD RPTVOLS  - LIST A SUMMARY OF DISK SPACE USED/FREE
+*    DD RPTERROR - REPORT ON ANY DISKS/FILES OUTSIDE THRESHOLDS    
+*        
+* SAMPLE JCL
+*    //JOBNAME  JOB  YOUR-SITES-ACCOUNT-INFO
+*    //* USE DYNAMNBR=3 
+*    //* JCL ALLOCATED DDS ARE COUNTED SO THATS 2, +1 FOR DYNALLOC
+*    //* THIS WILL DETECT PROBS IF DYNAMIC DE-ALLOCATION HAS ISSUES
+*    //TESTIT   EXEC PGM=DASDSCAN,DYNAMNBR=3
+*    //RPTVOLS  DD   SYSOUT=*      FOR VOLUME SPACE LISTINGS (DVOL)
+*    //RPTERROR DD   SYSOUT=*      FOR ERROR/EXCEPTION REPORTING
+*    //
+*        
+***********************************************************************
+         EJECT
+***********************************************************************
+*        
+* K N O W N    I S S U E S
+* ------------------------
+* 1. *** CANNOT DYNALLOC VOLUMES THAT ARE MOUNTED PRIVATE/RESERVED,
+*    SO FILE SPACE USED CHECKING IS SKIPPED FOR THOSE. IF ATTEMPTED
+*    THE ERROR CODE DOCUMENTED IN THE IBM MANUAL (GCC28-0627-2) IS
+*    RETURNED.
+* 2. CODE CLEANUP. NOW I KNOW VOLSERS MOUNTED PRIVATE CANNOT BE USED
+*    FOR DYNALLOC I SHOULD SKIP TRYING TO DYNALLOC THEM RATHER THAN
+*    TESTING THE DYNALLOC ERROR CODE FOR THAT FAILURE REASON. BUT FOR
+*    NOW KEEP GOING THROUGH THE FULL CODE PATH IN CASE I ONE DAY FIGURE
+*    OUT HOW TO USE THEM.
+* 3. CODE CLEANUP. CONSTANT ERROR TEXT MESSAGES SHOULD BE MOVED TO THE
+*    DATA WORK AREA INSTEAD OF BEING =CLxx'xx' IN THE MAINLINE.
+*    STILL TWO WTO'S TO MOVE TO ERROR REPORT INSTEAD. 
+*    ALTHOUGH THEY ARE CRITICAL (DYNAMIC ALLOC/DE-ALLOC FAILURE) SO
+*    PROBABLY SHOULD WTO ?.
+* 4. CODE CLEANUP. FOR DEBUGGING I WAS TRYING TO KEEP THE CODE IN
+*    'MODULAR SECTIONS' WHICH RESULTS IN DIRECT BRANCHES TO FUNCTIONAL
+*    SEGMENTS THAT DIRECT BRANCH BACK INTO THE MAINLINE. LOTS OF 
+*    GOTO'S IN THIS CODE.       
+*        
+* THE TODO ONE DAY LIST
+* ---------------------
+* STILL TO IMPLEMENT - MY TODO WISH LIST, IN ORDER OF INTEREST
+*   - FOR PARTITIONED DATASETS CHECK ON NUMBER OF FREE DIRECTORY
+*     BLOCKS
+*   - READ A CONTROL CARD DECK OF A LIST OF VOLSERS NOT TO REPORT
+*     LOW DASD SPACE ON, AS I HAVE SOME THAT WILL ALWAYS BE IN
+*     THE ERROR REPORT (PAGING, A DEDICATED VOLSER 100% ALLOCATED AS
+*     A VSAM DATASPACE ETC)
+*   - USE A EXEC PARM='xx' VALUE TO ALLOW SWITCHING BETWEEN USING
+*     DYNAMIC ALLOCATION OR USING A JCL PROVIDED DD CONCATENATED
+*     VOLSER LIST (AS THE LATER METHOD WOULD BE ABLE TO CHECK THE
+*     FILESIZES ON 'PRIVATE' VOLUMES; BUT WOULD REQUIRE THE VOLUMES
+*     BE KNOWN IN ADVANCE... HMM, NO PARM NEEDED, JUST CHECK IF DD
+*     HAS BEEN PROVIDED AS THE FLAG)
+*   - FIGURE OUT HOW TO POKE ABOUT INSIDE VSAM DATASPACES TO REPORT
+*     ON USAGE IN THERE AS WELL
+*   - MAYBE IMPLEMENT LINE-COUNT/PAGE-BREAK LOGIC, BUT AS IDEALLY 
+*     THE ERROR REPORT SHOULD BE EMPTY PROBABLY NOT
+* 
+***********************************************************************
+         EJECT
+***********************************************************************
+*
+* THIS IS A COMBINATION OF CODE EXTRACTED FROM VARIOUS SOURCES TO
+* ACHIEVE THE FUNCTIONALITY REQUIRED. CODE SOURCED FROM...
+*
+* CREDITS - 
+*
+*  UCB SCANNING/FORMAT 4+5 DSCB PROCESSING
+*
+*  1 HEAVILY BASED UPON CBT249.FILE058(DVOL), WHEN I FINALLY GOT IT
+*    WORKING ON MVS3.8J. THE DISK SUMMARY REPORT IS THE DVOL SHORT
+*    FORMAT REPORT. ALL THE CODE FOR MORE DETAILED DISPLAY WAS 
+*    REMOVED. THE CBT249.FILE058(#VTCFMT5) MACRO HAS BEEN COPIED
+*    INLINE TO BE USED HERE RATHER THAN USING 'IECSDSL1 5' AS
+*    IS IS SO DIFFERENT CONVERTING THE CODE TO USE THE IBM MACRO
+*    WOULD BE A LOT OF ADDITIONAL EFFORT FOR NO CHANGE IN OUTPUT.
+*    AM USING THE 'IECSDSL1 4' DATA MAPPING RATHER THAN THE
+*    MACRO ON FILE058 HOWEVER.
+*    CBT249.FILE058 IS CREDITED TO FPL BY THE $$$DOC MEMBER THERE.
+*
+*  DATASET CHECKING SECTION
+*
+*  2 THE VTOC SEARCH PROCESSING IS BASED ON THE VTOC SEARCH CODE IN A
+*    PROGRAM WRITTEN TO FIND UNCATALOGUED OR INCORRECTLY CATALOGUED
+*    FILES PROVIDED TO XEPHON DIGEST BY ERNIE ISHMAN (C)XEPHON 1991
+*    WHICH WORKS FINE UNDER HERCULES MVS3.8J...
+*    (MAIN CHANGES) THAT USED JCL ALLOCATED DD CARDS TO SELECT THE
+*    VOLSER(S) SO I REMOVED ALL DD CHECKING CODE PLUS ALL CATALOG
+*    LOOKUPS AS WE DON'T CARE IF A DATASET IS CATALOGUED AND CANNOT
+*    USE JCL ALLOCATD VOLSERS AS WE DON'T KNOW WHAT VOLSERS WILL BE
+*    ONLINE.
+*
+*  3 ME :-)
+*    THE DYNAMIC ALLOCATION CODING FOR ALLOCATING THE VOLSERS I HAD 
+*    TO WORKOUT MYSELF USING AS REFERENCE
+*    A- IBM MANUAL GCC28-0627-2 OS/VS2 MVS System Programming Library:
+*       Job Management
+*    B- The book 'Advanced Assembler Language and MVS Interfaces' for
+*       IBM Systems and Application Programmers by Carmine Cannatello;
+*       which cost me a fortune in the 1990s but I'm glad I kept.
+*    (A+B) cover allocating datasets but not volumes on their own.
+*    C- GUESSWORK AND TRIAL AND ERROR. My final solution was to
+*       dynamically a temporary dataset with disp new,delete,delete
+*       to obtain the volume.
+*
+***********************************************************************
+         EJECT
+*----------------------------------------------------------------------
+* CUSTOM MACROS REQUIRED FROM MY MACRO LIBRARIES
+*----------------------------------------------------------------------
+         MACRO
+&NAME    SPACEOUT &A
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEND
+*
+         MACRO
+&NAME    TODEC3 &REG=,&BUF=
+* *******************************************************************
+* CONVERT A BINARY NIMBER IN A REGISTER TO A THREE DIGIT PRINTABLE  *
+* FIELD IN A DC D'0' FIELD PROVIDED BY THE CALLER.                  *
+*                                                                   *
+* - REG IS THE REGISTER WITH THE NUMBER IN IT                       *
+* - BUF IS AN OUTPUT AREA DEFINED AS DC D'0'                        *
+* WHEN DONE RESULT IS FIRST 3 DIGITS IN BUF                         *
+*                                                                   *
+* EXAMPLE                                                           *
+*    LA R5,75                                                       *
+*    TODEC3 REG=R5,BUF=DECIMAL   <---                               *
+*    MVC SOMEBUF(3),DECIMAL      MOVES CHARS 075                    *
+*    ...                                                            *
+*    DECIMAL DC D'0'                                                *
+* *******************************************************************
+         AIF   ('&REG' EQ '').ERR1
+         AIF   ('&BUF' EQ '').ERR1
+         CVD   &REG,&BUF
+         UNPK  &BUF.(3),&BUF+6(2)
+         OI    &BUF+2,C'0'
+         MEXIT
+.ERR1    MNOTE 12,'*** REGISTER OR BUFFER MISSING ***'
+         MEND
+*----------------------------------------------------------------------
+* MACROS COPIED FROM CBT249.FILE058  (FPL MACROS)
+*----------------------------------------------------------------------
+         MACRO                                                          
+         #VTCFMT5                                                       
+         MNOTE *,'       #VTCFMT5  VERSION 001 09/22/75  09/22/75  GPW' 
+.********************************************************************** 
+.*                                                                    * 
+.* #VTCFMT5                                                           * 
+.*                                                                    * 
+.* FUNCTION         CONSTRUCT A DSECT FOR A FORMAT 5 DSCB.            * 
+.*                                                                    * 
+.* DESCRIPTION      ASSIGN SYMBOLIC NAMES TO THE FIELDS IN A FORMAT 5 * 
+.*                  DATA SET CONTROL BLOCK (DSCB).  THE FIELD NAMES   * 
+.*                  CORRESPOND TO THE NAMES IN THE DATA AREAS MANUAL. * 
+.*                  A FORMAT 5 DSCB DESCRIBES FREE SPACE AREAS.       * 
+.*                                                                    * 
+.* SYNTAX                    #VTCFMT5                                 *
+.*                                                                    * 
+.* ERRORS           NO ERRORS ARE INDICATED.                          * 
+.*                                                                    * 
+.* EXAMPLE                   ORG   FMT5DSCB    ORG TO DATA AREA       * 
+.*                           #VTCFMT5                                 * 
+.*                                                                    * 
+.* GLOBAL SYMBOLS                                                     * 
+.*                                                                    * 
+.*                  NONE                                              *
+.*                                                                    * 
+.* MACROS CALLED                                                      *
+.*                                                                    * 
+.*                  NONE                                              * 
+.*                                                                    *
+.********************************************************************** 
+         SPACE 2                                                        
+*********************************************************************** 
+*                                                                     * 
+*        FORMAT 5 DSCB DESCRIPTION                                    * 
+*                                                                     * 
+*        FREE SPACE DESCRIPTIONS                                      *
+*                                                                     * 
+*        FIRST FORMAT 5 DSCB FOLLOWS FORMAT 4 DSCB                    * 
+*                                                                     * 
+*********************************************************************** 
+         SPACE 2                                                       
+DS5KEYID DS    XL4                      KEY IDENTIFIER               
+DS5EXT01 DS    XL5                      AVAILABLE ENTENT              
+DS5EXT02 DS    XL5                           .                     
+DS5EXT03 DS    XL5                           .                     
+DS5EXT04 DS    XL5                           .                  
+DS5EXT05 DS    XL5                           .                
+DS5EXT06 DS    XL5                           .                    
+DS5EXT07 DS    XL5                           .                   
+DS5EXT08 DS    XL5                           .                  
+DS5FMTID DS    X                        FORMAT IDENTIFIER       
+DS5EXT09 DS    XL5                      AVAILABLE EXTENT       
+DS5EXT10 DS    XL5                           .            
+DS5EXT11 DS    XL5                           .                    
+DS5EXT12 DS    XL5                           .                    
+DS5EXT13 DS    XL5                           .                  
+DS5EXT14 DS    XL5                           .                 
+DS5EXT15 DS    XL5                           .             
+DS5EXT16 DS    XL5                           .            
+DS5EXT17 DS    XL5                           .                    
+DS5EXT18 DS    XL5                           .                 
+DS5EXT19 DS    XL5                           .              
+DS5EXT20 DS    XL5                           .           
+DS5EXT21 DS    XL5                           .          
+DS5EXT22 DS    XL5                           .              
+DS5EXT23 DS    XL5                           .            
+DS5EXT24 DS    XL5                           .         
+DS5EXT25 DS    XL5                           .                 
+DS5EXT26 DS    XL5                           .              
+DS5PTRDS DS    XL5                      POINTER TO NEXT FORMAT 5 DSCB 
+         MEND   
+         EJECT
+***********************************************************************
+*
+*                         D S E C T S
+*
+* I HAVE PLACED THESE AT THE START OF THE PROGRAM AS VALUES IN THE
+* DYNAMIC ALLOCATION DSECTS ARE USED TO DEFINE DATA AREAS LATER ON
+* IN THE CODE... AND IFOX00 CANNOT RESOLVE THEM IF THEY ARE NOT
+* DEFINED BEFORE THEY ARE REFERENCED FOR SOME REASON.
+* OR SPECIFICALLY: IF THEY ARE PUT AT THE END OF THE CODE WHERE
+*                  DSECTS NORMALLY GO, THIS WILL NOT ASSEMBLE.
+*
+***********************************************************************
+*----------------------------------------------------------------------
+* UCB MAP                                                -
+*----------------------------------------------------------------------
+         PRINT NOGEN
+UCB      DSECT
+         IEFUCBOB
+         PRINT GEN
+DVOLFLGA EQU  UCBFLA
+DVOLFLGB EQU  UCBFLC
+DVOLNRDY EQU  UCBNRY
+*----------------------------------------------------------------------
+* THESE ARE THE DYNAMIC ALLOCATION CONSTRUCTS.
+* IFOX00 NEED THESE AT THE START SO IT CAN CALCULATE VARIABLE
+* LENGTHS USING CONSTANTS IN THESE LATER ON IN THE CODE.
+*----------------------------------------------------------------------
+        PRINT NOGEN
+        IEFZB4D0    DSECT FOR REQ BLK, TEXT UNIT, ETC
+        IEFZB4D2    TABLE OF EQUATES FOR TEXT UNIT KEYS
+        PRINT GEN
+        EJECT
+***********************************************************************
+*
+* ACTUAL PROGRAM CODE BEGINS HERE
+*
+* RESERVED REGISTERS
+*    R12 and R11 - BASE REGISTERS (NEEDS TWO TO ADDRESS EVERYTHING)
+*    R9 and R10  - USED FOR ADDRESSING DYNALLOC DSECTS
+*
+***********************************************************************
+         YREGS                        REGISTER EQUATES
+DASDSCAN CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         LR    R12,R15                R12 ADDRESS OF ENTRY POINT
+         USING DASDSCAN,R12,R11       ADDRESSABILITY TO CSEXT
+         LA    R11,SAVEAREA           ADDRESS OF OUT SAVE AREA
+         ST    R13,SAVEAREA+4         SAVE PTR TO CALLERS SAVE AREA
+         ST    R11,8(R13)             SAVE PTR TO OUR SA IN CALLERS
+         LR    R13,R11                R13 TO ADDRESS OUT SAVE AREA
+         LA    R11,4095(R12)          R11 WILL BE...
+         LA    R11,1(R11)             ...SECOND BASE REGISTER
+*----------------------------------------------------------------------
+* OPEN THE REPORTING DATASETS
+*----------------------------------------------------------------------
+         OPEN  (RPTVOLS,(OUTPUT))
+         OPEN  (RPTERROR,(OUTPUT))
+         PUT   RPTVOLS,VOLHDR1
+         PUT   RPTVOLS,VOLHDR2
+         PUT   RPTERROR,ERRHDR1
+         EJECT                                                          
+***********************************************************************
+*                                                              
+*                                                              
+*        SECTION TO SCAN UCB ENTRIES SEARCHING FOR DISK    
+*        DEVICE ENTRIES; FOR ONLINE DISKS
+*                                                              
+*                                                              
+***********************************************************************
+         XC    UCBADDR,UCBADDR          ZERO UCB ADDRESS          
+         L     R15,16                   LOAD CVT ADDRESS        
+         L     R15,40(R15)              LOAD UCB TABLE ADDRESS 
+         ST    R15,UCBTABLE             SAVE UCB TABLE ADDRESS 
+NEXTVOL  EQU   *
+         SPACEOUT DVOLSER               BLANK OUT VOL SERIAL    
+         SPACEOUT SHORTMSG              BLANK OUT ANY PRIOR STATUS MSG
+*----------------------------------------------------------------------
+*              FIND UCB ENTRY FOR VOLUME                            
+*        IF DEVICES HAVE MULTIPLE PATHS, THERE WILL BE MULTIPLE     
+*        ENTRIES IN THE UCB LOOKUP TABLE, BUT ONLY ONE UCB FOR      
+*        EACH DEVICE.  DVOL WILL SKIP ALTERNATE PATHS.  THE         
+*        LOGIC TO SKIP ALTERNATE PATHS DEPENDS ON THE RESTRICTIONS  
+*        THAT  1.  THE ALTERNATE ADDRESS MUST BE HIGHER THAN THE    
+*                  PRIMARY ADDRESS, AND                            
+*              2.  THAT UCB'S ARE LOCATED IN STORAGE IN ASCENDING 
+*                  ORDER BY PRIMARY UNIT ADDRESS                  
+*        R2  - VOLUME SERIAL ADDRESS                            
+*        R4  - UCB TABLE ADDRESS                              
+*        R5  - UCB ADDRESS                                  
+*----------------------------------------------------------------------
+GETUCB   LA    R2,DVOLSER               LOAD SERIAL ADDRESS           
+         L     R4,UCBTABLE              LOAD ADDRESS TO START SEARCH 
+         SR    R5,R5                    CLEAR REGISTER 5          
+UCBCHECK EQU   *                                                
+         ICM   R5,3,0(R4)               LOAD UCB ADDRESS    
+         USING UCB,R5                                   
+         LTR   R5,R5                    TEST FOR BLANK ENTRY    
+         BZ    UCBHOLE                                     
+         CLC   0(2,R4),=X'FFFF'         TEST FOR END OF TABLE    
+         BE    RETURN                                       
+         CLI   UCBTBYT3,UCB3DACC        TEST FOR DIRECT ACCESS  
+         BNE   UCBHOLE                                        
+         CLI   UCBVOLI,X'00'            TEST FOR NO SERIAL 
+         BE    UCBHOLE                                  
+         CLI   0(R2),C' '               TEST FOR BLANK SERIAL  
+         BE    UCBSKIP                                    
+         B     UCBCONT                                
+UCBSKIP  C     R5,UCBADDR               CHECK AGAINST LAST UCB ADDRESS
+         BNH   UCBHOLE                                               
+         MVC   0(6,R2),UCBVOLI          COPY VOLUME SERIAL TO DVOLSER 
+UCBCONT  LA    R4,2(R4)                 LOAD ADDR OF NEXT UCB ENTRY  
+         ST    R4,UCBNEXT               SAVE ADDRESS               
+         ST    R5,UCBADDR               STORE THIS UCB ADDRESS    
+         B     GOTUCB                                           
+UCBHOLE  LA    R4,2(R4)                 INCREMENT TO NEXT UCB  
+         B     UCBCHECK                                       
+GOTUCB   MVC   UCBTABLE,UCBNEXT         SET UCBTABLE ADDR TO NEXT UCB
+         MVC   SHORTSER(6),DVOLSER      VOLSER TO VOLUME RPT LINE
+         B     CONTINUE
+         DROP  R5     
+*----------------------------------------------------------------------
+*              PROCESS UCB INFORMATION 
+*        R7  - UCB ADDRESS      
+*----------------------------------------------------------------------
+         SPACE 2                                                   
+CONTINUE L     R7,UCBADDR               LOAD UCB ADDRESS        
+         USING UCB,R7                   DEFINE BASE REGISTER   
+         MVC   UNITADDR,UCBNAME         COPY UNIT ADDRESS    
+         MVC   SHORTUNT(3),UCBNAME      CUU TO VOLUME RPT LINE
+*--------MOUNT STATUS                                            
+         TM    UCBSTAT,UCBRESV          TEST FOR RESERVED      
+         BZ    TRYRES                                         
+         MVC   SHORTMNT,=CL9'RESERVED'   SET MOUNT STATUS    
+         B     USESTAT                                     
+TRYRES   TM    UCBSTAT,UCBPRES          TEST FOR RESIDENT 
+         BZ    USESTAT                                   
+         MVC   SHORTMNT,=CL9'RESIDENT'   SET MOUNT STATUS   
+*--------USE STATUS                                     
+USESTAT  TM    UCBSTAB,UCBBPRV          TEST FOR PRIVATE  
+         BZ    TRYPUB                                  
+         MVC   SHORTUSE,=CL7'PRIVATE'   SET USE STATUS 
+         MVC   SHORTMSG,SKIPDMSG ***TOO LATE WHEN DYNALLOC FAILS***
+*                                ***SO ASSUME NEEDED HERE       ***
+*                                ***TODO: SET FLAG TO SKIP      ***
+*                                ***ALL THE DYNALLOC STUFF IF   ***
+*                                ***MOUNTED PRIVATE             ***
+         B     TESTALOC                             
+TRYPUB   TM    UCBSTAB,UCBBPUB          TEST FOR PUBLIC 
+         BZ    TRYSTOR                                 
+         MVC   SHORTUSE,=CL7'PUBLIC'    SET USE STATUS 
+         B     TESTALOC                               
+TRYSTOR  TM    UCBSTAB,UCBBSTR          TEST FOR STORAGE   
+         BZ    TESTALOC                                 
+         MVC   SHORTUSE,=CL7'STORAGE'   SET USE STATUS  
+*--------ALLOCATED/UNALLOCATED                        
+TESTALOC EQU   *
+*TESTALOC TM    UCBSTAT,UCBALOC          TEST FOR ALLOCATED  
+*         BZ    TESTOFF                                  
+*         MVC   ALLOCATD,=CL11'ALLOCATED  '          
+*--------ONLINE/OFFLINE                           
+*TESTOFF  TM    UCBSTAT,UCBONLI          TEST FOR ONLINE   
+*         BZ    TESTUNLD                                
+*         MVC   SHORTMNT,=CL17'ONLINE'                
+*         TM    UCBSTAT,UCBCHGS          TEST FOR OFFLINE PENDING 
+*         BZ    TESTUNLD                                      
+*         MVC   SHORTMNT,=CL17'OFFLINE PENDING'            
+*--------PENDING MOUNT/UNLOAD                          
+*TESTUNLD TM    UCBSTAT,UCBUNLD          TEST FOR UNLOAD PENDING 
+*         BZ    ENDUCB                                       
+*         MVC   SHORTMNT,=CL17'UNLOAD PENDING'              
+*         TM    DVOLFLGB,UCBTICBT        TEST FOR MOUNT PENDING 
+*         BZ    ENDUCB                                         
+*         MVC   SHORTMNT,=CL17'MOUNT PENDING'                
+ENDUCB   EQU   *
+         DROP  R7
+*----------------------------------------------------------------------
+* BRANCH TO THE CODE THAT OBTAINS THE FORMAT4/FORMAT5 DSCB INFORMATION
+*----------------------------------------------------------------------
+         B     GETFMT4               GET DSCB FORMAT 4 INFO
+*                                    THAT BRANCHES TO GETVSAM (FMT5)
+*                                    WHICH BRANCHES BACK TO RETFMT4
+*                                    IF ALL OK OR TO INCRVOL IF ERRORS
+RETFMT4  EQU   *                     
+*----------------------------------------------------------------------
+*      
+*----------------------------------------------------------------------
+         B     DYNBLOCK              CHECK ALL DATASETS ON THE VOLUME
+DYNBLRET EQU   *
+*----------------------------------------------------------------------
+*              FINISHED THIS VOLUME - GO TO NEXT VOLUME 
+*----------------------------------------------------------------------
+INCRVOL  EQU   *
+         B     NEXTVOL
+***********************************************************************
+*        END OF PROGRAM     
+***********************************************************************
+RETURN   CLOSE (RPTVOLS)
+         CLOSE (RPTERROR)
+EXIT     L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+***********************************************************************
+*
+*
+*        SECTION TO READ THE FORMAT4 DSCB TO DETERMINE HOW 
+*        MANY FREE DSCBS THERE ARE; AND TO LOCATE THE FIRST
+*        FORMAT5 DSCB LOCATION.                             
+*
+*
+***********************************************************************
+GETFMT4  MVI   DS4IDFMT,X'00'           ZERO OUT FORMAT 4 ID LOCATION 
+         MVI   VTOCINDS,X'00'           ZERO OUT VTOC INDICATORS     
+         OBTAIN DVOLDCB4                OBTAIN FORMAT 4 DSCB    
+         LTR   R15,R15
+         BNZ   ERRFMT4
+         CLI   DS4IDFMT,X'F4'           TEST FIELD IDENTIFIER       
+         BNE   ERRFMT4                                        
+         MVC   DVOLCCHH,DS4VTOCE+2      COPY CCHH OF VTOC         
+         MVI   DVOLCCHH+4,X'02'         SET RECORD TO 2 FOR FIRST FMT 5
+         MVC   TRKPRCYL,DS4DEVSZ+2      COPY TRACKS PER CYLINDER     
+         MVC   MTDSCBS,DS4DSREC         COPY NUMBER OF FORMAT 5 DSCBS
+         MVC   VTOCINDS,DS4VTOCI        SAVE VTOC INDICATORS       
+         TM    VTOCINDS,X'80'           TEST FOR NO FORMAT 5 DSCB'S 
+         BNZ   NOSPACE               
+         LH    R1,MTDSCBS               
+* CHECK AT LEAST 100 AVAILBLE DSCBS
+         C     R1,=F'100'
+         BH    F4DSCBOK
+         MVC   SHORTMSG,ALERTMSG
+         MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'LOWDSCB),LOWDSCB
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         LH    R1,MTDSCBS       R1 WAS TRASHED BY PUT, GET VALE BACK
+*
+F4DSCBOK EQU   *
+         CVD   R1,DVOLDEC                  
+         MVC   EDITFLD,EDITFLDX     
+         ED    EDITFLD,DVOLDEC+4                   
+         MVC   SHORTDCB(4),EDITFLD+4
+*        DS4NOATK XL2 number of remaining alternate tracks
+*
+*        DS4IVTOC flag X'01' indicates indexed vtoc, but
+*                 in what field ?
+*
+*        DS4DEVSZ XL4 device size
+*
+*----------------------------------------------------------------------
+* BRANCH TO THE FORMAT5 DSCB PROCESSING
+*----------------------------------------------------------------------
+         B     GETVSAM           GO DO FORMAT5 STUFF
+*----------------------------------------------------------------------
+* ERROR MESSAGES FOR FORMAT4 DSCB PROCESSING
+*----------------------------------------------------------------------
+ERRFMT4  MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'ERRFMT4M),ERRFMT4M
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         B     INCRVOL
+NOSPACE  MVC   SHORTMSG,ALERTMSG
+         MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'VOLFULL),VOLFULL
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         PUT   RPTVOLS,SHORTLIN
+         B     INCRVOL
+         EJECT
+***********************************************************************
+*
+*
+*             SECTION FOR PROCESSING THE FORMAT5 DSCB    
+*             ENTRIES ON THE VOLUME.                 
+*                                                
+*             ENTRY  : B GETVSAM (FROM MAINLINE AFTER FMT4 INFO)  
+*             RETURN : BRANCHES TO MAINLINE RETFMT4 (VIA EXITFMT5) 
+*                      IF ALL OK, OR TO INCRVOL IF ERRORS
+*                                                                
+*                                                                
+***********************************************************************
+*----------------------------------------------------------------------
+*              PROCESS VSAM INFORMATION  
+*----------------------------------------------------------------------
+GETVSAM  MVC   SHORTVSM(3),=C'OFF'  DEFAULT IS NO VSAM FILES
+         TM    DS4VSIND,X'80'           TEST OWNERSHIP BIT         
+         BZ    ZERO5                                             
+         MVC   SHORTVSM(3),=C' ON '  INDICATE VOLUME IS OWNED (VSAM)
+*----------------------------------------------------------------------
+*              OBTAIN FORMAT 5 DSCB (FREE AREA DSCB) 
+*        R0  - TRACKS IN THIS EXTENT            
+*        R2  - EXTENTS LEFT TO PROCESS IN THIS DSCB  
+*        R3  - POINTER TO LOAD ADDRESS TABLE ENTRY   
+*        R4  - CUMULATIVE CYLINDER COUNT       
+*        R5  - CUMULATIVE EXCESS TRACK COUNT   
+*        R6  - ADDRESS OF EXTENT DESCRIPTION (LOADED BY EXECUTE)  
+*        R7  - CUMULATIVE EXTENT COUNT                       
+*----------------------------------------------------------------------
+         SPACE 2                                                      
+ZERO5    XC    LARGE5(30),LARGE5        ZERO LARGEST 5 EXTENTS TABLE
+         SR    R7,R7                    ZERO EXTENTS                
+         SR    R4,R4                    ZERO CYLINDERS             
+         SR    R5,R5                    ZERO TRACKS                
+OBTFMT5  L     R15,UCBADDR              LOAD UCB ADDRESS           
+         USING UCB,R15                  ADDRESSABILITY            
+         TM    DVOLFLGA,DVOLNRDY        TEST NOT READY            
+         BO    NOTREADY                                          
+         DROP  R15                                               
+         OBTAIN DVOLDCB5                READ FORMAT 5 DSCB     
+         LTR   R15,R15                  TEST RETURN CODE    
+         BNZ   ERRFMT5                                     
+         CLI   DS5FMTID,X'F5'           TEST FORMAT 5 ID     
+         BNZ   ERRFMT5                                    
+         LA    R2,26                    LOAD EXTENTS PER DSCB  
+         SR    R3,R3                    ZERO POINTER        
+DVOLLOAD EX    R0,FMT5ADDR(R3)          LOAD ADDRESS OF EXTENT DESCR 
+         NC    0(5,R6),0(R6)            TEST FOR LAST EXTENT       
+         BE    ENDFMT5                                            
+         SR    R0,R0                    CLEAR REGISTER            
+         MVC   HALF,2(R6)               COPY NUMBER OF CYLINDERS      
+         LH    R1,HALF                  LOAD NUMBER OF CYLINDERS    
+         IC    R0,4(R6)                 LOAD NUMBER OF TRACKS     
+         AR    R4,R1                    ACCUMULATE CYLINDERS      
+         AR    R5,R0                    ACCUMULATE TRACKS        
+         LA    R7,1(R7)                 INCREMENT EXTENT COUNT    
+         MH    R1,TRKPRCYL              MULT CYLS BY TRKS PER CYL    
+         AR    R0,R1                    TOTAL TRACKS THIS EXTENT 
+*----------------------------------------------------------------------
+*              SEE IF CURRENT EXTENT IS ONE OF 5 LARGEST       
+*        R0  - TRACKS IN THIS EXTENT                           
+*        R1  - EXTENT TABLE COUNTER                         
+*        R6  - ADDRESS OF EXTENT DESCRIPTION               
+*        R14 - CHARACTERS TO BE MOVED, ADDR OF EXTENT ENTRY    
+*              R2, R3, R4, R5, AND R7 MUST BE PRESERVED      
+*----------------------------------------------------------------------
+         SPACE 2                                                     
+         SR    R14,R14                  ZERO CHARACTERS               
+         LA    R1,5                     LOAD COUNT                   
+COMPARE  CH    R0,LARGE5(R14)           COMPARE TOTAL TRACKS        
+         BNH   NOTLARGE                                            
+         LA    R14,6(R14)               INCREMENT COUNT BY 6      
+         BCT   R1,COMPARE                                      
+NOTLARGE SH    R14,=H'6'                                      
+         LTR   R14,R14                  TEST COUNT          
+         BM    NEXTFREE                                  
+         BZ    ADDEXTNT                               
+         BCTR  R14,0                    REDUCE COUNT BY 1          
+         EX    R14,MOVEXTNT             COPY EXTENT DESCRIPTIONS  
+         LA    R14,1(R14)               ADD 1 TO COUNT           
+ADDEXTNT LA    R14,LARGE5(R14)          LOAD ADDRESS FOR THIS EXTENT  
+         STH   R0,0(R14)                STORE NUMBER OF TRACKS       
+         MVC   2(3,R14),2(R6)           COPY CYLINDERS AND TRACKS    
+NEXTFREE LA    R3,4(R3)                 INCREMENT POINTER            
+         BCT   R2,DVOLLOAD              DECREMENT EXTENT COUNTER  
+         SPACE 2                                               
+*----------------------------------------------------------------------
+*            FINISHED WITH THIS FORMAT 5 DSCB, ANY MORE ? 
+*----------------------------------------------------------------------
+         SPACE 2                                                       
+         NC    DS5PTRDS,DS5PTRDS        TEST FOR ANOTHER FMT5         
+         BE    ENDFMT5                                             
+         MVC   DVOLCCHH,DS5PTRDS        COPY ADDRESS OF NEXT FMT5 DSCB
+         B     OBTFMT5                                              
+         EJECT
+*----------------------------------------------------------------------
+*              FORMAT AND DISPLAY LINE     
+*        R4  - CYLINDER COUNT           
+*        R5  - EXCESS TRACK COUNT     
+*        R7  - EXTENT COUNT           
+*----------------------------------------------------------------------
+         SPACE 2                                                      
+ENDFMT5  CNOP  0,4
+*--------PROCESS VTOC INDICATORS                                   
+TESTDIRF TM    VTOCINDS,X'04'                          
+         BZ    BLKDSCBS                            
+         MVC   SHORTMSG,ALERTMSG
+         MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'DAMAGED),DAMAGED
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+BLKDSCBS EQU   *
+ENDFMT5B CLC   LARGE5+24,=H'0'          TEST FOR NO SPACE ON PACK  
+         BE    NOSPACE                                            
+* CHECK AT LEAST 50 CYLS FREE
+         C     R4,=F'50'                AT LEAST 50CYLS FREE ?
+         BNL   F5CYLSOK
+         MVC   SHORTMSG,ALERTMSG
+         MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'LOWCYLS),LOWCYLS
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+* CHECK NOT MORE THAN 25 EXTENTS IN USE
+F5CYLSOK C     R7,=F'25'
+         BNH   F5EXTSOK
+         MVC   SHORTMSG,ALERTMSG
+         MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'HIEXTCNT),HIEXTCNT
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+F5EXTSOK EQU   *
+         CVD   R7,DVOLDEC                                        
+         MVC   EDITFLD,EDITFLDX                    
+         ED    EDITFLD,DVOLDEC+4                              
+         MVC   EXTENTS,EDITFLD+4                                  
+         CVD   R4,DVOLDEC                                        
+         MVC   EDITFLD,EDITFLDX                    
+         ED    EDITFLD,DVOLDEC+4                                 
+         MVC   CYLS,EDITFLD+5                                 
+         MH    R4,TRKPRCYL              CONVERT TOTAL TRACKS    
+         AR    R4,R5                                         
+         CVD   R4,DVOLDEC                                 
+         MVC   EDITFLD,EDITFLDX            
+         ED    EDITFLD,DVOLDEC+4                       
+         MVC   TRACKS,EDITFLD+3                   
+         SPACE 2                              
+         MVC   SHORTTOT,TRACKS                           
+         MVC   SHORTEXT,EXTENTS                       
+         MVC   SHORTCYL,CYLS                         
+DISPLAY4 EQU   *
+*----------------------------------------------------------------------
+*              DISPLAY LARGEST EXTENTS AS CYL+TR               
+*        R4  - DESCRIPTION COUNTER                          
+*        R5  - TABLE ENTRY POINTER                        
+*        R6  - OUTPUT LINE POINTER                     
+*----------------------------------------------------------------------
+         SPACE 2                                                      
+GETCYLTR LA    R4,5                     SET COUNTER               
+         LA    R5,LARGE5+24             SET POINTER            
+         LA    R6,LRGXTNT1              SET POINTER             
+LOOP1    CLC   0(2,R5),=H'0'            TEST FOR END OF LIST   
+         BE    ENDLOOP1                                    
+         LH    R3,2(R5)                 LOAD CYLINDERS          
+         CVD   R3,DVOLDEC               CONVERT TO DECIMAL    
+         MVC   EDITFLD,EDITFLDX                 
+         ED    EDITFLD,DVOLDEC+4                                
+         MVC   0(3,R6),EDITFLD+5        MOVE CYLINDERS TO MESSAGE   
+         MVI   3(R6),C'+'               MOVE + SIGN                
+         SR    R3,R3                    CLEAR REGISTER           
+         IC    R3,4(R5)                 LOAD TRACKS            
+         CVD   R3,DVOLDEC               CONVERT TO DECIMAL     
+         MVC   EDITFLD,EDITFLDX         SET UP EDIT MASK     
+         ED    EDITFLD,DVOLDEC+4        EDIT TRACKS             
+         MVC   4(2,R6),EDITFLD+6        MOVE TRACKS INTO MESSAGE   
+         MVI   6(R6),C'/'               MOVE /                    
+         SH    R5,=H'6'                 POINT TO NEXT DESCRIPTION   
+         LA    R6,7(R6)                 POINT TO NEXT OUTPUT DESCR   
+         BCT   R4,LOOP1                 DECREMENT COUNT AND LOOP   
+         SPACE 2                                                     
+ENDLOOP1 MVC   SHORT1CL,LRGXTNT1        COPY CYLINDERS IN LARGEST EXTNT 
+         MVC   SHORT1TR,LRGXTNT1+4      COPY TRACKS IN LARGETS EXTENT  
+         MVI   SHORT1CL+3,C'+'          ADD A +                       
+DISPLAY5 EQU   *
+*----------------------------------------------------------------------
+*              DISPLAY LARGEST EXTENTS AS TRACKS              
+*        R4  - DESCRIPTION COUNTER                         
+*        R5  - TABLE ENTRY POINTER                     
+*        R6  - OUTPUT LINE POINTER                 
+*        R7  - CUMULATIVE TRACK COUNTER         
+*----------------------------------------------------------------------
+         SPACE 2                                                  
+GETTRKS  LA    R4,5                     SET COUNT                      
+         LA    R5,LARGE5+24             SET POINTER                  
+         LA    R6,LRGXTNT2              SET POINTER               
+         SR    R7,R7                    ZERO 5 LARGEST EXTENTS TOTAL 
+LOOP2    CLC   0(2,R5),=H'0'            TEST FOR END OF TABLE     
+         BE    ENDLOOP2                                       
+         LH    R3,0(R5)                 LOAD TOTAL TRACKS IN EXTENT  
+         AR    R7,R3                    ACCUMULATE TOTAL          
+         CVD   R3,DVOLDEC               CONVERT TO DECIMAL       
+         MVC   EDITFLD,EDITFLDX         SET EDIT MASK        
+         ED    EDITFLD,DVOLDEC+4        EDIT TRACKS            
+         MVC   0(6,R6),EDITFLD+2        MOVE INTO MESSAGE     
+         MVI   6(R6),C'/'               MOVE / INTO MESSAGE           
+         SH    R5,=H'6'                 POINT TO NEXT EXTENT ENTRY    
+         LA    R6,7(R6)                 POINT TO NEXT OUTPUT POSITION   
+         BCT   R4,LOOP2                 DECREMENT COUNT AND LOOP       
+         SPACE 2                                                      
+ENDLOOP2 MVC   SHORTLRG,LRGXTNT2+1      COPY TRACKS IN LARGEST EXTENT 
+         CVD   R7,DVOLDEC               CONVERT TOTAL OF 5 LARGEST   
+         MVC   EDITFLD,EDITFLDX         MOVE IN EDIT MASK       
+         ED    EDITFLD,DVOLDEC+4        EDIT VALUE                  
+         MVC   SHORT5XT,EDITFLD+3       COPY TO OUTPUT LINE       
+         SPACE 2                                                
+DISPLAY6 EQU   *
+         SPACE 2                                                        
+CALCRC   MVC   TOTAL,=H'4095'           SET TOTAL = 4095 (LARGEST)     
+         C     R7,=F'4095'              COMPARE TOTAL TO 4095         
+         BH    EXITFMT5                                            
+         STH   R7,TOTAL                 STORE TOTAL              
+         B     EXITFMT5                                        
+         EJECT                                                   
+*----------------------------------------------------------------------
+*  ERROR MESSAGES FOR FORMAT5 DSCB PROCESSING
+*----------------------------------------------------------------------
+ERRFMT5  MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'ERRFMT5M),ERRFMT5M
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         B     INCRVOL                                             
+NOTREADY MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'NOTREADM),NOTREADM
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         B     INCRVOL                                             
+         SPACE 2                                                  
+*----------------------------------------------------------------------
+*              FINISHED THIS VOLUME - GO TO NEXT VOLUME  
+*----------------------------------------------------------------------
+         SPACE 2                                                 
+EXITFMT5 PUT   RPTVOLS,SHORTLIN      
+         B     RETFMT4 
+         EJECT
+***********************************************************************
+*
+*
+* THIS SECTION OF CODE PERFORMS THE 
+*    DYNAMIC ALLOCATION OF THE VOLSER
+*    READING/CHECKING ALL THE FORMAT 1 DSCB RECORDS FOR FILESPACE TESTS
+*    DYNAMIC DE-ALLOCATION OF THE VOLSER
+*
+* R9 AND R10 ARE USED FOR ADDRESSING RB AND RBPTR DSECTS
+*
+***********************************************************************
+DYNBLOCK EQU   *
+*----------------------------------------------------------------------
+* PERFORM THE DYNAMIC ALLOCATION OF THE DASD VOLUME
+*        R10 ADDRESSES THE REQUEST BLOCK DSECT
+*        R9 ADDRESSES THE REQUEST BLOCK POINTER DSECT
+*----------------------------------------------------------------------
+         MVC   TUVOLSER(6),DVOLSER  VOLSER TO OPEN
+         MVC   TUUNIT(3),UNITADDR   CUU OF VOLSER
+* DYNAMICALLY ALLOCATE THE DD FOR THE DISK VOLUME
+*   SETUP RB FOR ALLOC
+         LA    R9,REQBLK        ADDRESSABILITY FOR RB DSECT
+         USING S99RB,R9         
+         LA    R10,RBPTR
+         USING S99RBP,R10         REG FOR REQ BLOCK PTR DSECT
+*         
+         XC    REQBLK,REQBLK     CLEAR RB
+         MVI   S99RBLN,REQBLKLN  SET RB LEN
+         MVI   S99VERB,S99VRBAL  ALLOCATE BY DDNAME REQUEST
+         LA    R1,TUPTR001      ADDR OF TEXT LIST
+         ST    R1,S99TXTPP      STORE INTO RB
+*   SETUP RB POINTER
+         LA    R1,REQBLK        ADDRESS OF RB
+         ST    R1,S99RBPTR      STORE RB ADDR INTO TB POINTER
+         OI    S99RBPTR,S99RBPND TURN ON HIGH ORDER BIT(LIST END)
+*   ISSUE SVC 99 (DYNAMIC ALLOCATION)
+         LA    R1,RBPTR
+         DYNALLOC
+         LTR   R15,R15           DID IT WORK ?
+         BNZ   DYNERR
+*----------------------------------------------------------------------
+* MODIFY THE JFCB SO WE CAN OPEN THE VTOC
+*----------------------------------------------------------------------
+* READ THE DD JFCB, WE NEED TO MODIFY IT
+         RDJFCB DD0001
+         MVI   JFCB,X'04'            SET JFCB BYTE-1 TO X'04'
+         MVC   JFCB+1(43),JFCB       PERPETUATE THROUGH DSN FIELD
+         MVC   JFCB+44(8),=8X'40'    SET MEMBER NAME TO BLANKS
+         XC    JFCB+52(27),JFCB+52   ZERO OUT MISC DATA-MNGMT FIELDS
+         XC    JFCB+86(31),JFCB+86
+         XC    JFCB+148(26),JFCB+148
+         OI    JFCB+52,8             SET MISC DATA-MNGMT FIELDS
+         OI    JFCB+66,2
+         OI    JFCB+87,X'48'
+* OPEN WITH MODIFIED JFCB
+         OPEN  DD0001,TYPE=J         OPEN WITH MODIFIED JFCB
+         LTR   15,15
+         BNZ   OPENFAIL
+*----------------------------------------------------------------------
+* LOOP CHECKING INFO ON EVERY FILE ON THE PACK
+*----------------------------------------------------------------------
+READDSC1 READ  DECB1,SF,DD0001,DSCB1,'S'   START READ FOR VTOC
+         CHECK DECB1                 WAIT FOR READ TO COMPLETE
+         CLI   DSCB1+44,C'1'         FORMAT 1 DSCB?
+         BNE   READDSC1              NO, SO LOOP
+         CLI   DS1NOEPV,X'0A'        IS EXTENTS ON THIS DSN > 10
+         BNH   READDSC1              NO, IS OK, GET NEXT
+         MVC   ERRORSER,DVOLSER
+         MVC   ERRORMSG(L'ERREXTNT),ERREXTNT
+         MVC   ERRORLIN+27(44),DSCB1  FILENAME INTO MESSAGE
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         B     READDSC1              GO GET ANOTHER DSNAME
+*----------------------------------------------------------------------
+* EOFDISK IS REACHED WHEN NO MORE FILES ON DISK
+*----------------------------------------------------------------------
+EOFDISK  CLOSE DD0001                CLOSE DOWN THIS PACK
+*----------------------------------------------------------------------
+* UNALLOCATE THE VOLUME - 
+* REQUIRED SO WE KEEP AVAILABLE RESOURCES TO ALLOCATE THE NEXT
+*----------------------------------------------------------------------
+DEALLOC  XC    REQBLK,REQBLK     CLEAR RB
+         MVI   S99RBLN,REQBLKLN  SET RB LEN
+         MVI   S99VERB,S99VRBUN   SET UNALOLOCAT VERB
+         LA    R1,TUPTR003 ADDR OF BG OF TEXT INIT LIST
+         ST    R1,S99TXTPP
+         LA    R1,REQBLK        ADDRESS OF RB
+         ST    R1,S99RBPTR      STORE RB ADDR INTO TB POINTER
+         OI    S99RBPTR,S99RBPND TURN ON HIGH ORDER BIT(LIST END)
+         LA    R1,RBPTR
+         DYNALLOC
+         LTR   R15,R15           DID IT WORK ?
+         BNZ   DYNUNERR          NO, ERROR
+*----------------------------------------------------------------------
+* END OF ALL THE DYNAMIC PROCESSING WORK AND VTOC SCANNING
+* JUMP BACK TO THE MAINLINE.
+*----------------------------------------------------------------------
+ENDDYNAM B     DYNBLRET
+         EJECT
+*----------------------------------------------------------------------
+* ERROR MESSAGES FOR DYNALLOC CODE
+*----------------------------------------------------------------------
+OPENFAIL EQU   *
+         MVC   ERRORSER,TUVOLSER
+         MVC   ERRORMSG(L'ERRVTOCM),ERRVTOCM
+         PUT   RPTERROR,ERRORLIN
+         SPACEOUT ERRORLIN
+         B     DEALLOC
+DYNERR   EQU   *
+* DID THE DYNALLOC FAIL BECAUSE THE VOLUME IS RESERVED ?
+         SR    R1,R1
+         LH    R1,S99ERROR
+         C     R1,=X'00000230'
+         BE    DYNSYSR1              YES, SHOW THAT MESSAGE
+* 
+* DISPLAY DYNALLOC ERROR DETAILS
+         TODEC3 REG=R15,BUF=DECIMAL
+         MVC   DYNERRM+27(3),DECIMAL
+         SR    R15,R15
+         LH    R15,S99ERROR
+         ST    R15,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   DYNERRM+35(8),HEXDIS
+         MVC   DYNERRM+46(6),TUVOLSER
+         SR    R15,R15
+         LH    R15,S99INFO 
+         ST    R15,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   DYNERRM+57(8),HEXDIS
+DYNERRM  WTO   'DYNALLOC FAILED,RC=nnn,ERR=hhhhhhhh,V=xxxxxx,INF=hhhhhhX
+               hh'
+         B     ENDDYNAM
+* DISPLAY RESERVED VOLUME MESSAGE
+DYNSYSR1 MVC   DYNSYSRM+8(6),DVOLSER
+DYNSYSRM WTO   'VOLUME MOUNTED PRIVATE, DYNALLOC REJECTED, SKIPPED'
+         MVC   SHORTMSG,SKIPDMSG
+         B     ENDDYNAM
+DYNUNERR EQU   *
+         TODEC3 REG=R15,BUF=DECIMAL
+         MVC   DYNUNERM+39(3),DECIMAL
+         SR    R15,R15
+         LH    R15,S99ERROR
+         ST    R15,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   DYNUNERM+48(8),HEXDIS
+         SR    R15,R15
+         LH    R15,S99INFO 
+         ST    R15,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   DYNUNERM+62(8),HEXDIS
+DYNUNERM WTO   'FAILED TO DE-ALLOCATE DASD, RC=ddd, ERR=hhhhhhhh, INF=hX
+               hhhhhhh, ABEND'
+         ABEND 100,DUMP
+         SPACE 2
+         DROP  R10
+         DROP  R9
+***********************************************************************
+* BIN2HEX: DEBUGGING AID                                              *
+*CONVERTS THE REGISTER SAVED IN HEXBIN TO A DISPLAYABLE VALUE IN HEXDIS
+***********************************************************************
+BIN2HEX  UNPK   HEXDIS(L'HEXDIS+1),HEXBIN(L'HEXBIN+1)
+         TR     HEXDIS,HEXTRT       HEXDIS is displayable value
+         BR     R7                  RETURN
+         CNOP  0,4                 Fullword alignment.
+HEXTRT   EQU   *-X'F0'             16 Byte Translate Table.
+         SPACE ,
+*                   0 1 2 3 4 5 6 7 8 9 A B C D E F
+         SPACE ,
+         DC    XL16'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'  F0 - FF
+HEXBIN   DS    XL4                 4 Byte Binary Field.
+         DS    X                   1 Byte Pad for UNPK.
+HEXDIS   DS    CL8                 8 Byte Displayable Hex Field.
+         DS    C                   1 Byte Pad for UNPK.
+         SPACE ,
+         EJECT
+***********************************************************************
+*
+*                      DATA/WORK AREAS
+*
+*********************************************************************** 
+SAVEAREA DC    18F'0'        REGISTER SAVE AREA
+DECIMAL  DC    D'0'          GLOBALLY USED BY TODEC3 MACRO
+DVOLSER  DS    CL6           GLOBALLY USED VOLSER LABEL
+UNITADDR DC    CL3'XXX'      GLOBALLY USED UNIT CUU ADDRESS
+*----------------------------------------------------------------------
+* DCBS DEFINITIONS FOR FILES ALLOCATED VIA JCL
+*----------------------------------------------------------------------
+RPTVOLS  DCB   DDNAME=RPTVOLS,DSORG=PS,MACRF=PM,                       X
+               BLKSIZE=132,RECFM=FB,LRECL=132
+RPTERROR DCB   DDNAME=RPTERROR,DSORG=PS,MACRF=PM,                      X
+               BLKSIZE=132,RECFM=FB,LRECL=132
+*
+*======================================================================
+*
+* THE BELOW ARE REQUIRED FOR THE UCB SCAN, FORMAT4+5 DSCB WORK,
+*
+*======================================================================
+UCBADDR  DS    A                                                   
+UCBTABLE DS    A                                                 
+UCBNEXT  DS    A                                             
+*
+DVOLDEC  DS    D          
+EDITFLD  DC    X'4020202020202120' GETS CHANGED WHEN USED
+EDITFLDX DC    X'4020202020202120' TO REFRESH EDITFLD
+*
+DSNAME   DC    44XL1'04'
+         DC    F'0'
+DVOLCCHH DS    XL5        
+VTOCINDS DS    X       
+MTDSCBS  DS    H      
+TRKPRCYL DS    H 
+TOTAL    DS    H
+*
+WORKAREA DS    XL16
+LARGE5   DS    15H
+HALF     DS    H
+*
+DVOLDCB5 CAMLST SEEK,DVOLCCHH,DVOLSER,VTOCFMT5
+*
+DVOLDCB4 CAMLST SEARCH,DSNAME,DVOLSER,DS4IDFMT
+         PRINT NOGEN
+         DS    0F         Align on fullword boundary
+DSCB4    DS    CL140
+         ORG   DSCB4          overlay from DSCB4
+         IECSDSL1 4           Map the format 4 dscb
+VTOCFMT5 EQU   *              And the format 5 dscb
+DSCB5    DS    CL140
+         PRINT GEN
+         ORG   VTOCFMT5
+         #VTCFMT5
+         PRINT NOGEN
+*MID*    IECSDSL1 5    TOO DIFFERENT TO FILE058 VERSION TO BE USED
+*----------------------------------------------------------------------
+* MESSAGE CONSTANTS
+*----------------------------------------------------------------------
+ALERTMSG DC    CL30'ALERTS REPORTED FOR THIS DISK '
+SKIPDMSG DC    CL30'FILE SPACE CHECKS SKIPPED     '
+VOLFULL  DC    CL37'*** VOLUME CONTAINS NO FREE SPACE ***'
+DAMAGED  DC    CL30'*** VTOC DAMAGE BIT IS SET ***'
+LOWCYLS  DC    CL41'HAS LESS THAN 050 CYLS IN LARGEST EXTENT'
+LOWDSCB  DC    CL44'HAS LESS THAN 100 AVAILABLE DSCBS REMAINING'
+HIEXTCNT DC    CL41'FRAGMENTED TO MORE THAN 25 EXTENT BLOCKS'
+ERRFMT4M DC    CL28'ERROR OBTAINING FORMAT4 DSCB'
+ERRFMT5M DC    CL28'ERROR OBTAINING FORMAT5 DSCB'
+NOTREADM DC    CL23'DASD NOT READY, SKIPPED'
+ERREXTNT DC    CL19'FILE > 10 EXTENTS: '
+ERRVTOCM DC    CL19'FAILED TO OPEN VTOC'
+*
+VOL      DC    CL6'*     '   DUMMY TO START VOL SEARCHES
+*----------------------------------------------------------------------
+*          INSTRUCTIONS TO BE EXECUTED BY EXECUTE INSTRUCTIONS 
+*----------------------------------------------------------------------
+MOVEXTNT MVC   LARGE5(0),LARGE5+6       COPY EXTENT ENTRIES
+FMT5ADDR LA    R6,DS5EXT01              LOAD EXTENT DESCRIPTION ADDRESS
+         LA    R6,DS5EXT02
+         LA    R6,DS5EXT03       
+         LA    R6,DS5EXT04          
+         LA    R6,DS5EXT05                
+         LA    R6,DS5EXT06                     
+         LA    R6,DS5EXT07        
+         LA    R6,DS5EXT08         
+         LA    R6,DS5EXT09              
+         LA    R6,DS5EXT10                    
+         LA    R6,DS5EXT11                        
+         LA    R6,DS5EXT12      
+         LA    R6,DS5EXT13          
+         LA    R6,DS5EXT14           
+         LA    R6,DS5EXT15                
+         LA    R6,DS5EXT16    
+         LA    R6,DS5EXT17     
+         LA    R6,DS5EXT18          
+         LA    R6,DS5EXT19             
+         LA    R6,DS5EXT20                   
+         LA    R6,DS5EXT21                                      
+         LA    R6,DS5EXT22                                 
+         LA    R6,DS5EXT23                            
+         LA    R6,DS5EXT24                         
+         LA    R6,DS5EXT25                     
+         LA    R6,DS5EXT26                
+         SPACE 3
+*----------------------------------------------------------------------
+*              DATA OUTPUT FORMATTING FIELDS/LINES
+*----------------------------------------------------------------------
+TRACKS   DC    CL5'XXXXX'          
+EXTENTS  DC    CL4'XXXX'                             
+CYLS     DC    CL3'XXX'                                 
+LRGXTNT1 DS    CL10     *MID* TODO DETERMINE ACTUAL LEN NEEDED 
+LRGXTNT2 DS    CL10     *MID* TODO DETERMINE ACTUAL LEN NEEDED  
+VOLHDR1  DC    CL132'            ---ATTRIBUTES----      AVAIL -----TOTAX
+               LS---- LARGEST-EXTENT 5 EXTS'
+VOLHDR2  DC    CL132'SERIAL UNIT   MOUNT      USE  VSAM DSCBS TRACKS  EX
+               XT CYL CYL+TR  TRACKS TRACKS'
+ERRHDR1  DC    CL132'SERIAL  EXCEPTION TO REVIEW'
+SHORTLIN DC    CL132' '
+         ORG   SHORTLIN                                      
+SHORTSER DS    CL6                                  
+         DS    CL2                      
+SHORTUNT DS    CL3                 
+         DS    CL1             
+SHORTMNT DS    CL9           
+         DS    CL1                       
+SHORTUSE DS    CL7                  
+         DS    CL2               
+SHORTVSM DS    CL3             
+         DS    CL2            
+SHORTDCB DS    CL4           
+         DS    CL2          
+SHORTTOT DS    CL5                            
+         DS    CL1                        
+SHORTEXT DS    CL4                   
+         DS    CL1                
+SHORTCYL DS    CL3              
+         DS    CL1           
+SHORT1CL DS    CL3         
+         DC    C'+'                
+SHORT1TR DS    CL2             
+         DS    CL3         
+SHORTLRG DS    CL5               
+         DS    CL2             
+SHORT5XT DS    CL5
+         DS    CL2             
+SHORTMSG DS    CL30
+         DS    CL22
+*
+         ORG
+ERRORLIN DC    CL132' '
+         ORG   ERRORLIN                                      
+ERRORSER DS    CL6                                  
+         DS    CL2                      
+ERRORMSG DS    CL124
+         ORG
+*======================================================================
+*
+*      DATA/WORK AREAS NEEDED FOR DYNAMIC VOLUME ALLOCATION
+*      AND THE FILE EXTENT ALLOCATION CHECKS.
+*
+*======================================================================
+         DS    0D
+DSCB1    DS    CL144
+         ORG   DSCB1
+         IECSDSL1 1             MAP THE DSCB FORMAT 1 LAYOUT
+DD0001   DCB   DDNAME=DD0001,DSORG=PS,MACRF=R,RECFM=F,BLKSIZE=96,      X
+               EXLST=EXLST,KEYLEN=44,EODAD=EOFDISK
+EXLST    DC    0F'0',X'87',AL3(JFCB)
+JFCB     DS    CL176
+         DS    0F
+EXLSTBKL DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DC    176X'00'                 JFCB AREA
+         ORG   JFCBAREA
+         IEFJFCBN LIST=NO      MAP THE JFCB AREA
+*----------------------------------------------------------------------
+* DYNAMIC ALLOCATION 
+*----------------------------------------------------------------------
+RBPTR    DS    F
+REQBLK   DS    CL(S99RBEND-S99RB)
+REQBLKLN EQU   L'REQBLK
+*----------------------------------------------------------------------
+* DYNAMIC ALLOCATION FIELDS
+*    --> TUUNIT IS UPDATED BY MAINLINE
+*    --> TUVOLSER IS UPDATED BY MAINLINE
+*----------------------------------------------------------------------
+* TEXT UNITS POINTER LIST
+TUPTR001 DS    0F
+         DC    A(TUDDNA1)  ADDR OF TU FOR DDNAME
+         DC    A(TUDSSA1)  ADDR OF TU FOR DS STATUS
+         DC    A(TUDELA1)  ADDR OF TU FOR NORMAL DISP
+         DC    A(TUDE2A1)  ADDR OF TU FOR CONDITIONAL DISP
+         DC    A(TUSP1A1)  ADDR OF TU FOR ALLOC TRKS      
+         DC    A(TUSP2A1)  ADDR OF TU FOR NUM TRKS      
+         DC    A(TUBLKA1)  ADDR OF TU FOR BLOCKSIZE     
+         DC    A(TUKEYA1)  ADDR OF TU FOR KEYLEN        
+         DC    A(TURFMA1)  ADDR OF TU FOR RECFM         
+         DC    A(TUORGA1)  ADDR OF TU FOR DSORG         
+         DC    A(TURCLA1)  ADDR OF TU FOR LRECL         
+         DC    A(TUDSNA1)  ADDR OF TU FOR DSNAME
+         DC    A(TUUNTA1)  ADDR OF TU FOR UNIT
+         DC    X'80'       INDICATES LAST TU ADDR FOLLOWS
+         DC    A(TUVOLA1)  ADDR OF TU FOR VOLSER
+* TEXT UNITS, KEYS AND VALUES
+TUDDNA1  DC    AL2(DALDDNAM) TU KEY FOR DDNAME
+         DC    AL2(1)        NUMBER OF ENTRIES
+         DC    AL2(6)        LENGTH OF DDNAME
+         DC    CL6'DD0001' DD NAME
+*TUDSSA1  DC    AL2(DALSTATS),AL2(1),AL2(1),X'08' DISP=SHR
+TUDSSA1  DC    AL2(DALSTATS),AL2(1),AL2(1),X'04'  DISP=(NEW,
+TUDELA1  DC    AL2(DALNDISP),AL2(1),AL2(1),X'04'        DELETE,
+TUDE2A1  DC    AL2(DALCDISP),AL2(1),AL2(1),X'04'        DELETE)
+*
+TUSP1A1  DC    AL2(DALTRK),AL2(0)                   SPACE=(TRK,
+TUSP2A1  DC    AL2(DALPRIME),AL2(1),AL2(3),XL3'000001'     1)
+*
+TUBLKA1  DC    AL2(DALBLKSZ),AL2(1),AL2(2),XL2'0060' BLKSIZE=96
+TUKEYA1  DC    AL2(DALKYLEN),AL2(1),AL2(1),XL1'2C'   KEYLEN=44
+TURFMA1  DC    AL2(DALRECFM),AL2(1),AL2(1),XL1'80'   RECFM=F   
+TUORGA1  DC    AL2(DALDSORG),AL2(1),AL2(2),XL2'4000' DSORG=PS  
+TURCLA1  DC    AL2(DALLRECL),AL2(1),AL2(2),XL2'0060' LRECL=96
+*
+TUDSNA1  DC    AL2(DALDSNAM),AL2(1),AL2(5)           DSN=&AAAA
+         DC    XL5'50C1C1C1C1'                         AMP-AAAA
+TUUNTA1  DC    AL2(DALUNIT),AL2(1),AL2(3)            UNIT=146
+TUUNIT   DC    CL3'000'
+TUVOLA1  DC    AL2(DALVLSER),AL2(1),AL2(6)           VOL=SER=DUMMY1
+TUVOLSER DC    CL6'DUMMY1'
+*----------------------------------------------------------------------
+* DYNAMIC UN-ALLOCATION FIELDS
+*----------------------------------------------------------------------
+TUPTR003 DS    0F
+         DC    X'80'           INDICATE LAST ENTRY FOLLOWS
+         DC    AL3(TUDDNU1)    ADDR OF DDNAME TO UNALLOCATE
+TUDDNU1  DC    AL2(DUNDDNAM)   KEY FOR DDNAME UNALLOC
+         DC    AL2(1)          NUMBER OF ENTRIES
+         DC    AL2(6)          LENGTH OF DDNAME
+         DC    C'DD0001'       DDNAME
+*
+         END                                                 
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(DASDSCAN),DISP=SHR
+//*
+//TESTIT   EXEC PGM=DASDSCAN,COND=(0,NE),DYNAMNBR=4
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//RPTVOLS  DD   SYSOUT=*         FOR VOLUME SPACE LISTINGS
+//RPTERROR DD   SYSOUT=*         FOR ERROR/EXCEPTION REPORTING
+//
