@@ -49,6 +49,14 @@ EVENTHUB        - BETA - S/370 macro
                   eventhub_test_program.txt - demo program and the
                   only documentation at this point
 
+GETMAXCC.txt    - I needed code to scan the return codes of all prior
+                  jobsteps in a batch job. It was hard to track down
+                  how to do that for mvs3.8j so saved here so I don't
+                  lose it.
+                  This is how to get that info, to be usefull you
+                  would need to put it into a program that made
+                  decisions on that information :-)
+
 IPLINFO.txt     - I wanted more info logged that the default reason
                   for ipl the OS provides (which we have all disabled
                   anyway). This records the ipltime, ipl volser and cuu
