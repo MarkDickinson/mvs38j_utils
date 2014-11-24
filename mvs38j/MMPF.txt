@@ -1,5 +1,5 @@
-//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=A,        
-//   MSGLEVEL=(1,1)
+//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T,        
+//   MSGLEVEL=(1,1),USER=MARK,PASSWORD=MVS38J
 //*
 //*   My MPF / Marks MPF / MVS 3.8J console automation 
 //*      without IEECVXIT (almost, see notes below)
@@ -111,6 +111,7 @@
 //*                added new ,, bug to bug documentation
 //*   2013/01/20 - fixed all important bugs in message parsing and
 //*                updated the dsect used.
+//*   2014/11/21 - in a bored moment added the stats display
 //*
 //CREATE   EXEC PGM=IEFBR14
 //SYSPRINT DD   SYSOUT=*
@@ -332,7 +333,7 @@ GWX6&SYSNDX WTO  'LINK ERROR, PROGRAM GETWORDS NOT FOUND'
 GWX7&SYSNDX CNOP 0,4
          MEND
 ./ ADD NAME=GETWORDS
-//MARKA    JOB (0),'ASSEMBLE GETWORDS',CLASS=A,MSGCLASS=A,
+//MARKA    JOB (0),'ASSEMBLE GETWORDS',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -903,7 +904,7 @@ LE       EQU   13 -                A NOT HIGH
 /*
 //
 ./ ADD NAME=GETWTEST
-//MARKA    JOB (0),'ASSEMBLE TEST PGM',CLASS=A,MSGCLASS=A,
+//MARKA    JOB (0),'ASSEMBLE TEST PGM',CLASS=A,MSGCLASS=T,
 //  MSGLEVEL=(1,1)
 //*
 //* TEST OUT THE GETWORDS PROGRAM TO MAKE SURE IT IS
@@ -1222,9 +1223,7 @@ BSPPILOT DOM
 * STATEMENT IN THE MAIN MMPF PROGRAM BANNER COMMENTS
 ENDDECK
 ./ ADD NAME=MMPF
-//MARKA JOB (0),'ASSEMBLE MMPF',CLASS=A,MSGCLASS=A
-//* RESTART=TESTIT
-//*
+//MARKA JOB (0),'ASSEMBLE MMPF',CLASS=A,MSGCLASS=T
 //ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
 //             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
 //             PARM.LKED='LIST,MAP,NCAL,AC=1'
@@ -1282,6 +1281,7 @@ ENDDECK
 *                                                                     *
 *      P XXX                - STOP TASK                               *
 *      F XXX,MMPF=nn        - LOAD CHANGED RULE FILE MMPFnn           *
+*      F XXX,STATS          - DISPLAY ACTIVITY SINCE LAST RESTART     *
 *                                                                     *
 * ----------- RULE FILE SYNTAX -----------                            *
 *                                                                     *
@@ -1327,9 +1327,15 @@ ENDDECK
 *                LIVE parm also so the proc can use something other   *
 *                than debug and still work; the LIVE parm does        *
 *                nothing but is legal.                                *
-*   2009/10/13 - In the TK3 system the BSPPILOT WTOR and attention    *
-*                messages are prefixed @ instead of *, updated to     *
-*                allow for those also.                                *
+*   2009/10/13 - Non-APF program attention messages use @ instead of  *
+*                the * character so uodated to allow for those also.  *
+*   2014/11/24 - added the F XXX,STATS option because I was bored     *
+*                CRITICAL NOTE: I have pretty much maxed out the two  *
+*                base register addressing limit (I had to delete the  *
+*                initialisation OK message to make room for the stats *
+*                message to avoid addressing errors). The next        *
+*                version release will have code moved to seperate     *
+*                csects or possibly seperate modules; we will see.    *
 *                                                                     *
 * I M P O R T A N T                                                   *
 *   This has been setup for my system which may be at a different     *
@@ -1641,8 +1647,7 @@ SETCOUNT EQU     *
          MVC   INITWARN+37(8),MYJOBNAM
 INITWARN WTO2  'MID012E xxxxxxxx:USE F xxxxxxxx,MMPF=nn TO SELECT A RULX
                E MEMBER'
-INITOK   WTO2    'MID002I         :INITIALISATION COMPLETE'
-         CLC   DEBUGON(1),CHARY
+INITOK   CLC   DEBUGON(1),CHARY
          BNE   WAIT
          WTO   '* MMPF IN DEBUG MODE *'
 ***********************************************************************
@@ -1698,13 +1703,26 @@ MODIFY   EQU     *
          CLI     CIBVERB,CIBMODFY    * IS IT MODIFY ?
          BNE     OPERROR             * NO - ERROR
 * ROUTINE TO PROCESS A PROCESS THE NEWRULES COMMAND                 *
+         CLC     CIBDATA(5),MMPFSTAT * IS IT A STATS REQUEST ?
+         BE      SHOWSTAT            * YES, GO THERE   
          CLC     CIBDATA(5),MMPFCMD  * IS IT A RELOAD REQUEST ?
          BNE     OPERROR             * NO - ERROR THEN
          LA      R1,CIBDATA          * OK, R1 ADRESSES CMD
          BAL     R5,NEWRULES         *   AND GO LOAD THEM
          B       OPCMDRET
+         DS      0D                  ALIGN
+STATWRK  DS      PL8                 STATMSG WORK AREA
+SHOWSTAT EQU     *
+         MVC   STATMSG+16(8),MYJOBNAM
+         L     R1,AUTOCNT            GET BINARY NUMBER
+         CVD   R1,STATWRK            CONVERT TO DECIMAL
+         LA    R1,STATMSG+25         FORMATTED OUTPUT ADDR
+         UNPK  0(8,R1),STATWRK       UNPK FOR LENGTH 8
+         OI    7(R1),X'F0'           ZERO ZONE BIT
+STATMSG  WTO   'MID029I jjjjjjjj:nnnnnnnn MESSAGES HAVE BEEN AUTOMATED' 
+         B     OPCMDRET
 OPERROR  EQU     *
-         WTO2    'MID003W         :ONLY MMPF=nn IS PERMITTED'
+         WTO2    'MID003W         :ONLY MMPF=nn OR STATS IS PERMITTED'
 NEWTIMER EQU     *
 OPCMDRET EQU     *
          QEDIT   ORIGIN=COMCIBPT,    * FREE IT                         X
@@ -1754,7 +1772,7 @@ NEXTL    LR    R3,R1              SAVE R1 SINCE TPUT ZAPS IT
          B     WAIT                  AND BACK TO THE WAIT CODE
 NEXTL2   LA    R1,80(R3)          NOPE, POINT TO NEXT LINE
 * BELOW IS NEEDED IF WE ARE READING FROM A 3270, WHICH MY CONSOLE IS
-         MVC   0(5,R1),BLANKS     BLANK OUT 3270 CTRL CHARS
+         MVC   0(5,R1),=CL5'     ' BLANK OUT 3270 CTRL CHARS
          LA    R1,4(R1)           ADD 4 EXTRA BYTES TO SKIP CTRL CHARS
 NOT3270  L     R0,=F'78'          LOAD LENGTH OF LINE
          ICM   R1,8,EDITFLG       EDIT MODE
@@ -2103,6 +2121,10 @@ CHKAMSG1 CLC   0(8,R5),14(R1)    RULE TABLE ENTRY MATCH TK3 MSGID ?
 *
 * ------- WE HAVE FOUND A MESSAGE TO BE AUTOMATED HERE -----
 CHKAMSG2 DS    0F                                              
+         L     R1,AUTOCNT          INCREMENT MSGS AUTOMATED COUNT
+         A     R1,ONE
+         ST    R1,AUTOCNT
+         L     R1,CHKASAVE         WAS TRASHED, GET IT BACK
          CLC   DEBUGON(1),CHARY      ARE WE IN DEBUG ONLY MODE ?
          BNE   CHKANDB2              NO, WE ARE LIVE
          MVI   SYSPRLIN,C' '         ELSE LOG RULE ONLY
@@ -2390,7 +2412,7 @@ ONE      DC    F'1'                THE NUMBER ONE, FOR ADDITIONS
 DECIMAL  DC    D'0'
 DEBUGR1  DS    F
          ORG
-BLANKS   DC    CL80' '
+AUTOCNT  DC    F'0'                USED TO COUNT MSGS AUTOMATED
          SPACE 5
 ***********************************************************************
 *                                                                     *
@@ -2413,6 +2435,7 @@ ECBLIST  DS    3F                 ECB LIST FOR STIMER,COM,WTOR
 TIMEXPRM DS    F                  TIMER PARAMETER
 SECS15   DC    CL8'00001500'      FIFTEEN SECONDS
 MMPFCMD  DC    CL5'MMPF=',X'00'   NEWRULES COMMAND
+MMPFSTAT DC    CL5'STATS',X'00'   STATS COMMAND
 EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
          EJECT   
 ***********************************************************************
@@ -2493,7 +2516,7 @@ RULETABL DS    CL2400                30*80
 RULETLEN EQU   *-RULETABL
          END   MMPF
 //ASM.SYSTERM DD SYSOUT=*
-//LKED.SYSLMOD DD DSN=INSTALL.MID.MMPF.LOADLIB(MMPF),DISP=SHR
+//LKED.SYSLMOD DD DSN=MARK.INSTALL.MID.MMPF.LOADLIB(MMPF),DISP=SHR
 //
 ./ ADD NAME=MMPFEX00
 * --------------------------------------------------------------------
@@ -2520,7 +2543,7 @@ LNK devinit 00C dummy.jcl eof
 * Always end the control file with ENDDECK
 ENDDECK
 ./ ADD NAME=MMPFEX
-//MARKA JOB (0),'ASSEMBLE MMPFEX',CLASS=A,MSGCLASS=A
+//MARKA JOB (0),'ASSEMBLE MMPFEX',CLASS=A,MSGCLASS=T
 //ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
 //             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
 //             PARM.LKED='LIST,MAP,NCAL,AC=1'
@@ -3080,7 +3103,7 @@ JFCBAREA DS    0CL176
 //LKED.SYSLMOD DD DSN=INSTALL.MID.MMPF.LOADLIB(MMPFEX),DISP=SHR
 //
 ./ ADD NAME=$INSTALL
-//MARKINST JOB  (0),'INSTALL MMPF',CLASS=A,MSGCLASS=A
+//MARKINST JOB  (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T
 //*
 //* THIS JOB COPIES THE ASSEMBLED MODULES, CONTROL 
 //* MEMBERS AND THE PROC INTO YOUR SYSTEM LIBRARIES.
@@ -3135,7 +3158,7 @@ JFCBAREA DS    0CL176
 /*
 //
 ./ ADD NAME=$ASSEMBL
-//MARKASM  JOB  (0),'ASSEMBLE LMODS',CLASS=A,MSGCLASS=A
+//MARKASM  JOB  (0),'ASSEMBLE LMODS',CLASS=A,MSGCLASS=T
 //*
 //* THIS JOB WAS RUN WHEN THE INSTALL LIBRARIES WERE CREATED
 //*
@@ -3156,7 +3179,7 @@ JFCBAREA DS    0CL176
 //SYSIN    DD   DUMMY
 //
 ./ ADD NAME=$TESTGW
-//MARKTEST JOB  (0),'TEST PARSE',CLASS=A,MSGCLASS=A
+//MARKTEST JOB  (0),'TEST PARSE',CLASS=A,MSGCLASS=T
 //*
 //* THIS IS KNOWN NOT TO WORK.
 //* IT IS A WORK IN PROGRESS TO TEST THE PARSING LIBRARY
@@ -3278,6 +3301,8 @@ TK3 users that will either be from COMMND00 or the JES2PARM member.
 
 Staring MMPF
 ============
+This assumes ypu have names the supplied procedure MMPF and installed
+it in one of your procedure libraries of course.
 
 S MMPF[,MMPF=nn][,MODE=DEBUG][,SYSOUT=x]
 
@@ -3305,6 +3330,9 @@ P MMPF         - stop MMPF
 
 F MMPF,MMPF=nn - load a new rule table, will load member MMPFnn
                  this allows rules to be changed on the fly
+
+F MMPF,STATS   - show how many messages have been automated since
+                 the MMPF task was last started
 
 
 **********************************************************************
