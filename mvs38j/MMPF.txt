@@ -1,5 +1,4 @@
-//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T,        
-//   MSGLEVEL=(1,1),USER=MARK,PASSWORD=MVS38J
+//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T
 //*
 //*   My MPF / Marks MPF / MVS 3.8J console automation 
 //*      without IEECVXIT (almost, see notes below)
@@ -2516,7 +2515,7 @@ RULETABL DS    CL2400                30*80
 RULETLEN EQU   *-RULETABL
          END   MMPF
 //ASM.SYSTERM DD SYSOUT=*
-//LKED.SYSLMOD DD DSN=MARK.INSTALL.MID.MMPF.LOADLIB(MMPF),DISP=SHR
+//LKED.SYSLMOD DD DSN=INSTALL.MID.MMPF.LOADLIB(MMPF),DISP=SHR
 //
 ./ ADD NAME=MMPFEX00
 * --------------------------------------------------------------------
