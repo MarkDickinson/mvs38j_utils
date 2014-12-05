@@ -18,18 +18,24 @@
 # Before running please update the global variables after the
 # end of the header comment block, the three variables to update are
 #    RUNUSER="mark"   # This is the userid that should do the startup
-#    TK3DIR="/home/mark/hercules/turnkey3" # where is TK3 installed
+#    TK3DIR="/home/VM/hercules/turnkey3" # where is TK3 installed
 #    CONFIG="conf/marks.conf"            # the hercules config file to use
 #    IPL_VOL="148"                       # the IPL volume
-#    MARKS_SYSTEM="YES"                  # change to NO
 # -------------------------------------------------
-# ISSUES, SOLVED AND UNSOLVED, ARE IN A COMMENT BLOCK AT THE END OF
-# THIS SCRIPT FILE. UNSOLVED IS A F18 ONE... SO REVIEW THAT.
+# Issues, solced and unsolved, are in a comment block at the end of
+# the script file.
 #
 # The script may look a little messy as it is using multiple ways of
 # issuing commands (screen -X, x3270-script via netcat, and using the
 # hercules.rc file to issue the ipl command intead of the script doing 
-# it. But they are all required as discussed at the end of this script.
+# it. But they are all required.
+# I have tried to cover the reasons for using all the different methods
+# in the known issues section at the end of this file... read if 
+# interested.
+# The hercules.rc is needed to issue the IPL commands as it wasn't possible
+# to script commands via screen as the hercules program itself 'blocks' any
+# commands from screen until at least one interactive command is entered to it.
+# By using the hercules.rc to issue the commands it starts OK.
 #
 # SYNTAX:
 #    scriptname start 
@@ -56,20 +62,12 @@
 #             standard hercules assignment, telnet, consols and terminals connect here
 #
 # BATCH INTERFACES:
-#       console commands can be issued by scripts using the c3270
-#       tcpip ports, or via the hardcopy console using screen.
-#       Note: that hardcopy commands are CASE SENSITIVE so upshift
-#             any commands used for the hardcopy console.
-#       Also hercules commands can be issued via screen.
-#       Interfaces are as below...
-#
 #       tcpip port 3271 -
 #             x3270-script port used by the master console session
-#               echo 'string("D A,L")' | nc ${localhost} 3271
-#               echo "enter()" | nc ${localhost} 3271
+#             (see how this script uses it for examples)
 #       tcpip port 3272 -
 #             x3270-script port used by the backup console session
-#             (see above for how to use it, with port 3272 of course)
+#             (see how this script uses it for examples)
 #       screen -S hercules -X stuff $'any command \n'
 #             issue a command to the hercules hardware console
 #             (see known issues at th end of this script, at least
@@ -84,7 +82,6 @@ RUNUSER="mark"   # This is the userid that should do the startup
 TK3DIR="/home/mark/hercules/turnkey3" # where is TK3 installed
 CONFIG="conf/marks.conf"            # the hercules config file to use
 IPL_VOL="148"                       # Volume to IPL off
-MARKS_SYSTEM="YES"                  # Handle specifics for my system
 localhost="127.0.0.1"               # On F18 localhost doesnt work,
                                     # 127.0.0.1 does so make it a
                                     # variable so I can change it easily
@@ -171,22 +168,26 @@ roll_log() {
 # ----------------------------------------------------------
 is_running() {
     active="no"
-    x1=`ps -ef | grep hercules | grep -v grep`
+    # additional sd-pam, ps -ef, marks_tk3, systemd; added in grep exclusion list
+    # for x1 as they all cause false positives when running under fedora x64 in an
+    # openstack instance; why I don't know as they never show up in the ps under
+    # Fedora 32bit under kvm.
+    x1=`ps -ef | grep hercules | grep -v grep | grep -v "sd-pam" | grep -v "ps -ef" | grep -v "marks_tk3" | grep -v "systemd"`
     if [ "${x1}." != "." ];
     then
         active="yes"
     fi
-    x2=`netstat -an | grep 3270 | grep LISTEN | grep -v grep`
+    x2=`netstat -an | grep tcp |grep 3270 | grep LISTEN | grep -v grep`
     if [ "${x2}." != "." ];
     then
         active="yes"
     fi
-    x3=`netstat -an | grep 3271 | grep LISTEN | grep -v grep`
+    x3=`netstat -an | grep tcp |grep 3271 | grep LISTEN | grep -v grep`
     if [ "${x3}." != "." ];
     then
         active="yes"
     fi
-    x4=`netstat -an | grep 3272 | grep LISTEN | grep -v grep`
+    x4=`netstat -an | grep tcp |grep 3272 | grep LISTEN | grep -v grep`
     if [ "${x4}." != "." ];
     then
         active="yes"
@@ -228,13 +229,20 @@ start_system() {
    # Initialise the hercules.rc file we need to IPL
    # The first commands entered to hercules must be from the hercules.rc file
    # see know issues at the end of the script for why
-   echo "pause 20" > ${HERCULES_RC}
+   echo "pause 60" > ${HERCULES_RC}
    echo "ipl ${IPL_VOL}" >> ${HERCULES_RC}
-   # Uses env variable HERCULES_RC to locate the .rc file to use
-   # hercules now allows a logfile as the last parm; doesn't work for me
-   # so I redirect to a logfile
    screen -t hercules -S hercules -p hercules -d -m hercules -f ${CONFIG} > log/hercules.log 
    sleep 5
+   xx=""
+   while [ "${xx}." = "." ];
+   do
+      xx=`netstat -an | grep 3270 | grep tcp | grep LISTEN`
+      if [ "${xx}." = "." ];
+      then
+         echo "Waiting fot port 3270 to listen"
+         sleep 5
+      fi
+   done
    # start the telnet session to port 3270
    screen -t hardcopy -S hardcopy -p hardcopy -d -m telnet ${localhost} 3270
 
@@ -264,7 +272,16 @@ start_system() {
 
    # And enter the IPL options (just the enter key normally)
    # You can uncomment the R00,CLPA here if you want
+   #   CRITICAL
+   #     UNDER FEDORA 18 THE BELOW COMMAND JUST DOES NOT WORK
+   #     SHOWS CORRECT SYNTAX ON 3270 SCREEN BUT ISNT USEABLE
+   #   - ADDED THE SLEEP AND SECOND ENTER SO THAT AFTER THE
+   #     CLPA ERRORS THE SECOND ENTER WILL CONTINUE THE IPL
+   #     WITHOUT THE CLPA TO AVOID USER INTERVENTION
+   #   The CLPA string worked in F13,14,15,16,17 but will
+   #   not work under F18. Wish they wouldn't break things.
    echo 'string("R 00,CLPA")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
    sleep 1
    echo "enter()" | nc ${localhost} 3271
    # wait for quite a while, for everything to start
@@ -277,7 +294,7 @@ start_system() {
    then
       sleep 150
    else
-      sleep 20
+      sleep 30
    fi
    # then change both 3270 consoles to RD mode
    # keep the K A on a seperate line, its invalid on the K S line
@@ -285,24 +302,16 @@ start_system() {
    echo "enter()" | nc ${localhost} 3271
    echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${localhost} 3272
    echo "enter()" | nc ${localhost} 3272
-   sleep 1
+   sleep 2
    echo 'string("K A,NONE")' | nc ${localhost} 3271
-   sleep 1
    echo "enter()" | nc ${localhost} 3271
-   sleep 1
    echo 'string("K A,NONE")' | nc ${localhost} 3272
-   sleep 1
    echo "enter()" | nc ${localhost} 3272
    # log file to be available for screen scrapes
    chmod 644 log/hardcopy.log
-   # If this is my system,
-   if [ "${MARKS_SYSTEM}." = "YES." ];
-   then
-      sleep 90     # give time for me to logon and override if needed
-                   # need at least sleep 10 for the wtor to be issued
-      echo 'string("R 00,REBOOT BY HOST AUTOMATION")' | nc ${localhost} 3271
-      echo "enter()" | nc ${localhost} 3271
-   fi
+   sleep 30
+   echo 'string("R 00,REBOOT BY HOST RESTART AUTOMATION")' | nc ${localhost} 3271
+   echo "enter()" | nc ${localhost} 3271
 } # start_system
 
 # ----------------------------------------------------------
@@ -353,7 +362,6 @@ stop_system() {
    echo "enter()" | nc ${localhost} 3271
    # T O D O - put an expect() into the script so we know
    #           when we can carry on, until then delay lots
-   #           actually no, we will want to kill it if it hangs anyway
    sleep 120
 
    # We assume everything has stopped by now
@@ -518,6 +526,4 @@ exit 0
 # This error is F18 specific, the script runs OK on F13,14,15,16,17
 # SO IF YOU NEED TO CLPA YOU MUST START HERCULES MANUALLY TO DO SO
 # INSTEAD OF USING THIS SCRIPT... FOR FEDORA 18 ONLY.
-# My webserver is still F17 where this script works perfectly. My
-# dev server was F18, now F19 and I havn't yet retested on F19.
 # ==========================================================

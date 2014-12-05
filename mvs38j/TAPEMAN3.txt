@@ -1,4 +1,5 @@
-//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T
+//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T,
+// USER=MARK,PASSWORD=MVS38J
 //* **************************************************************
 //*
 //*         INSTALLATION JOB FOR TAPEMAN3
@@ -130,7 +131,7 @@ DBSLEN   EQU   *-RECTMPL
 * TAPEMAN : Mark Dickinson, December 2008                            *
 *                                                                    *
 * T A P E M A N     T O O L K I T                                    *
-*     Tapeman - Version 3.04 - April 2014                            *
+*     Tapeman - Version 3.05 - December 2014                         *
 * T A P E M A N     T O O L K I T                                    *
 *                                                                    *
 *                                                                    *
@@ -248,6 +249,13 @@ DBSLEN   EQU   *-RECTMPL
 *        end with an ABEND SC03. It won't happen next time as the    *
 *        file will have been closed correctly and no action is       *
 *        required.                                                   *
+*    3.  Not a bug but... with RAKF denying TAPEVOL resources to     *
+*        unauthorised jobs the OS will just keep asking for another  *
+*        tape to be mounted; which will eventually exhaust the       *
+*        available scratch tapes. I have included in the SRC file    *
+*        an IEECVXIT example that includes the code I use to cancel  *
+*        jobs that try to use tapes they should not.                 *
+*        Search on RAKF000A and CTAPVOLM for the changes needed.     *
 *                                                                    *
 * Other references                                                   *
 *  - See TAPEMUTL to list/add/delete tapes in the TAPEVOLS file      *
@@ -259,8 +267,7 @@ DBSLEN   EQU   *-RECTMPL
 **********************************************************************
 *                                                                    *
 * AUTHOR                                                             *
-*    Mark Dickinson - December 2008 created version 3                *
-*                     Replaces Jan 2006 version 2                    *
+*    Mark Dickinson - 2006, with changes thru to 2014                *
 *                                                                    *
 *        Desc: created to automate my Tape mounts on my MVS3.8J      *
 *              hercules system.                                      *
@@ -369,6 +376,10 @@ DBSLEN   EQU   *-RECTMPL
 *              available not has a timer to go to the cancel job     *
 *              step rather than waiting forever for a operator reply *
 *              Required to stop my MMPF waiting forever on this pgm. *
+* ------- Version 3.05 -------                                       *
+*    2014/12 - Minor tweak, discovered scratch tapes can be requested*
+*              with a volser of SCRTCH so added that test for a      *
+*              scratch mount along with the existing PRIVAT test.    *
 *                                                                    *
 **********************************************************************
          EJECT   
@@ -459,11 +470,12 @@ EXIT1    CNOP  0,4                  ALIGN, COULD BE CALLED FROM VSAM
 * A mount tape on device XXX message
 *
 * IEF233A M 310,VVVVVV,,JJJJJJJJ,RESTORE     <-- to read
-* IEF233A M 311,PRIVAT,SL,JJJJJJJJ,REPORT1   <-- to write
+* IEF233A M 311,PRIVAT,SL,JJJJJJJJ,REPORT1   <-- to write scratch
+* IEF233A M 311,SCRTCH,SL,JJJJJJJJ,REPORT1   <-- to write scratch
 * IEC501A M 311,VVVVVV,SL,6250 BPI,JJJJJJJJ,STEP1 <-- to write
 *
-* Get the jobname and volser required. If the volser is
-* PRIVAT then find a free scratch tape to use as the volser.
+* Get the jobname and volser required. If the volser is PRIVAT 
+* or SCRTCH then find a free scratch tape to use as the volser.
 * When we have the jobname and volser populated call HERCCMD
 *
 * RECDATA WILL CONTAIN -  MSGNUMID CUU VOLSER JOBNAME
@@ -475,9 +487,12 @@ IEC501A  EQU   *
          MVC   VOLSER(6),RECDATA+12
          MVC   JOBNAME(8),RECDATA+19
          CLC   VOLSER(L'VOLSER),PRIVAT  <-- SCRATCH TAPE RQST
-         BNE   HERCCMD                  EXACT TAPE NEEDED, CARRY ON
+         BE    FNDSPARE
+         CLC   VOLSER(L'VOLSER),SCRTCH  <-- SCRATCH TAPE RQST
+         BE    FNDSPARE
+         B     HERCCMD                  EXACT TAPE NEEDED, CARRY ON
 *        -- FIND ANY SCRATCH TAPE TO USE
-         MVI   VSOPCODE,C'S'            WE ARE SEARCHING FOR A SPARE
+FNDSPARE MVI   VSOPCODE,C'S'            WE ARE SEARCHING FOR A SPARE
          CNOP  0,4                      IF THIS IS NOT HERE WE SOC1
          BAL   R4,GETSPARE
          B     HERCCMD                  ISSUE THE DEVINIT COMMAND
@@ -916,6 +931,7 @@ SAVESVCR DS    2F       SAVE AREA WHEN I NEED SVC34
 FULL128  DC    F'128'
 VSOPCODE DC    C'-'     ANYTHING BUT S TO START WITH
 PRIVAT   DC    CL6'PRIVAT'    VOLSER OS USES FOR SCRATCH RQST
+SCRTCH   DC    CL6'SCRTCH'    ANOTHER USED FOR SCRATCH RQST
 RECDATA  DC    CL27' '  PARM FIELD SAVED, EXPECT 27 BYTES
 DEVREC   DS    CL80' '
          SPACE 1
@@ -3325,6 +3341,802 @@ R15      EQU   15
  NAME TAPEMUTL(R)
 /*
 //
+./ ADD NAME=IEECVXIT
+*******************************************************************
+*
+* IEECVXIT - AUTOMATION EXIT
+*
+* BASED ON THE BSPPILOT IEECVXIT
+*
+*  --------------------------------------------------------
+* ON TURNKEY3 SYSTEMS THE CORRECT WAY TO INSTALL THIS EXIT
+* IS TO 
+*   (A) - REPLACE THE MEMBER SYS1.UMODSRC(IEECVXIT)
+*   (B) - RUN THE JOB SYS1.UMODCNTL(ZUM0003) TO SMP INSTALL IT
+* IF YOU MUST DO IT MANUALLY SEE NOTES AT THE END OF COMMENT BLOCK
+*  --------------------------------------------------------
+*
+* MARK DICKINSONS MODIFICATIONS...
+* 2006-2007  MISC CHANGES FOR TAPE MOUNT AUTOMATION VIA 'S xxx'
+* 2008       REMOVED TAPE AUTOMATION, THAT IS NOW DONE BY MMPF
+* 2008       MOVED A LOT OF MESSAGE HANDLING FROM HERE TO MMPF
+* 2008       ADDED NUKECNSL FOR WTO BUFFER SHORTAGES
+* 2009 Feb   ADDED RULE FOR 
+*            IEF863I DSN=VSAM.UTILS.TAPEMAN3.VVDS.VOLSERS
+*            TO 'P MMPF' ON DATASET ENQUEUES FOR IT 
+* 2012 Sep   Generated IEECODES codes for action required
+*            messages (then found a copy in SYS1.UMODMACS)
+* 2014 Dec   ADDED RULE FOR
+*            RAKF0005 INVALID ATTEMPT TO ACCESS RESOURCE
+*    ------> RAKF000A  GUEST1  ,GUEST1J ,TAPEVOL ,MARK01
+*            TO CANCEL ANY JOB ACCESSING A TAPE THEY ARE
+*            NOT AUTHOURISED FOR... ONLY "TAPEVOL" 
+*            RESOURCES TRIGGER THE RULE.
+*            NEEDED AS IF RAKF CORRECTLY REJECTS THE MOUNT
+*            THE OS CORRECTLY ASKS FOR ANOTHER TAPE TO BE
+*            MOUNTED INSTEAD... AND IT EXHAUSTS THE
+*            TAPEMAN3 SCRATCH POOL. NOTE: AS THE CANCEL
+*            ON THE RAKF000A CANCELS THE JOB BEFORE THE
+*            RAKF000A REACHES THE CONSOLE OR JOBLOG THE FULL
+*            MESSAGE IS DOCUMENTED ABOVE... UNFORTUNATELY
+*            THE USER WILL NEVER SEE THE RAKF000A MESSAGE
+*            SO ADMINS NEED TO GUESS IT IS A TAPE RESOURCE
+* left a commented IEF176I example of how to highlight a msg
+*
+*  --------------------------------------------------------
+*  As noted above on TURNKEY3 systems you should SMP 
+*  install this, but it you must do it manually here are
+*  some quick howto notes.
+*  --------------------------------------------------------
+*
+*  YOU MUST INCLUDE MACRO LIBRARY SYS1.UMODMACS IN YOUR JCL
+*  IT  PROVIDES.
+*           MACRO YREGS
+*           MACRO SVC34
+*           MACRO BSPENTER
+*           MACRO BSPRET  
+*           MACRO BSPEND  
+*           MACRO IEECODES
+*  ASSEMBLY OPTIONS
+*     ASM='RENT,NODECK,OBJECT',                              
+*     LKED='XREF,RENT,REUS,LIST,LET,MAP'                                     
+*
+*  MANUAL LKED STATEMENTS
+*      INCLUDE SYSLMOD(IGC0003E) 
+*      ORDER IEAVVWTO(P),IEAVMWTO,IGC0203E,IEECVXIT(P) 
+*      ENTRY IEAVVWTO  
+*      NAME IGC0003E(R)                                                    
+*
+*******************************************************************
+IEECVXIT TITLE 'WTO Exit to allow automatic operations'
+         GBLC  &PGMSP                 , subpool for program storage
+         GBLC  &SRBSP                 , subpool for SRB storage
+         GBLC  &ORESCAN               , number or ORE chain scans
+         GBLC  &MAXORE                , max number of OREs / Scan
+         GBLC  &WAITIME               , wait time in seconds
+         AIF   ('&SYSPARM' EQ '').NOSYSP
+         AGO   .CONT01
+.NOSYSP  ANOP
+.CONT01  ANOP
+&WAITIME SETC  '2'                    , Waittime before reacting
+&ORESCAN SETC  '5'                    , max num of ORE chain scans
+&MAXORE  SETC  '20'                   , max num of ORE per scan
+&PGMSP   SETC  '250'                  , SQA, fixed
+&SRBSP   SETC  '245'                  , SQA, fixed
+         TITLE 'User-defined DSECTS'
+**********************************************************************
+* Table of messages with reply texts
+**********************************************************************
+         SPACE
+REPLNTRY DSECT
+REPLMSG  DS    CL8                    , ID of msg to suppress
+REPLNUM  DS    AL4                    , ID of reply text
+REPLNTRL EQU   *-REPLNTRY             , length of entry
+         SPACE 2
+**********************************************************************
+* Table of messages with changes to routing codes
+**********************************************************************
+ROUTNTRY DSECT
+ROUTMSG  DS    CL8                    , ID of msg to suppress
+ROUTCA   DS    A                      , Address of descriptor code
+ROUTNTRL EQU   *-ROUTNTRY             , length of entry
+**********************************************************************
+* Table of messages with changes to descriptor codes
+**********************************************************************
+         SPACE
+DESCNTRY DSECT
+DESCMSG  DS    CL8                    , ID of msg to suppress
+DESCDA   DS    A                      , Address of descriptor code
+DESCNTRL EQU   *-DESCNTRY             , length of entry
+**********************************************************************
+* Table of messages that should be suppressed
+**********************************************************************
+         SPACE
+SUPPNTRY DSECT
+SUPPMSG  DS    CL8                    , ID of msg to suppress
+SUPPNTRL EQU   *-SUPPNTRY             , length of entry
+**********************************************************************
+* Table of messages that have specific actions associated
+**********************************************************************
+         SPACE
+ACTNNTRY DSECT
+ACTNMSG  DS    CL8                    , message ID to act on
+ACTNRTNA DS    A                      , address of action routine
+ACTNNTRL EQU   *-ACTNNTRY             , length of entry
+         PRINT GEN
+IEECVXIT BSPENTER BASE=(R12),RENT=YES,SP=&PGMSP
+         TITLE 'Assemblers Symbols and Equates'
+PARMREG  EQU   R1                     , parameter pointer
+CUCMCBAR EQU   R2                     , pointer to IEECUCM
+         TITLE 'Initialization and setup'
+         L     CUCMCBAR,0(PARMREG)    , tell assembler
+         USING UCMEXIT,CUCMCBAR       , tell assembler
+         L     R8,X'74'(R5)           , get VPARMAD
+         MVC   $ECB,4(R8)             , save the ECB address
+         LR    R10,R13                , common area
+         DROP  R13                    , not needed any more
+         USING WORKAREA,R10           , tell assembler
+         TITLE 'Search Autopilot (BSPPILOT)'
+***********************************************************************
+* This routine is supposed to work if and only if the autopilot task  *
+* is active.  We scan the ASCB chain, and if the autopilot task is not*
+* found then we just finish                                           *
+***********************************************************************
+         USING PSA,0                  , tell assembler
+         L     R3,CVTPTR              , get address of CVT pointer
+         USING CVT,R3                 , tell assembler
+         L     R1,CVTTCBP             , get address of TCB list
+         L     R1,12(R1)              , get our ASCB
+         USING ASCB,R1                , tell assembler
+         DROP  R1                     , no longer needed
+         L     R3,CVTASVT             , get address of ASVT
+         DROP  R3                     , not needed any more
+         USING ASVT,R3                , tell assembler
+         LA    R14,ASVTENTY-4         , point to first entry - 1 entry
+         L     R15,ASVTMAXU           , number of ASIDs
+SCANASVT DS    0H                     , search for AUTOPILOT
+         BCTR  R15,R0                 , decrement number of ASISs
+         LTR   R15,R15                , Last one?
+         BZ    RETURN                 , yes, get out, no AUTOPILOT
+         LA    R14,4(R14)             , next ASVT entry
+         USING ASVTENTY,R14           , tell assembler
+         ICM   R3,B'1111',ASVTENTY    , Get address of ASCB
+         BM    SCANASVT               , try next if not active
+         USING ASCB,R3                , R3 now points to ASCB
+         ICM   R4,B'1111',ASCBJBNS    , address of STC name
+         BZ    CHKJOB1                , if none, must be jobname
+         CLC   =CL8'INIT',0(R4)       , is it 'INIT'
+         BNE   CHKIT1                 , bif not
+CHKJOB1  DS    0H                     , check for jobname
+         ICM   R4,B'1111',ASCBJBNI    , address of JOB name
+         BZ    SCANASVT               , if not, go araound again
+CHKIT1   DS    0H                     , is task/job our AUTOPILOT?
+         CLC   =CL8'BSPPILOT',0(R4)   , test for jobname
+         BNE   SCANASVT               , if not ours, try next
+         DROP  R3,R14                 , not needed any more
+*        B     PROCATBL               , and continue
+         TITLE 'Do defined action on certain messages'
+***********************************************************************
+* Autopilot is active.  We now test for any action rules defined      *
+***********************************************************************
+PROCATBL DS    0H                     , process the action table
+         LA    R1,ACTNTABL            , point to action table
+         USING ACTNNTRY,R1            , tell assembler
+         LA    R3,(ACTNTABE-ACTNTABL)/ACTNNTRL  , R3 = Num of entries
+SCANATBL DS    0H                     , scan the action table
+         CLC   ACTNMSG,UCMMSTXT       , is message in table?
+         BE    FNDATBL                , yes, leave loop
+         LA    R1,ACTNNTRL(R1)        , next entry address
+         BCT   R3,SCANATBL            , and go around again
+         B     PROCSTBL               , not found, process suppress tbl
+FNDATBL  DS    0H                     , found entry in table
+         L     R15,ACTNRTNA           , get address of routine
+         BR    R15                    , and branch to that routine
+         DROP  R1                     , not needed any more
+         TITLE 'Action Routines'
+CTAPEVOL DS    0H                     , RAKF TAPEVOL DENY RAKF000A
+* NOTE: because we cancel the job the user never sees the RAKF000A
+* SOOOOOOO.... make it highlighted for MMPF to manage instead ???
+* RAKF0005 INVALID ATTEMPT TO ACCESS RESOURCE
+* RAKF000A  GUEST1  ,GUEST1J ,TAPEVOL ,MARK01
+* We must build the command in the dsect work area in order to
+* remain re-entrant which is why we do not use the SVC34 macro here
+         CLC   =C'TAPEVOL',UCMMSTXT+28  ONLY C ON TAPEVOL RESOURCE
+         BNE   RETURN                 ,    Not tapevol, ignore it
+*                                     , else build SVC34 string here
+         LA    R1,14                  , length of cmd in 1st AL2 field
+         STH   R1,CTAPVOLM            
+         LA    R1,0                   , 0 in second AL2 field
+         STH   R1,CTAPVOLM+2
+         MVC   CTAPVOLM+4(2),=C'C '        Move in jobname to cmd
+         MVC   CTAPVOLM+6(8),UCMMSTXT+19   Move in jobname to cmd
+         LA    R1,CTAPVOLM                 address command buffer
+         DS    0H
+         SR    R0,R0
+         SVC   34                          issue cancel command
+         B     RETURN
+STSO     DS    0H                     , S TSO action routine
+         SVC34 'S TSO'                , just issue start command
+         B     RETURN                 , and finish
+SMFFULL  DS    0H
+         CLC   =C'SYS1.MANX',UCMMSTXT+27
+         BE    SMFFULLX
+SMFFULLY DS    0H
+         SVC34 'S SMFDAILY,,,MAN=Y'
+         B     RETURN
+SMFFULLX DS    0H
+         SVC34 'S SMFDAILY,,,MAN=X'
+         B     RETURN
+NUKECNSL DS    0H                     , WTO buffer shortage triggered
+         SVC34 'S NUKECNSL'           , clear console buffers
+         B     RETURN                                  
+         SPACE 2
+TAPEVCHK DS    0H
+         CLC   =C'VSAM.UTILS.TAPEMAN3.VVDS.VOLSERS',UCMMSTXT+12
+         BNE   RETURN                 , not that dataset so ignore
+         SVC34 'P MMPF'               , stop MMPF
+         B     RETURN                                  
+         SPACE 2
+         TITLE 'Process table of messages to be suppressed'
+PROCSTBL DS    0H                     , process msgs to be suppressed
+         LA    R1,SUPPTABL            , point to action table
+         USING SUPPNTRY,R1            , tell assembler
+         LA    R3,(SUPPTABE-SUPPTABL)/SUPPNTRL  , R3 = Num of entries
+SCANSTBL DS    0H                     , scan the action table
+         CLC   SUPPMSG,UCMMSTXT       , is message in table?
+         BE    FNDSTBL                , yes, leave loop
+         LA    R1,SUPPNTRL(R1)        , next entry address
+         BCT   R3,SCANSTBL            , and go around again
+         B     PROCDTBL               , go process descriptor codes
+FNDSTBL  DS    0H                     , we found a message to suppress
+         MVC   UCMROUTC(2),SUPROUTC   , ROUTCD=14
+         MVC   UCMDESCD(2),SUPDESCD   , DESC=4
+         B     RETURN                 , and exit
+         DROP  R1                     , not needed any more
+         SPACE 2
+         TITLE 'Process table of Descriptor code changes'
+PROCDTBL DS    0H                     , process msgs list
+         LA    R1,DESCTABL            , point to action table
+         USING DESCNTRY,R1            , tell assembler
+         LA    R3,(DESCTABE-DESCTABL)/DESCNTRL  , R3 = Num of entries
+SCANDTBL DS    0H                     , scan the action table
+         CLC   DESCMSG,UCMMSTXT       , is message in table?
+         BE    FNDDTBL                , yes, leave loop
+         LA    R1,DESCNTRL(R1)        , next entry address
+         BCT   R3,SCANDTBL            , and go around again
+         B     PROCRTBL               , go process routing codes
+FNDDTBL  DS    0H                     , we found a message to suppress
+         L     R1,DESCDA              , get address of DESCD
+         DROP  R1                     , not needed any more
+         MVC   UCMDESCD(2),0(R1)      , insert descriptor code
+*        B     PROCRTBL               , go process routing codes
+         SPACE 2
+         TITLE 'Process table of Routing code changes'
+PROCRTBL DS    0H                     , process msgs list
+         LA    R1,ROUTTABL            , point to routcode table
+         USING ROUTNTRY,R1            , tell assembler
+         LA    R3,(ROUTTABE-ROUTTABL)/ROUTNTRL  , R3 = Num of entries
+SCANRTBL DS    0H                     , scan the action table
+         CLC   ROUTMSG,UCMMSTXT       , is message in table?
+         BE    FNDRTBL                , yes, leave loop
+         LA    R1,ROUTNTRL(R1)        , next entry address
+         BCT   R3,SCANRTBL            , and go around again
+         B     PROCPTBL               , go process rePly tables
+FNDRTBL  DS    0H                     , we found a message to suppress
+         L     R1,ROUTCA              , get address of Routcode bytes
+         DROP  R1                     , not needed any more
+         MVC   UCMROUTC(2),0(R1)      , insert descriptor code
+*        B     PROCPTBL               , go process rePly table
+         SPACE 2
+         TITLE 'Process msgs that need replies'
+PROCPTBL DS    0H                     , process automatic replies
+         LA    R1,REPLTABL            , point to routcode table
+         USING REPLNTRY,R1            , tell assembler
+         LA    R3,(REPLTABE-REPLTABL)/REPLNTRL  , R3 = Num of entries
+SCANPTBL DS    0H                     , scan the action table
+         CLC   REPLMSG,UCMMSTXT       , is message in table?
+         BE    FNDPTBL                , yes, leave loop
+         LA    R1,REPLNTRL(R1)        , next entry address
+         BCT   R3,SCANPTBL            , and go around again
+         B     RETURN                 , nothing else, return
+FNDPTBL  DS    0H                     , we found an entry
+         L     R1,REPLNUM             , get reply identifier
+         CLC   =C'IEF238D',UCMMSTXT   , special treatment for this
+         BNE   DOSRB                  , bif not
+         LA    R3,UCMMSTXT+19         , search for WAIT
+         LA    R4,1                   , search increment
+         LA    R5,UCMMSTXT+39         , upper limit of scan
+SCAN238  DS    0H
+         CLI   0(R3),C'W'             , search for "WAIT" in msg
+         BE    DOSRB                  , we found it, give a reply
+         BXLE  R3,R4,SCAN238          , go around again
+         B     RETURN                 , no "WAIT", then exit
+         DS    0F                     , alignment needed
+***********************************************************************
+* return to caller after freemaining the acquired storage             *
+***********************************************************************
+RETURN   EQU   *
+         BSPRET RC=0
+         TITLE 'Schedule R2D2'
+***********************************************************************
+*  We will schedule a subroutine to process the WTOR requests.  The   *
+*  SRB will run in the address space of the BSPPILOT address space    *
+*  If this address space is not active, no WTOR processing will take  *
+*  place                                                              *
+***********************************************************************
+         SPACE
+DOSRB    DS    0H                     , setup for scheduling SRB
+         STH   R1,$REASON             , save reply text ID code
+         L     R1,CVTPTR              , point to CVT
+         L     R1,0(R1)               , get ASCB list address
+         L     R1,12(R1)              , get our ASCB address
+         MVC   $ASID,36(R1)           , save ASID
+         GETMAIN R,LV=WORKAL,SP=&SRBSP  fixed storage for SRB etc
+         LR    R3,R1                  , R3 ---> acquired storage
+         MVC   0(WORKAL-L'WTOAREA,R3),WORKAREA  Copy out data to SQA
+         PUSH  USING                  , save assembler info
+         DROP  R10                    , not used for the moment
+         USING WORKAREA,R3            , use R3 for addressing instead
+         XC    SRB(SRBSIZE),SRB       , set SRB low low-values
+         MVC   SRBID,=CL4'SRB '       , put in eyecatcher
+         SPACE 2
+***********************************************************************
+* Check again if BSPPILOT is running.  If not, we cannot reply to the *
+* WTOR.  We do this by scanning the ASCB chain (again) for BSPPILOT   *
+***********************************************************************
+         SPACE 1
+         L     R2,CVTPTR              , R2 ---> CVT
+         USING CVT,R2                 , tell aseembler
+         L     R2,CVTASVT             , get ASVT
+         USING ASVT,R2                , and tell Assembler
+         LA    R14,ASVTENTY-4         , backup one entry
+         L     R15,ASVTMAXU           , get number of ASCBs
+NEXTASCB DS    0H                     , entry to loop
+         BCTR  R15,R0                 , Minus 1
+         LTR   R15,R15                , Last ASCB tested
+         BZ    RETURN                 , then exit
+         LA    R14,4(R14)             , bump to next ASVTENTY
+         USING ASVTENTY,R14           , tell assembler
+         ICM   R2,15,ASVTENTY         , get ASCB address
+         BM    NEXTASCB               , if not active, go around again
+         USING ASCB,R2                , R2 points to an ASCB
+         ICM   R7,15,ASCBJBNS         , is this started task?
+         BZ    CHKJOB                 , no.  Check for Jobname
+         CLC   =CL8'INIT',0(R7)       , is this an initiator?
+         BNE   CHKIT                  , bif not to test STC name
+CHKJOB   ICM   R7,15,ASCBJBNI         , get address of jobname
+         BZ    NEXTASCB               , if no Jobname, go araound
+CHKIT    CLC   0(8,R7),=CL8'BSPPILOT' , Autopilot task?
+         BNE   NEXTASCB               , if not, try next ASCB
+         ST    R2,SRBASCB             , Place ASCB address into SRB
+         L     R1,ASCBASXB            , get ASXB address
+         L     R1,ASXBFTCB-ASXB(R1)   , get TCB address of BSPPILOT
+         ST    R1,SRBPTCB             , and place it into SRB
+         MVC   SRBPASID,ASCBASID      , put BSPPILOT ASID into SRB
+         DROP  R2                     , we are done with R2
+         LA    R1,IEECR2D2            , point to SRB routine address
+         ST    R1,SRBEP               , and place address into SRB
+         LA    R1,SRBCLEAN            , get address of cleanup routine
+         ST    R1,SRBRMTR             , put address into SRB
+         ST    R3,SRBPARM             , Work area address into SRB too
+         SCHEDULE SRB=SRB,SCOPE=LOCAL , schedule the SRB
+         POP   USING                  , restore assembler info
+         B     RETURN                 , everything is done, exit
+         SPACE 2
+**********************************************************************
+* The SRB Cleanup routine is rather simple.  Just take a look        *
+**********************************************************************
+         SPACE 1
+SRBCLEAN BR    R14                    , just exit
+         TITLE 'Constants - Literal Pool'
+         LTORG
+         TITLE 'Action Table'
+***********************************************************************
+* List of specific messages and the address of routines to invoke     *
+* if this message is issued                                           *
+***********************************************************************
+ACTNTABL DS    0D
+         DC    CL8'IST020I ',A(STSO)         start TSO
+         DC    CL8'IEE362A ',A(SMFFULL)      start SMFDAILY
+         DC    CL8'IEA405E ',A(NUKECNSL)     clear all console buffers
+         DC    CL8'IEF863I ',A(TAPEVCHK)     check if tapevols
+         DC    CL8'RAKF000A',A(CTAPEVOL)     cancel if deny is TAPEVOL
+ACTNTABE EQU   *
+         TITLE 'Suppress Table'
+***********************************************************************
+* List of messages that get suppressed (I.E, routing code 00000000)   *
+***********************************************************************
+SUPPTABL DS    0D
+         DC    CL8'$HASP000'          , HASP Ok message
+SUPPTABE EQU   *
+         TITLE 'Messages where descriptor code should be changed'
+***********************************************************************
+* List of messages that have their descriptor codes changes.          *
+* The descriptor codes are generated via the IEECODES macro           *
+* and can be found at label XXXDESCD, where XXX is the value on the   *
+* ID keyword of the IEECODES macro                                    *
+***********************************************************************
+DESCTABL DS    0D
+         DC    CL8'IEA911E ',A(ROLDESCD)  , dump on XXXX for asid NNNN
+         DC    CL8'IEA994E ',A(ROLDESCD)  , dump on XXXX for asid NNNN
+         DC    CL8'IEA994A ',A(ROLDESCD)  , all dump datsets are full
+         DC    CL8'IGF995I ',A(ROLDESCD)  , I/O Restart scheduled
+         DC    CL8'IGF991E ',A(ROLDESCD)  , IGF msg for mount, swap
+* BELOW WOULD CREATE AN ACTION MESSAGE
+*         DC    CL8'IEF176I ',A(ACTDESCD)  , WTR waiting for work (MID)
+DESCTABE EQU   *
+         TITLE 'Messages where routecode code should be changed'
+***********************************************************************
+* List of messages that have their routing codes changed.             *
+* The routing codes are generated via the IEECODES macro and can be   *
+* found at label XXXROUTC, where XXX is the value on the ID keyword   *
+* of the IEECODES macro                                               *
+***********************************************************************
+ROUTTABL DS    0D
+         DC    CL8'IEA911E ',A(ROLROUTC)  , dump on XXXX for asid NNNN
+         DC    CL8'IEA994E ',A(ROLROUTC)  , dump on XXXX for asid NNNN
+         DC    CL8'IEA994A ',A(ROLROUTC)  , all dump datsets are full
+         DC    CL8'IGF995I ',A(ROLROUTC)  , I/O Restart scheduled
+         DC    CL8'IGF991E ',A(ROLROUTC)  , IGF msg for mount, swap
+*         DC    CL8'IEF176I ',A(ACTROUTC)  , WTR waiting for work (MID)
+ROUTTABE EQU   *
+         TITLE 'Message Reply Table'
+***********************************************************************
+* List of messages and their canned reply codes                       *
+***********************************************************************
+REPLWAIT EQU   0                      , R XX,WAIT
+REPLNHLD EQU   4                      , R XX,NOHOLD
+REPLU    EQU   8                      , R XX,U
+REPLGO   EQU   12                     , R XX,GO
+REPLPOST EQU   16                     , R XX,POST
+REPLSIC  EQU   20                     , R XX,SIC
+REPLCANC EQU   24                     , R XX,CANCEL
+REPLRETR EQU   28                     , R XX,RETRY 
+REPLTABL DS    0D
+         DC    CL8'IEF238D ',A(REPLWAIT)
+         DC    CL8'IEF433D ',A(REPLNHLD)
+         DC    CL8'IEF434D ',A(REPLNHLD)
+         DC    CL8'IKT010D ',A(REPLSIC)     TSO SHUTDOWN
+         DC    CL8'IKT012D ',A(REPLU)       TSO SHUTDOWN
+         DC    CL8'IEC804A ',A(REPLPOST)
+         DC    CL8'IFA006A ',A(REPLCANC)
+         DC    CL8'IKT003D ',A(REPLRETR)    TSO ACB NOT READY
+REPLTABE EQU   *
+         TITLE 'Routing- and Descriptor codes definitions'
+         IEECODES ID=ROL,ROUTCDE=2,DESC=4
+         IEECODES ID=SUP,ROUTCDE=14,DESC=4
+* MID: 2012/10/09 ADDED TO GET EVENTUAL ACTION CODES
+         IEECODES ID=ACT,ROUTCDE=1,DESC=2
+         DROP
+         TITLE 'IEECR2D2 - SRB Routine for processing WTORs'
+***********************************************************************
+* Actually, the SRB routine does not process the WTOR requests at     *
+* all.  What it does is to schedule an Interrupt Request Routine      *
+* which in turn will do what we need to do, namely isue the WTOR      *
+* reply via SVC34                                                     *
+***********************************************************************
+IEECR2D2 DS    0H                     , entry point for our Robot
+         BALR  R10,R0                 , set up base address
+         USING *,R10                  , and tell assembler
+         LR    R7,R14                 , save retrun address
+         LR    R2,R1                  , get workarea address
+         USING WORKAREA,R2            , and tell assembler
+***********************************************************************
+* We want to issue SVC 34, which means that we need an IRB.  To get   *
+* the IRB via the CIRB macro, we need the local lock                  *
+***********************************************************************
+GETLOCK SETLOCK OBTAIN,               , ask for a lock                 +
+               TYPE=LOCAL,            , we want the local lock         +
+               REGS=USE,                                               +
+               MODE=UNCOND,           , wait until we get the lock     +
+               RELATED=FREELOCK       , here we will free the lock
+***********************************************************************
+* Create an IRB and an IQE.  For branch entry calls to CIRB we need   *
+* R4 to point to the TCB                                              *
+***********************************************************************
+         L     R4,SRBPTCB             , get address of TCB from SRB
+         CIRB  EP=IRBROUT,            , address of IRB routine         +
+               KEY=SUPR,              , run in key 0                   +
+               MODE=PP,               , run in problem mode            +
+               BRANCH=YES,            , use branch entry, R4->TCB      +
+               SVAREA=YES,            , get a save area                +
+               STAB=(DYN),            , IRB is freed at termination    +
+               RETIQE=NO,             , do not return IQE to queue     +
+               WKAREA=30              , 30 doubleword workarea
+         LR    R3,R1                  , R3 ---> IRB3
+         USING RBBASIC,R3             , tell assembler
+         L     R1,RBNEXAV             , R1 ---> IQE
+         USING IQESECT,R1             , tell assembler
+         ST    R3,IQEIRB              , put IRB address into IQE
+         ST    R2,IQEPARM             , put worlarea address into IQE
+         ST    R4,IQETCB              , put TCB address in IQE
+         LCR   R1,R1                  , complement IQE address
+         L     R12,CVTPTR             , get address of CVT
+         USING CVT,R12                , tell assembler
+         L     R14,CVT0EF00           , branch entry for SCHEDXIT
+         BALR  R14,R14                , schedule the IQE
+         DROP  R12                    , CVT bas enolonger needed
+FREELOCK SETLOCK RELEASE,             , release                        +
+               TYPE=LOCAL,            , the local lock                 +
+               REGS=USE,                                               +
+               RELATED=GETLOCK        , that we obtained above
+         LR    R14,R7                 , restore return address
+         BR    R14                    , back to dispatcher
+         DROP                         , all USINGs
+         TITLE 'IRBROUT - IRB Routine that REALLY processes the WTOR'
+IRBROUT  SAVE  (14,12)                , save callers register
+         LR    R12,R15                , R12 is out new base register
+         USING IRBROUT,R12            , tell assembler
+         LR    R10,R1                 , R10 points to WORKAREA
+         USING WORKAREA,R10           , tell assembler
+         ST    R13,WORKAREA+4         , higher SA into our SA
+         ST    R10,8(R13)             , or SA into higher SA
+         LR    R13,R10                , R13 ---> our save area
+         STIMER WAIT,BINTVL=WAITTIME  , WAIT !, immediate scan is fast
+*                                       and gets the reply number so
+*                                       quick when the reply is issued
+*                                       the prompt hasn't reached the
+*                                       console yet (loop occurs on
+*                                       new reply numbers as we get
+*                                       reply not outstanding on the
+*                                       ones we found before the OS
+*                                       did so move onto the next)
+         B     SCANIT                 , then scan ORE chain
+SHRTWAIT DS    0H                     , Wait only for
+         STIMER WAIT,BINTVL=WAITTIME  , two seconds
+SCANIT   DS    0H                     , before scanning ORE chain
+         TITLE 'Scan the ORE chain'
+*--------------------------------------------------------------------*
+* Some WTOR is active that needs a reply.  We scan the ORE chain for *
+* the request, determine the reply number, and issue the reply       *
+* via SVC 34.  We might have to scan the chain more than once, though*
+*--------------------------------------------------------------------*
+         LA    R7,&ORESCAN            , load maximum number of scans
+FNDORE   DS    0H                     , locate operator request element
+         LA    R2,&MAXORE             , load max length of search
+         L     R1,CVTPTR              , R1 ---> CVT
+         USING CVT,R1                 , tell assembler
+         L     R1,CVTCUCB             , R1 ---> Table with console UCBs
+         DROP  R1                     , CVT not needed any longer
+         USING UCM,R1                 , tell assembler
+         L     R1,UCMRPYQ             , UCMRPYQ = address of first ORE
+         LTR   R1,R1                  , is there any?
+         BZ    ENDLOOK                , not yet. try again later
+         DROP  R1                     , no longer needed
+GETORE   DS    0H
+         LA    R1,0(R1)               , clear high order byte
+         USING OREF,R1                , tell assembler
+         CLC   $ASID,OREASID          , is this our ASID?      ID ?
+         BNE   NEXTORE                , no, get next ORE
+         ICM   R6,B'0111',OREECBA     , get user's ECB address
+         LA    R6,0(R6)               , clear higher byte
+         C     R6,$ECB                , is this the one we want?
+         BE    FOUND                  , yes, go process it
+NEXTORE  DS    0H                     , otherwise
+         L     R1,ORELKP              , address of next ORE
+         DROP  R1                     , no longer needed
+         LTR   R1,R1                  , last ORE?
+         BZ    ENDLOOK                , test if we want another round
+         BCT   R2,GETORE              , else try next ORE
+ENDLOOK  DS    0H                     , ORE wasn't found, therefore
+         STIMER WAIT,BINTVL=WAITTIME  , wait for 2 seconds
+         BCT   R7,FNDORE              , and try again
+         B     $EXIT                  , so many tries - but no success
+         SPACE                        , just leave
+FOUND    DS    0H                     , We found the RQE we needed
+         LR    R7,R1                  , R7 ---> RQE
+         SR    R11,R11                , clear branch register
+         LH    R11,$REASON            , get message ID code
+         CH    R11,=Y((REPLYE-REPLY)) , within bounds?
+         BNL   $EXIT                  , get out if code too high
+         B     REPLY(R11)             , and branch to routine needed
+REPLY    B     RWAIT                  , 00: R XX,WAIT
+         B     RNOHOLD                , 04: R XX,NOHOLD
+         B     RU                     , 08: R XX,U
+         B     RGO                    , 0C: R XX,GO
+         B     RPOST                  , 10: R XX,POST
+         B     RSIC                   , 14: R XX,SIC
+         B     RCANCEL                , 18: R XX,CANCEL
+         B     RRETRY                 , 1c: R XX,RETRY 
+REPLYE   EQU   *                      , end of branch table
+RNOHOLD  EQU   *
+         MVC   WTOAREA(REPLY1L),REPLY1
+         B     ISSUE
+RU       EQU   *
+         MVC   WTOAREA(REPLY2L),REPLY2
+         B     ISSUE
+RGO      EQU   *
+         MVC   WTOAREA(REPLY3L),REPLY3
+         B     ISSUE
+RPOST    EQU   *
+         MVC   WTOAREA(REPLY4L),REPLY4
+         B     ISSUE
+RWAIT    EQU   *
+         MVC   WTOAREA(REPLY5L),REPLY5
+         B     ISSUE
+RSIC     EQU   *
+         MVC   WTOAREA(REPLY6L),REPLY6
+         B     ISSUE
+         SPACE
+RCANCEL  EQU   *
+         MVC   WTOAREA(REPLY7L),REPLY7
+         B     ISSUE
+RRETRY   EQU   *
+         MVC   WTOAREA(REPLY8L),REPLY8
+         B     ISSUE
+         SPACE
+ISSUE    EQU   *
+         MVC   WTOAREA+6(2),4(R7)     , insert reply number from ORE
+         LA    R1,WTOAREA             , point to command buffer
+         SR    R0,R0                  , clear R0 for SVC 34
+         SVC   34                     , send command
+*        B     $EXIT                  , and exit
+$EXIT    DS    0H                     , we are done
+         LR    R1,R13                 , unchain workarea
+         L     R13,WORKAREA+4         , address of higher SA
+         FREEMAIN R,A=(1),LV=WORKAL,SP=245   free SQA storage
+         LM    R14,R12,12(R13)        , restore resgisters
+         LA    R15,0(0,0)             , RC = 0
+         BR    R14                    , and exit
+         TITLE 'Constants'
+*------------------------------------------------------------------*
+REPLY1   WTO   'R XX,''NOHOLD'' <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY1L  EQU   *-REPLY1
+*------------------------------------------------------------------*
+REPLY2   WTO   'R XX,''U''      <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY2L  EQU   *-REPLY2
+*------------------------------------------------------------------*
+REPLY3   WTO   'R XX,''GO''     <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY3L  EQU   *-REPLY3
+*------------------------------------------------------------------*
+REPLY4   WTO   'R XX,''POST''   <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY4L  EQU   *-REPLY4
+*------------------------------------------------------------------*
+REPLY5   WTO   'R XX,''WAIT''   <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY5L  EQU   *-REPLY5
+*------------------------------------------------------------------*
+REPLY6   WTO   'R XX,''SIC''    <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY6L  EQU   *-REPLY6
+*------------------------------------------------------------------*
+REPLY7   WTO   'R XX,''CANCEL'' <<<<<< BY IEECVXIT',DESC=(5),          +
+               ROUTCDE=(1,2,11),MF=L
+REPLY7L  EQU   *-REPLY7
+*------------------------------------------------------------------*
+REPLY8   WTO   'R XX,''RETRY'' <<<<<< BY IEECVXIT',DESC=(5),           +
+               ROUTCDE=(1,2,11),MF=L
+REPLY8L  EQU   *-REPLY8
+*------------------------------------------------------------------*
+WAITTIME DC    A(&WAITIME*100)        , Wait some time
+         LTORG
+         TITLE 'DSECTS USED BY IEECVXIT'
+WORKAREA DSECT
+$ECB     DS   A                       , requestor's ECB address
+$ASID    DS   H                       , requestor's ASID
+$REASON  DS   H                       , reply code
+*                  0 = WAIT
+*                  4 = NOHOLD
+*                  8 = U
+*                 12 = GO
+*                 16 = POST
+*                 20 = SIC
+*                 24 = CANCEL
+*
+* CTAPVOLM is for dynamically built cancel command
+         DS    0H
+CTAPVOLM DS    AL2,AL2
+         DS    CL10'C xxxxxxxx'
+*
+SCRATCH  DS    0F'0',CL130
+         ORG   SCRATCH
+SRB      DS    0A
+SRBSECT  EQU   *
+SRBID    DS    CL4                      EBCDIC ACRONYM   FOR SRB
+SRBFLNK  DS    A                        FORWARD CHAIN FIELD
+SRBASCB  DS    A                        PTR TO ASCB OF ADDRESS SPACE
+*                                       SRB IS TO BE DISPATCHED TO
+SRBFLC   DS    0CL8                     SRB AREA MOVED TO LOW CORE
+SRBCPAFF DS    BL2                      CPU AFFINITY MASK
+SRBPASID DS    H                        PURGEDQ ASID IDENTIFIER
+SRBPTCB  DS    A                        PURGEDQ TCB IDENTIFIER
+SRBEP    DS    A                        ENTRY POINT OF ROUTINE
+SRBRMTR  DS    A                        ADDRESS OF RESOURCE MGR RTN
+SRBPARM  DS    A                        USER PARAMETER
+SRBSAVE  DS    A                        SAVE AREA POINTER
+SRBPKF   DS    B                        PROTECT KEY INDICATION
+SRBPRIOR DS    0B                       PRIORITY LEVEL INDIC
+SRBFLGS  DS    B                        SRB OPTION FLAGS
+SRBLLREQ EQU   X'80'                    LOCAL LOCK REQUIRED
+SRBLLHLD EQU   X'40'                    LOCAL LOCK HELD
+SRBFRREQ EQU   X'20'                    FRR REQUESTED
+SRBFRRCL EQU   X'10'                    CLEAR FRR PARM AREA
+SRBSUSP  EQU   X'08'                    SUSPENDED SRB ONLY ON FOR
+*                                       SSRB
+SRBPNONQ EQU   X'04'                    NON QUIESCABLE SRB
+SRBRESV3 EQU   X'02'                    RESERVED FLAG
+SRBRESV4 EQU   X'01'                    RESERVED FLAG
+SRBPSYS  EQU   X'00'                    SYSTEM PRIORITY LEVEL
+SRBHLHI  DS    BL1                      INDICATION OF SUSPEND LOCKS
+*                                       HELD AT SRB SUSPENSION
+         DS    BL1                      RESERVED
+SRBFRRA  DS    A                        FRR ROUTINE ADDRESS
+SRBEND   EQU   *                        END OF SRB
+SRBSIZE  EQU   SRBEND-SRB               SIZE OF SRB
+WTOAREA  EQU   SRB                      WORK AREA FOR WTO -MUST BE LAST
+         ORG
+WORKEND  EQU  *
+WORKAL   EQU  WORKEND-WORKAREA
+         PRINT OFF,NOGEN
+         SPACE 4
+         IEECUCM DSECT=YES,FORMAT=NEW
+CVT      DSECT
+         CVT   LIST=YES
+         PRINT OFF
+ASCB     DSECT
+         IHAASCB
+ASXB     DSECT
+         IHAASXB
+ASVT     DSECT
+         IHAASVT
+IHAPSA   DSECT
+         IHAPSA
+IHARB    DSECT
+         IHARB  SYS=AOS2
+         IHAORE                       , operator request element
+         IHAIQE                       , interrupt queue element
+         SPACE 1
+         PRINT ON,GEN
+         BSPEND                       , of module
+./ ADD NAME=IEECODES
+         MACRO
+         IEECODES &ROUTCDE=13,&DESC=,&ID=IEE
+.* ************************************************
+.* A COPY I GENERATED
+.* YOU SHOULD PROBABLY USE THE ONE IN SYS1.UMODMACS
+.* ************************************************
+         LCLC  &CD(4)
+         LCLA  &I,&N
+         LCLB  &B(32)
+.*
+.* DESCRIPTOR CODES
+.*
+&I       SETA  1
+.DCHK    AIF   (T'&DESC EQ 'O').RCHK
+&N       SETA  &DESC(&I)
+&I       SETA  &I+1
+         AIF   (&N GE 1 AND &N LE 16).ASSIGND
+         MNOTE 8,'&DESC(&I) IS INVALID DESCRIPTOR - IGNORED'
+         AGO   .NXTD
+.ASSIGND ANOP
+&B(&N)   SETB  1
+.NXTD    AIF  (&I LE N'&DESC).DCHK
+&I       SETA  1
+.*
+.* ROUTE CODES
+.*
+.RCHK    AIF   (T'&ROUTCDE EQ 'O').ASSIGNC
+&N       SETA  &ROUTCDE(&I)
+&I       SETA  &I+1
+         AIF   (&N GE 1 AND &N LE 16).ASSIGNR
+         MNOTE 8,'ROUTCDE(&I) IS INVALID ROUTE - IGNORED'
+         AGO   .NXTR
+.ASSIGNR ANOP
+&B(&N+16) SETB  1
+.NXTR    AIF   (&I LE N'&ROUTCDE).RCHK
+.ASSIGNC ANOP
+&I       SETA  1
+&CD(&I)   SETC  '&B(1)&B(2)&B(3)&B(4)&B(5)&B(6)&B(7)&B(8)'
+&CD(&I+1) SETC  '&B(9)&B(10)&B(11)&B(12)&B(13)&B(14)&B(15)&B(16)'
+&CD(&I+2) SETC  '&B(17)&B(18)&B(19)&B(20)&B(21)&B(22)&B(23)&B(24)'
+&CD(&I+3) SETC  '&B(25)&B(26)&B(27)&B(28)&B(29)&B(30)&B(31)&B(32)'
+&ID.DESCD DC   BL2'&CD(1)&CD(2)'
+&ID.ROUTC DC   BL2'&CD(3)&CD(4)'
+         MEND
 ./ ENDUP
 QQ
 //DOCLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
@@ -3564,6 +4376,12 @@ TAPEMAN.SRC
      TAPEMEXP  - manually alter a tape expiry, for testing expiry
      TAPEMUTL  - vsam database update utility
      TAPEMSCR  - daily scratch program
+     IEECVXIT  - an example of my IEECVXIT with a rule to 'P MMPF'
+                 on dsn enqueues (if you use my MMPF utility) plus
+                 a rule to cancel any job that RAKF denies a tape
+                 resource to (to prevent the OS requesting endless
+                 'retry' tape mounts until the tapeman scratch pool
+                 is exhausted, the job needs to be cancelled)
 
 TAPEMAN.LINKLIB
   These are pre-assembled modules. See the documentation for those
@@ -4595,6 +5413,37 @@ SCRATCH MARK30
 /*
 //
 ./ ENDUP
+QQ
+//EXITLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD SYSOUT=*
+//SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.IEECVXIT
+//SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.IEECVXIT
+//SYSIN DD DATA,DLM=QQ
+         MACRO                                                          00010000
+./ ADD NAME=YREGS
+         MACRO
+         YREGS &DUMMY                                                   00020000
+         GBLA  &REGS                                                    00030000
+&REGS    SETA  1                                                        00040000
+         SPACE 1                                                        00050000
+R0       EQU   0                                                        00060000
+R1       EQU   1                                                        00070000
+R2       EQU   2                                                        00080000
+R3       EQU   3                                                        00090000
+R4       EQU   4                                                        00100000
+R5       EQU   5                                                        00110000
+R6       EQU   6                                                        00120000
+R7       EQU   7                                                        00130000
+R8       EQU   8                                                        00140000
+R9       EQU   9                                                        00150000
+R10      EQU   10                                                       00160000
+R11      EQU   11                                                       00170000
+R12      EQU   12                                                       00180000
+R13      EQU   13                                                       00190000
+R14      EQU   14                                                       00200000
+R15      EQU   15                                                       00210000
+         SPACE 1                                                        00220000
+         MEND                                                           00230000
 QQ
 //SUBJOBS  EXEC PGM=IEBGENER,COND=(0,NE)
 //SYSPRINT DD   SYSOUT=*
