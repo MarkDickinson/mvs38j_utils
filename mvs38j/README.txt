@@ -1,7 +1,7 @@
 These are utilities I have needed to create to let my Turnkey3 MVS3.8J
 system look after itself.
 
-These are stable. Any updates (and probably still abending) versions
+These are stable. Any updated (and probably still abending) versions
 containing updates, bug-fixes and major enhancements are probably
 available on a use at your own risk basis on my website at
 http://mdickinson.dyndns.org/hercules/downloads/index.php
@@ -41,7 +41,8 @@ DATEPROG.txt    - UTILITY LIBRARY/PROGRAMS/MACROS used by many of my
                   version, newer and bugfix versions will be on
                   my website before they reach here.
 
-EVENTHUB        - BETA - S/370 macro
+EVENTHUB        - BETA - S/370 macro for mutitasking programs
+                  (eventhub_macro.txt  eventhub_test_program.txt)
                   MACRO to easily provide MVS3.8J assembler programs
                   with COMM area processing, multiple WTORs, and
                   multiple timers
@@ -57,11 +58,13 @@ GETMAXCC.txt    - I needed code to scan the return codes of all prior
                   would need to put it into a program that made
                   decisions on that information :-)
 
-IPLINFO.txt     - I wanted more info logged that the default reason
+IPLINFO.txt     - I wanted more info logged than the default reason
                   for ipl the OS provides (which we have all disabled
                   anyway). This records the ipltime, ipl volser and cuu
                   used, if it was a clpa/cvio/warm ipl, and of course
                   the reason text entered; logged to a disk file.
+                  If no response to prompt in 10mins the prompt is
+                  cancelled.
                   My use for this is to keep track of what I was doing
                   when I broke the system :-( but I was also
                   interested in how to extract the ipl information
@@ -77,6 +80,20 @@ JOBCONT2.txt    - add a continuation card containing the data passed
                   and not need to know that info.
                   But you can use it to append anything to the job
                   cards
+
+MDJOBREL.txt    - A work in progress, but what is here works.
+                  Uses a control file to release held jobs when a
+                  running job completes, I submit my daily/weekly
+                  batch in bulk as mainly held jobs, where the 
+                  running jobs release dependent held jobs as they
+                  complete (if the running job was < maxcc allowed).
+                  This provides a simple batch job dependency method
+                  to avoid dataset contention.
+                  See the $DOC member for how to use it.
+                  A work in progress as I intend to connect all the
+                  various bits I have in this section into a full
+                  scheduler with automated restart/recovery etc at
+                  some point.
 
 MMPF.txt        - Marks Message Processing Facility
 MMPF_user_manual.odt - User manual for MMPF.

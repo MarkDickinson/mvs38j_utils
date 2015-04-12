@@ -3665,7 +3665,7 @@ LT       EQU   4    * A LOW
 //
 ./ ADD NAME=SCHEDTST
 //MARKTEST JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T,
-// TIME=1440,USER=MARK,PASSWORD=MVS38J
+// TIME=1440                            
 //*
 //* ===================================================================
 //*
