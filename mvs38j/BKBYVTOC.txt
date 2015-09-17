@@ -4,10 +4,6 @@
 //*
 //* THIS JOC INSTALLS THE BKBYVTOC PROGRAM, A SAMPLE JOB TEMPLATE,
 //* A SAMPLE BACKUP JOB AND THE DOCUMENTATION MEMBER.
-//* PLUS THE MDEXWRAP PROGRAM ADDED TO RECORD MORE ACCURATE TAPE
-//* CONTENTS.
-//*
-//* SEE "BUGS" IN MDEXWRAP MEMBER ALSO
 //*
 //* --- GLOBALLY CHANGE THE BELOW TO YOUR NAMING STANDARDS ---
 //* Easier to change it now than having to edit every member
@@ -25,18 +21,14 @@
 //* (3) USED BY THE TEST JOB --only required if you want to test :-)
 //*    MARK.TEST.BKBTVTOC        (test job report listing file)
 //*    UNIT=3380,VOL=SER=PUB002  (alloced disk for above)
-//* (4) USED BY MDEXDSET and sample template TEMPLAT2
-//*    MARK.BKPLIST.TAPELOG.HISTFILE
-//*    UNIT=3380,VOL=SER=PUB002  (alloced disk for above)
-//* (5) CHOSE AN APF AUTHORISED LIBRARY
+//* (4) CHOSE AN APF AUTHORISED LIBRARY
 //*    CHANGE SYS9.LINKLIB.APFAUTH to one of your site local
 //*    APF authorised libraries. Used in the MDEXWRAP assembly
 //*    job
-//* (6) UTILITY LIBRARY
+//* (5) UTILITY LIBRARY
 //*    CHANGE INSTALL.UTILS.DATETIME TO WHEREVER YOU INSTALLED
 //*    MY DATE UTILITY LIBRARY. If you did not install that
-//*    you cannot assemble MDEXWRAP and will need to make
-//*    the changes documented below in BKBYVTOC.
+//*    make the changes documented below in BKBYVTOC.
 //*
 //* --- I M P O R T A N T   N O T E ---
 //*    If you have NOT already installed my date utility
@@ -51,19 +43,13 @@
 //*        that that copy date fileds onto the report line.
 //*      The only impact of doing so is that you will not 
 //*      have dates included in your backup report listings
-//*    MDEXWRAP member           
-//*      You will not be able to use this. Without 
-//*      datestamps in the history file it is not really
-//*      usable.
 //*
 //*    OR you could download and install my date utility
 //*    library from here also.
 //*
 //* ---- After you have run this job to create the install DS ----
 //* 1. Run the memeber BKBYVTOC to assemble the program
-//* 2. Optionally assemble the MDEXWRAP and change TESTJOB to use
-//*    TEMPLAT2 instead of TEMPLAT1
-//* 3. Optionally run the TESTJOB member to test it
+//* 2. Optionally run the TESTJOB member to test it
 //*
 //* =================== END JOB COMMENTS =======================
 //CREATE   EXEC PGM=IEFBR14
@@ -165,6 +151,10 @@
 *   A CONTENTS LIST WOULD BE A BIT POINTLESS.
 *   --- THAT MEANS THE BKPLIST DD MUST REFER TO A FILE, IT CANNOT
 *   BE JES2 SYSOUT (BUT IT MAY BE A PDS MEMBER). LRECL=80.
+* ====> BKPLIST and SKIPLIST are RECFM=FBA,LRECL=80 why I decided
+*   on FBA I don't know... but it will remain that way as I have
+*   been creating jobs that post-process the file so for my use
+*   it has to stay that way.
 *
 * --------------------------------------------------------------------
 *
@@ -205,6 +195,9 @@
 *                USE TWO BASE REGISTERS IN THIS CODE NOW.
 *   2013/08/08 = CHANGED 'USING *,12,11' TO 'USING BKBYVTOC,12,11' TO
 *                STOP IT ABENDING WITH SOC1 AT INITIALISATION.
+*   2015/09/04 = ADDED THE JDATE (YYDDD) TO THE BACKUP LISTING BANNER
+*                AS I NEED IT FOR SOME JOBS THAT PROCESS THE BACKUP
+*                LISTING
 *
 * --------------------------------------------------------------------
 *
@@ -294,6 +287,8 @@ BKBYVTOC CSECT
          MVC   BKPLSTH1+67(2),D370TIME
          MVI   BKPLSTH1+69,C':'
          MVC   BKPLSTH1+70(2),D370TIME+2
+         MVC   BKPLSTH1+73(2),D370YEAR+2
+         MVC   BKPLSTH1+75(3),D370JDAY
 NODATE   EQU   *
 *
 * ---------------------------------------------------------------
@@ -768,8 +763,8 @@ ZZ
 // UNIT=3380,VOL=SER=PUB002,
 // DCB=(DSORG=PS,RECFM=FB,LRECL=80,BLKSIZE=8000),
 // SPACE=(CYL,(2,1))
-//*JCLOUT   DD   SYSOUT=*           FOR TESTING
-//JCLOUT   DD   SYSOUT=(A,INTRDR)   FOR LIVE RUN
+//JCLOUT   DD   SYSOUT=*           FOR TESTING
+//*JCLOUT   DD   SYSOUT=(A,INTRDR)   FOR LIVE RUN
 //TEMPLATE DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC(TEMPLAT1)
 //
 ./ ADD NAME=TEMPLAT1
@@ -782,6 +777,8 @@ ZZ
 //* One key thing to note is that in order to use referbacks
 //* in the procedures, something has to get the tape up first.
 //* The REPORT1 step does that, it has no other purpose.
+//* 2015/09/04 is using MDTAPALC its purpose is to also record
+//*            the volser of the tape allocated to the job.
 //* ---------------------------------------------------------------
 //BKPPO    PROC D=,LABEL=
 //BACKUPPO EXEC PGM=IEBCOPY,REGION=1024K,COND=(0,NE)
@@ -814,565 +811,16 @@ ZZ
 //        DSN=DELME,
 //        DCB=(DSORG=PS,RECFM=F,LRECL=80,BLKSIZE=80)
 //SYSIN    DD   DUMMY
-./ ADD NAME=TEMPLAT2
-//XXXXXXXX JOB (0),CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
-//* ---------------------------------------------------------------
-//* TEMPLATE JOB FILE FOR USE WITH THE BKBYVTOC PROGRAM...
-//* ...AND USING THE MDEXWRAP OUTPUT DS REPORTING WRAPPER.
-//*
-//* Defines the two required procedures - BKPPS and BKPPO
-//*
-//* One key thing to note is that in order to use referbacks
-//* in the procedures, something has to get the tape up first.
-//* The REPORT1 step does that, it has no other purpose.
-//*
-//* This uses the MDEXWRAP program to write output file details
-//* to the HISTFILE DD file... which you should have precreated.
-//* ---------------------------------------------------------------
-//BKPPO    PROC D=,LABEL=
-//BACKUPPO EXEC PGM=MDEXWRAP,PARM='IEBCOPY',COND=(0,NE)
-//SYSPRINT DD  SYSOUT=*
-//SYSUT1   DD DSN=&D,DISP=SHR
-//SYSUT2   DD  DISP=(NEW,KEEP),UNIT=TAPE,
-//        VOL=(,RETAIN,,,REF=*.REPORT1.SYSUT2),LABEL=(&LABEL,SL),
-//        DSN=&D,
-//        DCB=*.SYSUT1
-//SYSUT3   DD  UNIT=WORK,SPACE=(CYL,(15,15))
-//SYSIN    DD  DSN=INSTALL.UTILS.BKBTVTOC(IEBCOPY),DISP=SHR
-//HISTFILE DD  DSN=MARK.BKPLIST.TAPELOG.HISTFILE,DISP=MOD
-//         PEND
-//BKPPS    PROC D=,LABEL=
-//BACKUPPS EXEC PGM=MDEXWRAP,PARM='IEBGENER',COND=(0,NE)
-//SYSPRINT DD   SYSOUT=*
-//SYSUT1   DD   DSN=&D,DISP=SHR
-//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=TAPE,
-//        VOL=(,RETAIN,,,REF=*.REPORT1.SYSUT2),LABEL=(&LABEL,SL),
-//        DSN=&D,
-//        DCB=*.SYSUT1
-//SYSIN    DD   DUMMY
-//HISTFILE DD  DSN=MARK.BKPLIST.TAPELOG.HISTFILE,DISP=MOD
-//         PEND
-//*
-//* DUMMY STEP TO MOUNT THE TAPE
-//REPORT1  EXEC PGM=IEBGENER
-//SYSPRINT DD   SYSOUT=*
-//SYSUT1   DD   DISP=SHR,DSN=SYS1.PROCLIB(JES2)    ANY FILE
-//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=TAPE,
-//        VOL=(,RETAIN),LABEL=(1,SL),   USE ANY SCRATCH
-//        DSN=DELME,
-//        DCB=(DSORG=PS,RECFM=F,LRECL=80,BLKSIZE=80)
-//SYSIN    DD   DUMMY
+//* IF USING MDTAPALC TO RECORD THE TAPE VOLSER REPLACE
+//* THE REPORT1 STEP ABOVE WITH THIS ONE
+//*REPORT1  EXEC PGM=MDTAPALC
+//*SYSPUNCH DD   DISP=MOD,DSN=MARK.LOG.TAPES.USED
+//*SYSUT2   DD   DISP=(NEW,KEEP),UNIT=TAPE,
+//*        VOL=(,RETAIN),LABEL=(1,SL),   USE ANY SCRATCH
+//*        DSN=DELME,
+//*        DCB=(DSORG=PS,RECFM=F,LRECL=80,BLKSIZE=80)
 ./ ADD NAME=IEBCOPY
  COPY INDD=SYSUT1,OUTDD=SYSUT2
-./ ADD NAME=MDEXWRAP
-//MARKASMJ JOB  (0),'MDEXWRAP',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
-//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
-//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
-//             PARM.LKED='LIST,MAP,NCAL,AC=1'
-//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
-// DD DISP=SHR,DSN=SYS1.AMODGEN
-// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//ASM.SYSIN DD *
-* ********************************************************************
-*
-* PROGRAM : MDEXWRAP
-*
-* CAUTION - THIS IS STILL A WORK IN PROGRESS
-*           TESTED OK WITH IEBGENER AND IEBCOPY (BUT SEE BUGS)
-*
-* REQUIREMENTS:
-* (1) THIS PROGRAM NEEDS MY DATE LIBRARIES INSTALLED IN ORDER TO 
-*     ASSEMBLE WITHOUT ERRORS.
-* (2) IF IEBCOPY IS TO BE USED THIS PROGRAM MUST BE APF AUTHORISED
-*     AND IN AN AUTHORISED LIBRARY, AS IEBCOPY MUST RUN AUTHORISED
-*     AS IT USES HIGH NUMBERED POOLS FOR GETMAINS.
-*
-* PURPOSE
-*    WRITTEN FOR MY BACKUP JOBS SO I CAN KEEP A LISTING OF WHAT
-*    FILES ARE BACKED UP ON WHAT TAPES.
-*    CAN BE USED WITH ANY PROGRAM THAT
-*      (A) IS BEING USED TO BACKUP TO TAPE
-*      (B) A N D THAT PROGRAM USES SYSUT2 AS THE OUTPUT DD
-*      IE: IEBCOPY AND IEBGENER :-)
-* FUNCTIONALITY
-*    LINKS TO THE PROGRAM SPECIFIED ON THIS PROGRAMS PARM TO
-*    PERFORM THE BACKUP, THE CALLED PROGRAM WILL POPULATE
-*    THE SYSUT2 JFCB WITH INFORMATION NOT AVAILABLE BEFORE
-*    THE OUTPUT FILE IS OPENED (SUCH AS THE TAPE VOLSER
-*    ASSIGNED BY THE OS AT DSN OPEN TIME). WE THEN USE THE
-*    JFCB DETAILS TO RECORD IN THE HISTFILE WHAT WAS REALLY
-*    WRITTEN ON THE TAPE.
-*
-* REQUIRED PARMS    : THE NAME OF THE PROGRAM TO EXECUTE
-*                     OR 'BANNER' TO WRITE NEW HEADER LINES TO
-*                     THE HISTFILE
-* REQUIRED DD CARDS : (1) ALL DD CARDS THE CALLED PROGRAM NEEDS
-*                     (2) HISTFILE (DCB RECFM=FB,LRECL=132)
-*                     (3) CALLED PROGRAM M U S T USE SYSUT2 FOR OUTPUT
-*
-* KNOWN ISSUES WORKED AROUND
-* ==========================
-* USING LINK TO IEBCOPY JUST DOES NOT WORK. IT REPORTS MISSING DD
-* CARDS FOR NON-PRINTABLE DD NAMES (IT OBVIOUSLY GETS CORRUPTED).
-* OCCASIONALY ALSO ON LINK TO IEBGENER
-* --- TO FIX THIS THE IEBCOPY LOAD MODULE IS LINKED INTO THIS    
-*     PROGRAM (IN THE LKED STEP) SO IT CAN BE CALLED FROM WITHIN
-*     THIS PROGRAMS SCOPE INSTEAD OF BRANCHING TO A SEPERATE MODULE.
-*     WHY THAT WORKS WHEN LINK DOESN'T I DON'T KNOW, BUT IT DOES.
-*     SAME DONE WITH IEBGENER CODE NOW
-*
-* ISSUES WITH ALIGNMENT (IFOX00 ISSUE I ASSUME)
-*     SOMEWHERE IS A BYTE ALIGNMENT ISSUE IN THE CODE THE ASSEMBLER
-*     IS NOT ABLE TO DETECT/ADJUST/REPORT. ADDED LOTS OD 'DS 0F'
-*     AND 'CNOP 0,4' ENTRIES ALL OVER THE CODE WHICH HAS STOPPED
-*     THAT AS SHIPPED.
-*
-* CURRENT STATUS
-* ==============
-*     FUNCTIONALITY TESTED (WORKING)
-*         IEBCOPY AND IEBGENER
-*     CODE LOGIC IS 
-*        - IF IEBCOPY OR IEBGENER USE LINKED-IN/IMBEDDED IEBCOPY CODE
-*        - IF ANYTHING ELSE LINK TO THE PROGRAM REQUESTED
-*
-* BUGS
-* ====
-* STILL HAVE NOT TOTALLY ELIMINATED THE CORRUPTION CAUSING THE
-* MISSING DD CARD ERRORS, AS BELOW JOBLOG SHOWS
-*     DEBUG: USING EMBEDDED IEBCOPY
-*     DY02BKPU   STEP009   BACKUPPO  MDEXWRAP  RC= 0000
-*     MDEXWRAP - USING PGM IEBCOPY
-*     DEBUG: USING EMBEDDED IEBCOPY
-*     DY02BKPU   STEP010   BACKUPPO  MDEXWRAP  RC= 0000
-*     MDEXWRAP - USING PGM IEBCOPY
-*     DEBUG: USING EMBEDDED IEBCOPY
-*     IEC130I    1     DD STATEMENT MISSING
-*     IEB172I    1     COULD NOT BE OPENED
-*     IEB147I END OF JOB -04 WAS HIGHEST SEVERITY CODE
-*     DY02BKPU   STEP011   BACKUPPO  MDEXWRAP  RC= 0000
-*     MDEXWRAP - USING PGM IEBCOPY
-*     DEBUG: USING EMBEDDED IEBCOPY
-*     DY02BKPU   STEP012   BACKUPPO  MDEXWRAP  RC= 0000
-*     MDEXWRAP - USING PGM IEBCOPY
-*     DEBUG: USING EMBEDDED IEBCOPY
-*     DY02BKPU   STEP013   BACKUPPO  MDEXWRAP  RC= 0000
-* AND WILL RANDOMLY S0C1, IN THIS JOB ON STEP 44
-*     DY02BKPU   STEP043   BACKUPPS  MDEXWRAP  RC= 0000
-*     MDEXWRAP - USING PGM IEBCOPY
-*     DEBUG: USING EMBEDDED IEBCOPY
-*     IEF450I DY02BKPU BACKUPPO STEP044 - ABEND S0C1 U0000 
-*     DY02BKPU   STEP044   BACKUPPO  MDEXWRAP  AB S0C1
-*     DY02BKPU   STEP045   BACKUPPS  MDEXWRAP  *FLUSH*
-*     DY02BKPU   STEP046   BACKUPPS  MDEXWRAP  *FLUSH*
-*
-* STEP11 DSN WAS MARK.LIB.JCL.COMPILER, A SMALL PDS
-* STEP44 DSN WAS MARK.BKPLISTS, 75 TRACK PDS
-* BOTH CAN BE BRWOSED WITHOUT ERRORS AND STEP44 FILE IS ALSO WRITEN 
-* TO BY THE BACKUP JOB SO NOTHING WRONG WITH THE FILES
-*
-* SOOOOO, 2 ERRORS AND 42 SUCESS IN 44 STEPS, THIS IS DRIVING ME NUTS
-*
-* ********************************************************************
-         EJECT
-* ---------------------------------------------------------------
-* MACROS FROM MY MACRO LIBRARY MOVED INLINE HERE SO THAT 
-* LIBRARY DOES NOT HAVE TO BE SHIPPED ALSO.
-* ---------------------------------------------------------------
-         MACRO
-&LABEL   TODEC8 &REG=,&BUF=,&MF=L
-.* *******************************************************************
-.*
-.* TODEC8 REG=REGISTER,BUF=STRING,MF=L(DEFAULT) or MF=R
-.*
-.* &REG - register with binary value
-.* &S1  - 8 byte (minimum) output string field
-.* MF=L ... a data area name is passed for the output string field
-.* MF=R ... a register containing the address of the data area is
-.*          passed for the output string field
-.* REGISTER 1 IS TRASHED
-.*
-.* *******************************************************************
-         AIF   ('&REG' EQ '').TD8ER01
-         AIF   ('&REG(1)' EQ '1').TD8ER03
-         AIF   ('&BUF' EQ '').TD8ER02
-         AIF   ('&MF' NE 'L' AND '&MF' NE 'R').TD8ER04
-&LABEL.  B     T8B&SYSNDX              SKIP DATA AREA
-         DS    0D
-T8A&SYSNDX DS    PL8                   PACKED DECIMAL WORK
-T8B&SYSNDX CVD   &REG,T8A&SYSNDX
-         AIF   ('&MF' NE 'L').TD8SKP1
-         LA    1,&BUF                  LIST FORMAT, DATA NAME
-         AGO   .TD8SKP2
-.TD8SKP1 LR    1,&BUF                  REGISTER FORMAT, REG HAS ADDR
-.TD8SKP2 UNPK  0(8,1),T8A&SYSNDX       UNPACK FOR LENGTH 8
-         OI    7(1),X'F0'              ZERO ZONE BIT
-         MEXIT
-.* POSSIBLE ERROR MNOTES ARE BELOW
-.TD8ER01 MNOTE 12,'REG MUST BE A VALID REGISTER'
-         MEXIT
-.TD8ER02 MNOTE 12,'BUF MUST BE A 8 BYTE CHAR FIELD'
-         MEXIT
-.TD8ER03 MNOTE 12,'YOU CANNOT USE REGISTER 1 HERE'
-         MEXIT
-.TD8ER04 MNOTE 12,'MF MUST BE MF=L OR MF=R'
-         MEND
-         EJECT
-MDEXWRAP CSECT
-         STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-* ---------------------------------------------------------------
-*  GET THE PROGRAM NAME WE ARE TO EXECUTE FROM THE PARM FIELD
-* ---------------------------------------------------------------
-         LTR   R1,R1                 DO WE HAVE A PARM ?
-         BZ    BADPARM               NO WE DON'T, ERROR OUT
-         L     R2,0(,R1)             YES, ADDRESS 1ST PARM FIELD
-*                                       PARMLEN IN 1ST TWO BYTES
-*                                       PARMDATA AFTER THAT
-         LH    R6,0(R2)              GET LENGTH
-         C     R6,=F'0'
-         BNH   BADPARM               IF PARMLEN 0, EMPTY PARM
-         S     R6,=F'1'              ADJUST FOR PARM HEADER AREA
-         C     R6,=F'9'              PGM NAME IS MAX 8 BYTES
-         BNL   BADPARM               SO IF NOT < 9 BAD PARM
-*                                     MOVE TO PROGNAME FIELD
-         EX    R6,PROGMOVE           LEN IN R6, SRC IN 2(R2)
-*
-* ---------------------------------------------------------------
-* BANNER ONLY REQUEST ?.
-* ---------------------------------------------------------------
-         CLC   PROGNAME(6),=CL6'BANNER'
-         BNE   REALWORK
-         OPEN  (HISTFILE,(OUTPUT))       OPEN THE HISTORY FILE
-         PUT   HISTFILE,LOGLINE          WRITE THE TITLES
-         PUT   HISTFILE,LOGLINE2         WRITE THE UNDERLINES
-         CLOSE (HISTFILE)                DONE WITH THE HISTORY FILE
-         B     EXIT
-* ---------------------------------------------------------------
-* ---------------------------------------------------------------
-REALWORK CNOP  0,4
-         MVC    LOGPGM+29(8),PROGNAME
-LOGPGM   WTO   'MDEXWRAP - USING PGM xxxxxxxx '
-         CLC   PROGNAME(7),=CL7'IEBCOPY'           
-         BE    CALLCPYA  
-         CLC   PROGNAME(7),=CL7'IEBGENER'           
-         BE    CALLCPYB  
-         B     USELINK       ELSE LINK TO THE NAMED PROGRAM
-
-*    IEBCOPY HAS NO ENTRY POINT NAMED IEBCOPY, USE IEBDSCPY
-CALLCPYA ST    R14,SAVER14
-         WTO   'DEBUG: USING EMBEDDED IEBCOPY'
-         CNOP  0,4
-         CALL  IEBDSCPY      IEBCOPY ENTRY POINT IS IEBDSCPY
-         L     R14,SAVER14
-         B     TASKDONE
-CALLCPYB ST    R14,SAVER14
-         WTO   'DEBUG: USING EMBEDDED IEBGENER'
-         CNOP  0,4
-         CALL  IEBGENER      
-         L     R14,SAVER14
-         B     TASKDONE
-*
-         DS    0F               BOTH THESE TWO LINES OR S0C4
-USELINK  CNOP  0,4
-         ST    R14,SAVER14
-         LINK  EPLOC=PROGNAME,ERRET=NOPROG
-         L     R14,SAVER14
-         B     TASKDONE
-*
-         DS    0F               BOTH THESE TWO LINES OR S0C4
-TASKDONE CNOP  0,4
-         BAL   R5,EXTRJFCB               JFCB INFO INTO OUTPUT LINE
-         MVC   LOGLINE+100(8),PROGNAME   RECORD PGM USED
-         UDATEMAC DATA=UDATEVAR,ERROR=NODATE
-         MVC   LOGLINE+15(4),D370YEAR    YYYY/MM/DD
-         MVC   LOGLINE+20(2),D370MMDD
-         MVC   LOGLINE+23(2),D370MMDD+2
-         MVC   LOGLINE+26(2),D370YEAR+2  YYJJJ
-         MVC   LOGLINE+28(3),D370JDAY          
-         OPEN  (HISTFILE,(OUTPUT))       OPEN THE HISTORY FILE
-         PUT   HISTFILE,LOGLINE          WRITE THE DATA
-         CLOSE (HISTFILE)                DONE WITH THE HISTORY FILE
-*
-EXIT     L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
-         LM    R14,R12,12(R13)    RESTORE REGISTERS
-         SLR   R15,R15            EXIT CODE 0
-         BR    R14                RETURN TO SYSTEM
-         EJECT
-* ---------------------------------------------------------------
-* ERROR MESSAGE ROUTINES AND ERROR EXIT CODE
-* ---------------------------------------------------------------
-NOPROG   MVC   NOPROGW+8(8),PROGNAME
-NOPROGW  WTO   '........ FAILED TO RUN, SEE EARLIER MESSAGE'
-         B     EXIT04
-BADPARM  WTO   'YOU MUST PROVIDE A VALID PROGRAM NAME IN THE PARM'
-         B     EXIT04
-NODATE   WTO   'MARKS DATE UTILIES NOT IN LINKLIST, THEY ARE REQUIRED'
-EXIT04   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
-         LM    R14,R12,12(R13)    RESTORE REGISTERS
-         LA    R15,4              EXIT CODE 4
-         BR    R14                RETURN TO SYSTEM
-         EJECT
-****************************************************
-* GET OUTPUT DATASET INFO FROM THE SYSUT2 JFCB
-****************************************************
-EXTRJFCB CNOP  0,4
-         RDJFCB SYSUT2
-*  JFCB+44(8) is a member name. That would only be
-* usefull if we were checking what the input file was,
-* we only care about the output file on the tape.
-*
-*
-EXTRCONT MVC   LOGLINE(6),JFCBVOLS       VOLSER
-         LH    R3,JFCBVLSQ               TAPE SEQNO (MULTIVOL)
-         TODEC8 REG=R3,BUF=NUM8
-         MVC   LOGLINE+7(3),NUM8+5
-         LH    R3,JFCBFLSQ               TAPE FILE POSITION
-         TODEC8 REG=R3,BUF=NUM8
-         MVC   LOGLINE+11(3),NUM8+5
-         MVC   LOGLINE+32(44),JFCBDSNM   DSN 
-* --- TEST WHAT THE SYSUT2 DSORG USED WAS
-GETDSORG MVI   LOGLINE+79,C' '  BLANK LAST UNUSED DISPLAY BYTE
-         TM    JFCDSRG1,JFCORGIS
-         BO    DSORGIS
-         TM    JFCDSRG1,JFCORGPS
-         BO    DSORGPS
-         TM    JFCDSRG1,JFCORGDA
-         BO    DSORGDA
-         TM    JFCDSRG1,JFCORGPO
-         BO    DSORGPO
-         TM    JFCDSRG1,JFCORGU   UNMOVABLE, NOT UNSTRUCTURED
-         BO    DSORGU 
-         MVC   LOGLINE+77(2),=CL2'??'  SAY WHAT, NOT DEFINED !
-         B     GETRECF
-DSORGIS  MVC   LOGLINE+77(2),=CL2'IS'
-         B     GETRECF
-DSORGPS  MVC   LOGLINE+77(2),=CL2'PS'
-         B     GETRECF
-DSORGDA  MVC   LOGLINE+77(2),=CL2'DA'
-         B     GETRECF
-DSORGPO  MVC   LOGLINE+77(2),=CL2'PO'
-         B     GETRECF
-DSORGU   MVC   LOGLINE+77(2),=CL2'FX'
-         B     GETRECF
-* --- TEST WHAT THE SYSUT2 RECFM USED WAS
-GETRECF  MVC   LOGLINE+81(4),=CL4'?   ' 4 BYTE FIELD IN DATALINE
-         TM    JFCRECFM,JFCRFB  
-         BNO   GETRECF2              NOT BLOCKED
-         MVI   LOGLINE+82,C'B'       IS BLOCKED
-GETRECF2 TM    JFCRECFM,JFCUND  
-         BO    RECFMU
-         TM    JFCRECFM,JFCFIX  
-         BO    RECFMF
-         TM    JFCRECFM,JFCVAR  
-         BO    RECFMV
-RECFMV   MVI   LOGLINE+81,C'V'
-         B     GETRECF3
-RECFMU   MVI   LOGLINE+81,C'U'
-         B     GETRECF3
-RECFMF   MVI   LOGLINE+81,C'F'
-*
-GETRECF3 TM    JFCRECFM,JFCCHAR+JFCASA
-         BO    RECFMA
-         TM    JFCRECFM,JFCCHAR+JFCMAC
-         BNO   GETBLKSZ
-RECFMM   MVI   LOGLINE+83,C'M'
-         B     GETBLKSZ
-RECFMA   MVI   LOGLINE+83,C'A'
-*
-* --- TEST WHAT THE SYSUT2 BLKSIZE USED WAS
-GETBLKSZ CNOP  0,4
-         LH    R3,JFCBLKSI
-         TODEC8 REG=R3,BUF=NUM8 
-         MVC   LOGLINE+86(7),NUM8+1           BLKSIZE
-* --- TEST WHAT THE SYSUT2 LRECL USED WAS
-         LH    R3,JFCLRECL
-         TODEC8 REG=R3,BUF=NUM8 
-         MVC   LOGLINE+94(5),NUM8+3 
-* === DONE WITH JFCB MAPPING, DROP R2
-         BR    R5
-         EJECT
-* ************************************************************
-* THE JOLLY DATA AREA.
-* ************************************************************
-         LTORG
-SAVEAREA DS    18F                   ENVIRONMENT SAVE AREA
-SAVER14  DS    F
-PROGNAME DC    CL8' '                PROGRAM NAME TO EXECUTE
-PROGMOVE MVC   PROGNAME(0),2(R2)     SAVE PGM NAME IN BELOW
-NUM8     DC    CL8' '                USED FOR NUM CONVERSION
-TASKECB  DS    F                                               DEBUG
-TCBADDR  DS    F                                               DEBUG
-FLAG     DC    X'00'                                           DEBUG
-         DS    0F                  Fullword alignment.         DEBUG
-HEXTRT   EQU   *-X'F0'             16 Byte Translate Table.    DEBUG
-         DC    XL16'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'  F0 - FF DEBUG
-HEXBIN   DS    XL4                 4 Byte Binary Field.        DEBUG
-         DS    X                   1 Byte Pad for UNPK.        DEBUG
-HEXDIS   DS    CL8                 8 Byte Displayable Hex FieldDEBUG
-         DS    C                   1 Byte Pad for UNPK.        DEBUG
-*
-* Log message format
-* tttttt - tape volser used for backup
-* qqq - tape vol number for multivol backups
-* seq - file sequence number/position on tape
-* yyyy/mm/dd - self explainatory
-* yyddd - julian date format (easier for expiry checking)
-* dddddddd.ddd..... dataset name 44 bytes thru to byte 76
-* org - dsorg
-* recf - record format
-* blksize
-* lrecl
-* progname - actual program used to do the backup
-* ...takes us to byte 99 so a few bytes left for other stuff later
-*                    ....+....1....+....2....+....3....+....4....+....5
-*              ....+....6....+....7....+....8....+....9....+....1....+.
-*              ...2....+....3..
-*              CL132'tttttt qqq seq yyyy/mm/dd yyddd dddddddd.dddddddd.
-*              dddddddd.dddddddd.dddddddd org recf blksize lrecl progna
-*              me 
-LOGLINE  DC    CL132'VOLSER SEQ POS DATE       JDATE DATASET NAME      X
-                                          ORG RECF BLKSIZE LRECL PROGRAX
-               M '
-* SECOND LINE USED BY BANNER ONLY
-LOGLINE2 DC    CL132'------ --- --- ---------- ----- ------------------X
-               -------------------------- --- ---- ------- ----- ------X
-               --'
-         UDATEVAR DSECT=NO           DATA AREA FOR DATE UTILITY
-*
-*
-         DS    0F
-EXLST2   DC    X'87',AL3(JFCB2)
-JFCB2    DS    0CL176
-         IEFJFCBN LIST=YES
-*
-HISTFILE DCB   DDNAME=HISTFILE,DSORG=PS,MACRF=PM,                      X
-               BLKSIZE=5280,RECFM=FB,LRECL=132
-*
-* USING MACRF=R ABENDS SB0A WHEN IT TRIES TO GET STORAGE (PS AND PO)
-* USING TYPE PO AND MACRF=GM IEBCOPY GETS GARBAGE IN DDNAME
-* PO AND GM WORKS FOR IEBGENER BUT SB0A ON IEBCOPY
-* PO AND PM ARE INVALID COMBINATION
-* PS AND (PM) GIVES IEBCOPY GARBAGE IN DDNAME
-* USING DEVD=TA IS S0C4 WHICH IS AN IMPROVEMENT
-*      BUT PADDING DCB TO 512 BYTES OR ADDING PADDING AFTER
-*      THE DCB MAKES IEBGENER REPORT DD garbagebytes MISSING
-* --- WHAT DOES IEBCOPY NEED SET ?
-* --- IEBGENER IS WORKING OK
-         DS    0CL512         ADD A PADDING DATA AREA
-SYSUT2   DCB   DDNAME=SYSUT2,DSORG=PS,MACRF=(PM),EXLST=EXLST2
-         ORG
-STPS0C4A DS    CL256          IF THIS IS NOT HERE IEBGENER WILL
-*                             S0C4. THE DCB BEING BUILT IS NOT
-*                             CREATING A LARGE ENOUGH DATA
-*                             AREA.
-STPS0C4B DS    CL256          ANOTHER FOPR IEBCOPY NEEDEDING   
-*                             EVEN MORE SPACE ? (SOC4'S ON
-*                             SYS2.LINKLIB FOR SOME REASON)
-         EJECT
-R0       EQU   0
-R1       EQU   1
-R2       EQU   2
-R3       EQU   3
-R4       EQU   4
-R5       EQU   5
-R6       EQU   6
-R7       EQU   7
-R8       EQU   8
-R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
-R13      EQU   13
-R14      EQU   14
-R15      EQU   15
-         END
-ZZ
-//ASM.SYSTERM DD SYSOUT=*
-//LKED.SYSLMOD DD DSN=SYS9.LINKLIB.APFAUTH(MDEXWRAP),DISP=SHR
-//LKED.SYSIN   DD *
- SETCODE AC(1)
- INCLUDE IBMLIB(IEBCOPY)
- INCLUDE IBMLIB(IEBGENER)
- ENTRY MDEXWRAP
- NAME MDEXWRAP(R)
-/*
-//LKED.IBMLIB DD DISP=SHR,DSN=SYS1.LINKLIB
-//LKED.SYSLIB DD DUMMY
-//
-./ ADD NAME=MDEXDSET
-//MARKDSET JOB  (0),'MAKEDSET',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
-//*
-//* CREATE A HISTORY FILE THAT CAN BE USED BY MDEXWRAP
-//* - USE MDEXWRAP TO CREATE IT SO WE CAN WRITE THE
-//*   HEADER LINES IN THIS SAME STEP.
-//*
-//CREATE   EXEC PGM=MDEXWRAP,PARM='BANNER' 
-//HISTFILE DD   DISP=(NEW,CATLG,DELETE),
-// UNIT=3380,VOL=SER=PUB002,
-// SPACE=(CYL,(10,10)),
-// DCB=(DSORG=PS,RECFM=FB,LRECL=132,BLKSIZE=5280),
-// DSN=MARK.BKPLIST.TAPELOG.HISTFILE
-//
-./ ADD NAME=MDEXTEST
-//MARKTEST JOB  (0),'TESTPROG',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
-//*
-//* THIS JOB IS NOT INTENDED TO REPLACE THE 'TESTJOB' MEMBER
-//* THAT EXERCISES MDEXWRAP IN CONJUNCTION WITH BKBYVTOC AND
-//* THE TEMPLATE FILES.
-//* THIS EXISTS FOR TESTING TO MAKE SURE THE HISTFILE RECORDS
-//* THE CORRECT 'NEW' NAME FOR DATASETS WHEN A NEW NAME IS 
-//* USED FOR OUTPUT.
-//* THE JOBS/TEMPLATES RUN BY THE BKBTVTOC TEMPLATES USE THE
-//* SAME NAMES, SO THERE HAS TO BE THIS SEPERATE TEST.
-//*
-//* TEST THE MDEXWRAP PROGRAM USING IEBGENER AND IEBCOPY
-//*    IEBCOPY OFFLOADS SHOULD BE 
-//*       DSORG=PS,RECFM=VM,LRECL=280 AND BLKSIZE=284 
-//*       (4 BYTE KEY ADJUSTS THE BLKSIZE)
-//*    IEBGENER COPIED FILES SHOULD BE
-//*       DSORG=PS, SAME DCB AS INPUT IF A PS INPUT FILE,
-//*       IF A MEMBER FROM A PDS ?.
-//*
-//* -- WE ARE USING DIFFERENT DATASET NAMES ON THE 
-//*    TAPE, HISTLOG SHOULD HAVE THE NAMES ON THE TAPE
-//*
-//* REVIEW THE HISTFILE FILE CONTENTS TO VERIFY THE
-//* RESULTS ARE AS EXPECTED.
-//*
-//*
-//* TEST1 - SEQUENTIAL FILE BACKUP
-//*
-//* CURRENTLY - WORKS OK
-//*
-//TEST1    EXEC PGM=MDEXWRAP,PARM='IEBGENER',COND=(0,NE)
-//HISTFILE DD   DISP=MOD,DSN=MARK.BKPLIST.TAPELOG.HISTFILE
-//SYSPRINT DD   SYSOUT=*
-//SYSUT1   DD   DISP=SHR,DSN=SYS1.PARMLIB(JES2PARM)
-//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=(TAPE,,DEFER),LABEL=(1,SL),
-// DSN=MARK.DELME1,DCB=*.SYSUT1,VOL=(,RETAIN)
-//SYSIN    DD   DUMMY
-//*
-//* TEST2 - PARTITIONED FILE BACKUP
-//*
-//TEST2    EXEC PGM=MDEXWRAP,PARM='IEBCOPY',COND=(0,NE)
-//HISTFILE DD   DISP=MOD,DSN=MARK.BKPLIST.TAPELOG.HISTFILE
-//SYSPRINT DD   SYSOUT=*
-//SYSUT1   DD   DISP=SHR,DSN=SYS1.PARMLIB
-//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=(TAPE,,DEFER),LABEL=(2,SL),
-// DSN=SYS1.PARMLIB.BKP,
-// VOL=REF=*.TEST1.SYSUT2
-//SYSUT3   DD   DISP=(NEW,DELETE,DELETE),
-// SPACE=(CYL,(5,5)),UNIT=SYSDA
-//SYSUDUMP DD SYSOUT=*
-//SYSIN    DD   *       
- COPY INDD=SYSUT1,OUTDD=SYSUT2
-/*
-//
 ./ ADD NAME=$$DOC
 (1) About this file
 (2) Member summary
@@ -1395,19 +843,6 @@ PDS file on the disks, plus generate a listing of the
 details of each file backed up to assist with manual
 restores if needed.
 
-Later I wrote the MDEXWRAP program to provide a 
-wrapper for the actual utility programs used to run
-the backups; this is used to query the SYSUT2 JFCB
-populated by the backup programs to obtain usefull
-information such as the actual tape volser used 
-which is not available to BKBYVTOC (the JFCB is
-not populated for the output file until it is
-opened). This is used to create a history file of
-what is actually on the tape and what tapes were
-used, which can be used in conjunction with the
-listing produced by bkbyvtoc to assist with manual
-restores.
-
 ------------------
 (2) Member Summary
 ------------------
@@ -1417,15 +852,7 @@ BKBYVTOC - the job to assemble the program itself
            see the sample jcl in TESTJOB
 IEBCOPY  - sysin control member used by sample template TEMPLAT1
 TEMPLAT1 - example template used by the TESTJOB
-TEMPLAT2 - example template used if you are using MDEXWRAP,
-           change testjob to use this template
 TESTJOB  - job to test BKBYVTOC, used template TEMPLAT1
-MDEXWRAP - wrapper program used to run the backup utility
-           programs allowing what is actually on the tape
-           to be recorded
-MDEXDSET - jcl to create the history file used by MDEXWRAP,
-           this NEEDS MDEXWRAP assembled as it uses it
-MDEXTEST - jcl to test only MDEXWRAP
 
 -------------------
 (3) Program details
@@ -1452,45 +879,6 @@ started.
 Refer to member
   TESTJOB  - sample jopb to use the program
   TEMPLAT1 - sample template member for TESTJOB
-  TEMPLAT2 - sample template member if using MDEXWRAP
-
-
-MDEXWRAP - WORKING AS SHIPPED
-========
-This program is used as a 'wrapper' around the actual 
-backup programs being run so I know what is really on
-the tapes.
-
-This was written as usefull information such as tape 
-volser being used is not available until the output
-dataset has been opened and resources assigned. By
-using this wrapper program when the real backup program
-finishes the JFCB populated by the backup program is
-available to the wrapper program to it can record
-details of what was actually written to the tape.
-
-That is important as the tape details can be different,
-for example the output dsn does not have to be the
-same as the input dsn, is a pds member is backed up
-the tape file will be dsorg=ps instead of dsorg=po
-of the input file etc. We really need to know what is
-on the tape :-)
-
-It requires all the DD cards the called program
-expects plus a 'histfile' dd card used to record
-the details of whats on the tape.
-
-IT REQUIRES that that called program uses SYSUT2 as
-its output DD card, so can be used with iebgener and
-iebcopy with no issues.
-
-Useage examples are in the sample template member
-templat2.
-
-Refer to member
-  TESTJOB  - sample jop to use bkbyvtoc
-  TEMPLAT2 - sample template member if using MDEXWRAP
-
 
 --------------
 (4) Installing
@@ -1499,10 +887,6 @@ Assuming you did the global customisation suggested in the
 JCL job used to create this file you can now just
 
 1. Run the memeber BKBYVTOC to assemble the program
-2. Optionally run the MDEXWRAP or customise TEMPLAT1 not to
-   use that program.
-3. If you are to use MDEXWRAP run MDEXDSET to create the
-   history log file to be used.
 4. Optionally run the TESTJOB member to test the program
    and template.
 ./ ENDUP

@@ -13,6 +13,14 @@ BKBYVTOC.txt    - given a list of disk volumes (and backup proc templates)
                   those disk packs to tape. Creates backup listings of
                   files backed up to disk
 
+BKBYVTOC_extras.txt - a messy collection of programs I use to manage
+                  backups produced by bkbyvtoc. Programs to merge
+                  and trim outputs and scripts to allow a web page
+                  to be used to run restore jobs.
+                  Probably only usefull to me.
+                  And this is an exception to the 'these are stable'
+                  statement above.
+
 COBRENUM.txt    - renumbers (or inserts) sequence numbers needed for MVT
                   COBOL source members so I don't have to bother keeping
                   them in sequence manually when editing the members

@@ -1,0 +1,1824 @@
+//MARKSTOR JOB (0),'ADD UTILS',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//* =================== START JOB COMMENTS =======================
+//*
+//* THIS JOC INSTALLS ADDITIONAL PROGRAMS THAT CAN ASSIST IN      
+//* MAKING IT EASIER TO AUTOMATE RESTORES OF FILES BACKED UP
+//* USING BKBYVTOC. 
+//* THEY ARE EXPECTED TO INSTALL INTO THE EXISTING DATASET YOU
+//* INSTALLED THE BKBYVTOC JOBDECK INTO.
+//*
+//* -> MVS38J programs to post process backup output
+//* -> Linux bash scripts to assist in getting the backup 
+//*    report to a Linux file where a webpage can use it
+//* -> PHP web page that provides a point-and-click way of
+//*    generating and summitting JCL decks to perform restores
+//*    using the backup listing
+//*
+//* My personal usage
+//*    Scheduled MVS backups using bkbyvtoc and mdtapalc, plus 
+//*    mdmerge to produce the required backup report (disp=mod)
+//*    the backup report always grows. The scheduled jobs 
+//*    output writes to Linux files via the pipe printer script.
+//*    Scheduled Linux cron job processes the latest backup
+//*    report file so the PHP webpage can use it.
+//*    Voila, point and click restores.
+//*    *TODO/in-progress trim the ever growing backup listing
+//*     so only the last NN days of backups are retained to
+//*     match the tapeman3 tape retention period.
+//*
+//* =================== END JOB COMMENTS =======================
+//STORE    EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC
+//SYSUT2   DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC
+//SYSIN    DD   DATA,DLM=AA
+./ ADD NAME=MDTAPALC
+//MARKASMJ JOB  (0),'MDTAPALC',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+// DD DISP=SHR,DSN=SYS2.MACLIB      FOR YREGS
+//ASM.SYSIN DD *
+* ********************************************************************
+* MDTAPALC
+*
+* USED AS THE FIRST STEP IN MY BACKUP JOBS TO MOUNT (AND RETAIN)
+* A TAPE FOR LATER STEPS TO USE (PROCS USE REFERBACKS TO IT).
+* WE WRITE THE VOLSER ALLOCATED TO SYSPUNCH SO WE CAN USE IT FOR   
+* REPORTING IF REQUIRED BY LATER JOBS.
+*
+* DD CARDS REQUIRED, BOTH LRECL=80,RECFM=F
+*   SYSUT2   - OPEN/CLOSE A DISP=NEW FILE
+*   SYSPUNCH - WRITE THE VOLSER ALLOCATED TO SYSUT2
+*
+* BASI FUNCTIONALITY...
+* OPEN SYSUT2, READ THE VOLSER THAT HAS BEEN ALLOCATED, WRITE 
+* IT TO SYSPUNCH.
+* ********************************************************************
+MDTAPALC CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* ---------------------------------------------------------------
+*  OPEN
+*     SYSPUNCH  - TO RECORD VOLSER, DONE FIRST AS IF DD NOT
+*                 PRESENT LETS NOT OPEN SYSUT2 WHICH WOULD    
+*                 JUST WASTE A SCRATCH TAPE
+*     SYSUT2    - TO POPULATE JFCB INFO, THEN IMMEDIATELY CLOSE IT
+* ---------------------------------------------------------------
+         OPEN  (SYSPUNCH,(OUTPUT))
+         LTR   R15,R15
+         BNZ   NOSPUNCH     NON-ZERO = DD CARD MISSING
+*
+         OPEN  (SYSUT2,(OUTPUT))
+         LTR   R15,R15
+         BNZ   NOSYSUT2     NON-ZERO = DD CARD MISSING
+         CLOSE (SYSUT2)     JFCB NOW POPULATED, CLOSE IT AGAIN
+* ---------------------------------------------------------------
+* OBTAIN VOLSER ALLOCATED TO SYSUT2
+* WRITE IT TO SYSPUNCH AND CLOSE SYSPUNCH
+* ---------------------------------------------------------------
+         RDJFCB SYSUT2      GET SYSUT2 JFCB DETAILS       
+         LA    R2,JFCB2     MAP JFCB AREA
+         USING JFCBMAP,R2
+         MVC   DUMMYLIN(6),JFCBVOLS  VOLSER TO OUTPUT LINE
+         PUT   SYSPUNCH,DUMMYLIN     AND WRITE THE LINE
+         CLOSE (SYSPUNCH)
+* ---------------------------------------------------------------
+* EXIT CODE AND TEH TWO POSSIBLE ERRORS WE TEST FOR
+* ---------------------------------------------------------------
+EXIT     L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+EXIT04   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,4              EXIT CODE 4
+         BR    R14                RETURN TO SYSTEM
+NOSPUNCH WTO   'SYSPUNCH DD CARD APPEARS TO BE MISSING'
+         B     EXIT04
+NOSYSUT2 WTO   'SYSUT2 DD CARD APPEARS TO BE MISSING'
+         CLOSE (SYSPUNCH)         WAS OPENED
+         B     EXIT04
+* ---------------------------------------------------------------
+* THE JOLLY OLD DATA AREA
+* ---------------------------------------------------------------
+SAVEAREA DS    18F                   ENVIRONMENT SAVE AREA
+DUMMYLIN DC    CL80' '               GENERAL PURPOSE OUTPUT LINE
+SYSPUNCH DCB   DDNAME=SYSPUNCH,MACRF=PM,DSORG=PS,RECFM=F,              X
+               LRECL=80,BLKSIZE=80
+SYSUT2   DCB   DDNAME=SYSUT2,MACRF=PM,DSORG=PS,RECFM=F,                X
+               LRECL=80,BLKSIZE=80,EXLST=EXLST2
+         DS    0F
+EXLST2   DC    0F'0',X'87',AL3(JFCB2)
+JFCB2    DS    CL176
+JFCBMAP  DSECT
+         IEFJFCBN       DETAILED JFCB MAPPING
+         YREGS
+         END
+ZZ
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(MDTAPALC),DISP=SHR
+//
+./ ADD NAME=MDEXWRAP
+//MARKASMJ JOB  (0),'MDEXWRAP',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME
+//ASM.SYSIN DD *
+* ********************************************************************
+*
+* PROGRAM : MDEXWRAP
+*
+* CAUTION - THIS IS STILL A WORK IN PROGRESS
+*           TESTED OK WITH IEBGENER AND IEBCOPY (BUT SEE BUGS)
+*
+* REQUIREMENTS:
+* (1) THIS PROGRAM NEEDS MY DATE LIBRARIES INSTALLED IN ORDER TO 
+*     ASSEMBLE WITHOUT ERRORS.
+* (2) IF IEBCOPY IS TO BE USED THIS PROGRAM MUST BE APF AUTHORISED
+*     AND IN AN AUTHORISED LIBRARY, AS IEBCOPY MUST RUN AUTHORISED
+*     AS IT USES HIGH NUMBERED POOLS FOR GETMAINS.
+*
+* PURPOSE
+*    WRITTEN FOR MY BACKUP JOBS SO I CAN KEEP A LISTING OF WHAT
+*    FILES ARE BACKED UP ON WHAT TAPES.
+*    CAN BE USED WITH ANY PROGRAM THAT
+*      (A) IS BEING USED TO BACKUP TO TAPE
+*      (B) A N D THAT PROGRAM USES SYSUT2 AS THE OUTPUT DD
+*      IE: IEBCOPY AND IEBGENER :-)
+* FUNCTIONALITY
+*    LINKS TO THE PROGRAM SPECIFIED ON THIS PROGRAMS PARM TO
+*    PERFORM THE BACKUP, THE CALLED PROGRAM WILL POPULATE
+*    THE SYSUT2 JFCB WITH INFORMATION NOT AVAILABLE BEFORE
+*    THE OUTPUT FILE IS OPENED (SUCH AS THE TAPE VOLSER
+*    ASSIGNED BY THE OS AT DSN OPEN TIME). WE THEN USE THE
+*    JFCB DETAILS TO RECORD IN THE HISTFILE WHAT WAS REALLY
+*    WRITTEN ON THE TAPE.
+*
+* REQUIRED PARMS    : THE NAME OF THE PROGRAM TO EXECUTE
+*                     OR 'BANNER' TO WRITE NEW HEADER LINES TO
+*                     THE HISTFILE
+* REQUIRED DD CARDS : (1) ALL DD CARDS THE CALLED PROGRAM NEEDS
+*                     (2) HISTFILE (DCB RECFM=FB,LRECL=132)
+*                     (3) CALLED PROGRAM M U S T USE SYSUT2 FOR OUTPUT
+*
+* KNOWN ISSUES WORKED AROUND
+* ==========================
+* ISSUES WITH ALIGNMENT (IFOX00 ISSUE I ASSUME)
+*     SOMEWHERE IS A BYTE ALIGNMENT ISSUE IN THE CODE THE ASSEMBLER
+*     IS NOT ABLE TO DETECT/ADJUST/REPORT. ADDED LOTS OD 'DS 0F'
+*     AND 'CNOP 0,4' ENTRIES ALL OVER THE CODE WHICH HAS STOPPED
+*     THAT AS SHIPPED.
+*
+* CURRENT STATUS
+* ==============
+*     FUNCTIONALITY TESTED (WORKING, IN SMALL JOBS, ABEND IN LARGE)
+*         IEBCOPY AND IEBGENER
+*     CODE LOGIC IS 
+*        - IF IEBCOPY OR IEBGENER USE LINKED-IN/IMBEDDED IEBCOPY CODE
+*        - IF ANYTHING ELSE LINK TO THE PROGRAM REQUESTED
+*
+* BUGS
+* ====
+* STILL HAVE NOT TOTALLY ELIMINATED THE CORRUPTION CAUSING THE
+* MISSING DD CARD ERRORS, AS BELOW JOBLOG SHOWS
+*     DEBUG: USING EMBEDDED IEBCOPY
+*     DY02BKPU   STEP009   BACKUPPO  MDEXWRAP  RC= 0000
+*     MDEXWRAP - USING PGM IEBCOPY
+*     DEBUG: USING EMBEDDED IEBCOPY
+*     DY02BKPU   STEP010   BACKUPPO  MDEXWRAP  RC= 0000
+*     MDEXWRAP - USING PGM IEBCOPY
+*     DEBUG: USING EMBEDDED IEBCOPY
+*     IEC130I    1     DD STATEMENT MISSING
+*     IEB172I    1     COULD NOT BE OPENED
+*     IEB147I END OF JOB -04 WAS HIGHEST SEVERITY CODE
+*     DY02BKPU   STEP011   BACKUPPO  MDEXWRAP  RC= 0000
+*     MDEXWRAP - USING PGM IEBCOPY
+*     DEBUG: USING EMBEDDED IEBCOPY
+*     DY02BKPU   STEP012   BACKUPPO  MDEXWRAP  RC= 0000
+*     MDEXWRAP - USING PGM IEBCOPY
+*     DEBUG: USING EMBEDDED IEBCOPY
+*     DY02BKPU   STEP013   BACKUPPO  MDEXWRAP  RC= 0000
+* AND WILL RANDOMLY S0C1 OR SOC4, EXACTLY THE SAME JOB  
+* RUN AGAIN AND AGAIN WILL ABEND AT DIFFERENT STEPS WITH
+* S0C4 OR S0C1
+*     DY02BKPU   STEP043   BACKUPPS  MDEXWRAP  RC= 0000
+*     MDEXWRAP - USING PGM IEBCOPY
+*     DEBUG: USING EMBEDDED IEBCOPY
+*     IEF450I DY02BKPU BACKUPPO STEP044 - ABEND S0C1 U0000 
+*     DY02BKPU   STEP044   BACKUPPO  MDEXWRAP  AB S0C1
+*     DY02BKPU   STEP045   BACKUPPS  MDEXWRAP  *FLUSH*
+*     DY02BKPU   STEP046   BACKUPPS  MDEXWRAP  *FLUSH*
+*
+* SOOOOO, 2 ERRORS AND 42 SUCESS IN 44 STEPS, THIS IS DRIVING ME NUTS
+* ALSO, ABENDS IN DIFFERENT STEPS WHEN THE SAME JOB IS RUN AGAIN AND
+* AGAIN, SELDOM IN THE SAME PLACE.
+*
+* CHANGE HISTORY
+* DATE(APROX) CHANGES MADE
+* 2015/06/20 CREATED, CONSITENTLY S0C4 AND DD CARD MISSING ERRORS
+*            IF LINKING TO IEBCOPY, OCASSIONALLY LINKING TO IEBGENER
+* 2015/06/25 CHANGED LOGIC, IF IEBCOPY OR IEBGENER "CALL" A COPY OF
+*            THOSE PROGRAMS LINKEDITED INTO THIS PROGRAM, ADDED A
+*            BUFFER DATA AREA AT THE END OF THE PROGRAM. THIS 
+*            ELIMINATED ABENDS IN SINGLE STEP JOBS, BUT ABENDS STILL
+*            OCCUR IN LARGE MULTISTEP JOBS (MY BACKUPS USE 200 STEPS).
+* 2015/07/22 WONDERING IF IEBCOPY/IEBGENER PRESERVE ALL REGISTERS  
+*            EXCEPT R15, ADDED REGISTER SAVE/RESTORE FOR R0-R14 AROUND
+*            THE CALL, ALSO TEST R15 FOR NON-ZERO NOW.
+* ********************************************************************
+         EJECT
+* ---------------------------------------------------------------
+* MACROS FROM MY MACRO LIBRARY MOVED INLINE HERE SO THAT 
+* LIBRARY DOES NOT HAVE TO BE SHIPPED ALSO.
+* ---------------------------------------------------------------
+         MACRO
+&LABEL   TODEC8 &REG=,&BUF=,&MF=L
+.* *******************************************************************
+.*
+.* TODEC8 REG=REGISTER,BUF=STRING,MF=L(DEFAULT) or MF=R
+.*
+.* &REG - register with binary value
+.* &S1  - 8 byte (minimum) output string field
+.* MF=L ... a data area name is passed for the output string field
+.* MF=R ... a register containing the address of the data area is
+.*          passed for the output string field
+.* REGISTER 1 IS TRASHED
+.*
+.* *******************************************************************
+         AIF   ('&REG' EQ '').TD8ER01
+         AIF   ('&REG(1)' EQ '1').TD8ER03
+         AIF   ('&BUF' EQ '').TD8ER02
+         AIF   ('&MF' NE 'L' AND '&MF' NE 'R').TD8ER04
+&LABEL.  B     T8B&SYSNDX              SKIP DATA AREA
+         DS    0D
+T8A&SYSNDX DS    PL8                   PACKED DECIMAL WORK
+T8B&SYSNDX CVD   &REG,T8A&SYSNDX
+         AIF   ('&MF' NE 'L').TD8SKP1
+         LA    1,&BUF                  LIST FORMAT, DATA NAME
+         AGO   .TD8SKP2
+.TD8SKP1 LR    1,&BUF                  REGISTER FORMAT, REG HAS ADDR
+.TD8SKP2 UNPK  0(8,1),T8A&SYSNDX       UNPACK FOR LENGTH 8
+         OI    7(1),X'F0'              ZERO ZONE BIT
+         MEXIT
+.* POSSIBLE ERROR MNOTES ARE BELOW
+.TD8ER01 MNOTE 12,'REG MUST BE A VALID REGISTER'
+         MEXIT
+.TD8ER02 MNOTE 12,'BUF MUST BE A 8 BYTE CHAR FIELD'
+         MEXIT
+.TD8ER03 MNOTE 12,'YOU CANNOT USE REGISTER 1 HERE'
+         MEXIT
+.TD8ER04 MNOTE 12,'MF MUST BE MF=L OR MF=R'
+         MEND
+         EJECT
+MDEXWRAP CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* ---------------------------------------------------------------
+*  GET THE PROGRAM NAME WE ARE TO EXECUTE FROM THE PARM FIELD
+* ---------------------------------------------------------------
+         LTR   R1,R1                 DO WE HAVE A PARM ?
+         BZ    BADPARM               NO WE DON'T, ERROR OUT
+         L     R2,0(,R1)             YES, ADDRESS 1ST PARM FIELD
+*                                       PARMLEN IN 1ST TWO BYTES
+*                                       PARMDATA AFTER THAT
+         LH    R6,0(R2)              GET LENGTH
+         C     R6,=F'0'
+         BNH   BADPARM               IF PARMLEN 0, EMPTY PARM
+         S     R6,=F'1'              ADJUST FOR PARM HEADER AREA
+         C     R6,=F'9'              PGM NAME IS MAX 8 BYTES
+         BNL   BADPARM               SO IF NOT < 9 BAD PARM
+*                                     MOVE TO PROGNAME FIELD
+         EX    R6,PROGMOVE           LEN IN R6, SRC IN 2(R2)
+*
+* ---------------------------------------------------------------
+* BANNER ONLY REQUEST ?.
+* ---------------------------------------------------------------
+         CLC   PROGNAME(6),=CL6'BANNER'
+         BNE   REALWORK
+         OPEN  (HISTFILE,(OUTPUT))       OPEN THE HISTORY FILE
+         PUT   HISTFILE,LOGLINE          WRITE THE TITLES
+         PUT   HISTFILE,LOGLINE2         WRITE THE UNDERLINES
+         CLOSE (HISTFILE)                DONE WITH THE HISTORY FILE
+         B     EXIT
+* ---------------------------------------------------------------
+* ---------------------------------------------------------------
+REALWORK CNOP  0,4
+         MVC    LOGPGM+29(8),PROGNAME
+LOGPGM   WTO   'MDEXWRAP - USING PGM xxxxxxxx '
+         CLC   PROGNAME(7),=CL7'IEBCOPY'           
+         BE    CALLCPYA  
+         CLC   PROGNAME(7),=CL7'IEBGENER'           
+         BE    CALLCPYB  
+         B     USELINK       ELSE LINK TO THE NAMED PROGRAM
+
+*    IEBCOPY HAS NO ENTRY POINT NAMED IEBCOPY, USE IEBDSCPY
+CALLCPYA STM   R0,R14,SAVECALL
+         WTO   'DEBUG: USING EMBEDDED IEBCOPY'
+         CNOP  0,4
+         CALL  IEBDSCPY      IEBCOPY ENTRY POINT IS IEBDSCPY
+         LM    R0,R14,SAVECALL
+         LTR   R15,R15
+         BNZ   EXIT04
+         B     TASKDONE
+CALLCPYB STM   R0,R14,SAVECALL
+         WTO   'DEBUG: USING EMBEDDED IEBGENER'
+         CNOP  0,4
+         CALL  IEBGENER      
+         LM    R0,R14,SAVECALL
+         LTR   R15,R15
+         BNZ   EXIT04
+         B     TASKDONE
+*
+         DS    0F               BOTH THESE TWO LINES OR S0C4
+USELINK  CNOP  0,4
+         STM   R0,R14,SAVECALL
+         LINK  EPLOC=PROGNAME,ERRET=NOPROG
+         LM    R0,R14,SAVECALL
+         LTR   R15,R15
+         BNZ   EXIT04
+         B     TASKDONE
+*
+         DS    0F               BOTH THESE TWO LINES OR S0C4
+TASKDONE CNOP  0,4
+         BAL   R5,EXTRJFCB               JFCB INFO INTO OUTPUT LINE
+         MVC   LOGLINE+100(8),PROGNAME   RECORD PGM USED
+         UDATEMAC DATA=UDATEVAR,ERROR=NODATE
+         MVC   LOGLINE+15(4),D370YEAR    YYYY/MM/DD
+         MVC   LOGLINE+20(2),D370MMDD
+         MVC   LOGLINE+23(2),D370MMDD+2
+         MVC   LOGLINE+26(2),D370YEAR+2  YYJJJ
+         MVC   LOGLINE+28(3),D370JDAY          
+         OPEN  (HISTFILE,(OUTPUT))       OPEN THE HISTORY FILE
+         PUT   HISTFILE,LOGLINE          WRITE THE DATA
+         CLOSE (HISTFILE)                DONE WITH THE HISTORY FILE
+*
+EXIT     L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+         EJECT
+* ---------------------------------------------------------------
+* ERROR MESSAGE ROUTINES AND ERROR EXIT CODE
+* ---------------------------------------------------------------
+NOPROG   MVC   NOPROGW+8(8),PROGNAME
+NOPROGW  WTO   '........ FAILED TO RUN, SEE EARLIER MESSAGE'
+         B     EXIT04
+BADPARM  WTO   'YOU MUST PROVIDE A VALID PROGRAM NAME IN THE PARM'
+         B     EXIT04
+NODATE   WTO   'MARKS DATE UTILIES NOT IN LINKLIST, THEY ARE REQUIRED'
+EXIT04   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,4              EXIT CODE 4
+         BR    R14                RETURN TO SYSTEM
+         EJECT
+****************************************************
+* GET OUTPUT DATASET INFO FROM THE SYSUT2 JFCB
+****************************************************
+EXTRJFCB CNOP  0,4
+         RDJFCB SYSUT2
+*  JFCB+44(8) is a member name. That would only be
+* usefull if we were checking what the input file was,
+* we only care about the output file on the tape.
+*
+*
+EXTRCONT MVC   LOGLINE(6),JFCBVOLS       VOLSER
+         LH    R3,JFCBVLSQ               TAPE SEQNO (MULTIVOL)
+         TODEC8 REG=R3,BUF=NUM8
+         MVC   LOGLINE+7(3),NUM8+5
+         LH    R3,JFCBFLSQ               TAPE FILE POSITION
+         TODEC8 REG=R3,BUF=NUM8
+         MVC   LOGLINE+11(3),NUM8+5
+         MVC   LOGLINE+32(44),JFCBDSNM   DSN 
+* --- TEST WHAT THE SYSUT2 DSORG USED WAS
+GETDSORG MVI   LOGLINE+79,C' '  BLANK LAST UNUSED DISPLAY BYTE
+         TM    JFCDSRG1,JFCORGIS
+         BO    DSORGIS
+         TM    JFCDSRG1,JFCORGPS
+         BO    DSORGPS
+         TM    JFCDSRG1,JFCORGDA
+         BO    DSORGDA
+         TM    JFCDSRG1,JFCORGPO
+         BO    DSORGPO
+         TM    JFCDSRG1,JFCORGU   UNMOVABLE, NOT UNSTRUCTURED
+         BO    DSORGU 
+         MVC   LOGLINE+77(2),=CL2'??'  SAY WHAT, NOT DEFINED !
+         B     GETRECF
+DSORGIS  MVC   LOGLINE+77(2),=CL2'IS'
+         B     GETRECF
+DSORGPS  MVC   LOGLINE+77(2),=CL2'PS'
+         B     GETRECF
+DSORGDA  MVC   LOGLINE+77(2),=CL2'DA'
+         B     GETRECF
+DSORGPO  MVC   LOGLINE+77(2),=CL2'PO'
+         B     GETRECF
+DSORGU   MVC   LOGLINE+77(2),=CL2'FX'
+         B     GETRECF
+* --- TEST WHAT THE SYSUT2 RECFM USED WAS
+GETRECF  MVC   LOGLINE+81(4),=CL4'?   ' 4 BYTE FIELD IN DATALINE
+         TM    JFCRECFM,JFCRFB  
+         BNO   GETRECF2              NOT BLOCKED
+         MVI   LOGLINE+82,C'B'       IS BLOCKED
+GETRECF2 TM    JFCRECFM,JFCUND  
+         BO    RECFMU
+         TM    JFCRECFM,JFCFIX  
+         BO    RECFMF
+         TM    JFCRECFM,JFCVAR  
+         BO    RECFMV
+RECFMV   MVI   LOGLINE+81,C'V'
+         B     GETRECF3
+RECFMU   MVI   LOGLINE+81,C'U'
+         B     GETRECF3
+RECFMF   MVI   LOGLINE+81,C'F'
+*
+GETRECF3 TM    JFCRECFM,JFCCHAR+JFCASA
+         BO    RECFMA
+         TM    JFCRECFM,JFCCHAR+JFCMAC
+         BNO   GETBLKSZ
+RECFMM   MVI   LOGLINE+83,C'M'
+         B     GETBLKSZ
+RECFMA   MVI   LOGLINE+83,C'A'
+*
+* --- TEST WHAT THE SYSUT2 BLKSIZE USED WAS
+GETBLKSZ CNOP  0,4
+         LH    R3,JFCBLKSI
+         TODEC8 REG=R3,BUF=NUM8 
+         MVC   LOGLINE+86(7),NUM8+1           BLKSIZE
+* --- TEST WHAT THE SYSUT2 LRECL USED WAS
+         LH    R3,JFCLRECL
+         TODEC8 REG=R3,BUF=NUM8 
+         MVC   LOGLINE+94(5),NUM8+3 
+* === DONE WITH JFCB MAPPING, DROP R2
+         BR    R5
+         EJECT
+* ************************************************************
+* THE JOLLY DATA AREA.
+* ************************************************************
+         LTORG
+SAVEAREA DS    18F                   ENVIRONMENT SAVE AREA
+SAVECALL DS    15F                   TO SAVE R0-R14
+PROGNAME DC    CL8' '                PROGRAM NAME TO EXECUTE
+PROGMOVE MVC   PROGNAME(0),2(R2)     SAVE PGM NAME IN BELOW
+NUM8     DC    CL8' '                USED FOR NUM CONVERSION
+TASKECB  DS    F                                               DEBUG
+TCBADDR  DS    F                                               DEBUG
+FLAG     DC    X'00'                                           DEBUG
+         DS    0F                  Fullword alignment.         DEBUG
+HEXTRT   EQU   *-X'F0'             16 Byte Translate Table.    DEBUG
+         DC    XL16'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'  F0 - FF DEBUG
+HEXBIN   DS    XL4                 4 Byte Binary Field.        DEBUG
+         DS    X                   1 Byte Pad for UNPK.        DEBUG
+HEXDIS   DS    CL8                 8 Byte Displayable Hex FieldDEBUG
+         DS    C                   1 Byte Pad for UNPK.        DEBUG
+*
+* Log message format
+* tttttt - tape volser used for backup
+* qqq - tape vol number for multivol backups
+* seq - file sequence number/position on tape
+* yyyy/mm/dd - self explainatory
+* yyddd - julian date format (easier for expiry checking)
+* dddddddd.ddd..... dataset name 44 bytes thru to byte 76
+* org - dsorg
+* recf - record format
+* blksize
+* lrecl
+* progname - actual program used to do the backup
+* ...takes us to byte 99 so a few bytes left for other stuff later
+*                    ....+....1....+....2....+....3....+....4....+....5
+*              ....+....6....+....7....+....8....+....9....+....1....+.
+*              ...2....+....3..
+*              CL132'tttttt qqq seq yyyy/mm/dd yyddd dddddddd.dddddddd.
+*              dddddddd.dddddddd.dddddddd org recf blksize lrecl progna
+*              me 
+LOGLINE  DC    CL132'VOLSER SEQ POS DATE       JDATE DATASET NAME      X
+                                          ORG RECF BLKSIZE LRECL PROGRAX
+               M '
+* SECOND LINE USED BY BANNER ONLY
+LOGLINE2 DC    CL132'------ --- --- ---------- ----- ------------------X
+               -------------------------- --- ---- ------- ----- ------X
+               --'
+         UDATEVAR DSECT=NO           DATA AREA FOR DATE UTILITY
+*
+*
+         DS    0F
+EXLST2   DC    X'87',AL3(JFCB2)
+JFCB2    DS    0CL176
+         IEFJFCBN LIST=YES
+*
+HISTFILE DCB   DDNAME=HISTFILE,DSORG=PS,MACRF=PM,                      X
+               BLKSIZE=5280,RECFM=FB,LRECL=132
+*
+* USING MACRF=R ABENDS SB0A WHEN IT TRIES TO GET STORAGE (PS AND PO)
+* USING TYPE PO AND MACRF=GM IEBCOPY GETS GARBAGE IN DDNAME
+* PO AND GM WORKS FOR IEBGENER BUT SB0A ON IEBCOPY
+* PO AND PM ARE INVALID COMBINATION
+* PS AND (PM) GIVES IEBCOPY GARBAGE IN DDNAME
+* USING DEVD=TA IS S0C4 WHICH IS AN IMPROVEMENT
+*      BUT PADDING DCB TO 512 BYTES OR ADDING PADDING AFTER
+*      THE DCB MAKES IEBGENER REPORT DD garbagebytes MISSING
+* --- WHAT DOES IEBCOPY NEED SET ?
+* --- IEBGENER IS WORKING OK
+         DS    0CL512         ADD A PADDING DATA AREA
+SYSUT2   DCB   DDNAME=SYSUT2,DSORG=PS,MACRF=(PM),EXLST=EXLST2
+         ORG
+STPS0C4A DS    CL256          IF THIS IS NOT HERE IEBGENER WILL
+*                             S0C4. THE DCB BEING BUILT IS NOT
+*                             CREATING A LARGE ENOUGH DATA
+*                             AREA.
+STPS0C4B DS    CL256          ANOTHER FOPR IEBCOPY NEEDEDING   
+*                             EVEN MORE SPACE ? (SOC4'S ON
+*                             SYS2.LINKLIB FOR SOME REASON)
+         EJECT
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+ZZ
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=SYS9.LINKLIB.APFAUTH(MDEXWRAP),DISP=SHR
+//LKED.SYSIN   DD *
+ SETCODE AC(1)
+ INCLUDE IBMLIB(IEBCOPY)
+ INCLUDE IBMLIB(IEBGENER)
+ ENTRY MDEXWRAP
+ NAME MDEXWRAP(R)
+/*
+//LKED.IBMLIB DD DISP=SHR,DSN=SYS1.LINKLIB
+//LKED.SYSLIB DD DUMMY
+//
+./ ADD NAME=MDEXDSET
+//MARKDSET JOB  (0),'MAKEDSET',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//*
+//* CREATE A HISTORY FILE THAT CAN BE USED BY MDEXWRAP
+//* - USE MDEXWRAP TO CREATE IT SO WE CAN WRITE THE
+//*   HEADER LINES IN THIS SAME STEP.
+//*
+//CREATE   EXEC PGM=MDEXWRAP,PARM='BANNER' 
+//HISTFILE DD   DISP=(NEW,CATLG,DELETE),
+// UNIT=3380,VOL=SER=PUB002,
+// SPACE=(CYL,(10,10)),
+// DCB=(DSORG=PS,RECFM=FB,LRECL=132,BLKSIZE=5280),
+// DSN=MARK.BKPLIST.TAPELOG.HISTFILE
+//
+./ ADD NAME=MDEXTEST
+//MARKTEST JOB  (0),'TESTPROG',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//*
+//* THIS JOB IS NOT INTENDED TO REPLACE THE 'TESTJOB' MEMBER
+//* THAT EXERCISES MDEXWRAP IN CONJUNCTION WITH BKBYVTOC AND
+//* THE TEMPLATE FILES.
+//* THIS EXISTS FOR TESTING TO MAKE SURE THE HISTFILE RECORDS
+//* THE CORRECT 'NEW' NAME FOR DATASETS WHEN A NEW NAME IS 
+//* USED FOR OUTPUT.
+//* THE JOBS/TEMPLATES RUN BY THE BKBTVTOC TEMPLATES USE THE
+//* SAME NAMES, SO THERE HAS TO BE THIS SEPERATE TEST.
+//*
+//* TEST THE MDEXWRAP PROGRAM USING IEBGENER AND IEBCOPY
+//*    IEBCOPY OFFLOADS SHOULD BE 
+//*       DSORG=PS,RECFM=VM,LRECL=280 AND BLKSIZE=284 
+//*       (4 BYTE KEY ADJUSTS THE BLKSIZE)
+//*    IEBGENER COPIED FILES SHOULD BE
+//*       DSORG=PS, SAME DCB AS INPUT IF A PS INPUT FILE,
+//*       IF A MEMBER FROM A PDS ?.
+//*
+//* -- WE ARE USING DIFFERENT DATASET NAMES ON THE 
+//*    TAPE, HISTLOG SHOULD HAVE THE NAMES ON THE TAPE
+//*
+//* REVIEW THE HISTFILE FILE CONTENTS TO VERIFY THE
+//* RESULTS ARE AS EXPECTED.
+//*
+//*
+//* TEST1 - SEQUENTIAL FILE BACKUP
+//*
+//* CURRENTLY - WORKS OK
+//*
+//TEST1    EXEC PGM=MDEXWRAP,PARM='IEBGENER',COND=(0,NE)
+//HISTFILE DD   DISP=MOD,DSN=MARK.BKPLIST.TAPELOG.HISTFILE
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,DSN=SYS1.PARMLIB(JES2PARM)
+//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=(TAPE,,DEFER),LABEL=(1,SL),
+// DSN=MARK.DELME1,DCB=*.SYSUT1,VOL=(,RETAIN)
+//SYSIN    DD   DUMMY
+//*
+//* TEST2 - PARTITIONED FILE BACKUP
+//*
+//TEST2    EXEC PGM=MDEXWRAP,PARM='IEBCOPY',COND=(0,NE)
+//HISTFILE DD   DISP=MOD,DSN=MARK.BKPLIST.TAPELOG.HISTFILE
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,DSN=SYS1.PARMLIB
+//SYSUT2   DD   DISP=(NEW,KEEP),UNIT=(TAPE,,DEFER),LABEL=(2,SL),
+// DSN=SYS1.PARMLIB.BKP,
+// VOL=REF=*.TEST1.SYSUT2
+//SYSUT3   DD   DISP=(NEW,DELETE,DELETE),
+// SPACE=(CYL,(5,5)),UNIT=SYSDA
+//SYSUDUMP DD SYSOUT=*
+//SYSIN    DD   *       
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+/*
+//
+./ ADD NAME=MDMERGE
+//MARKASMJ JOB  (0),'TESTPROG',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB      FOR YREGS
+//ASM.SYSIN DD *
+* ********************************************************************
+* MDMERGE 
+* MERGE THE LIST OF TAPES USED BY THE BACKUPS WITH THE BACKUP
+* REPORT LISTING, PRODUCING A NEW COMBINED REPORT.
+*
+* DD CARDS REQUIRED
+*  INVOLSER  - (INPUT) LIST OF VOLSERS USED BY ALL BACKUP JOBS
+*  INBKPRPT  - (INPUT) BACKUP LISTING PRODUCED BY BKBYVTOC
+*  OUTRPT    - (OUTPUT) NEW MERGED REPORT
+* ********************************************************************
+MDMERGE  CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* ---------------------------------------------------------------
+* READ ALL CARDS FROM INVOLSER (UP TO MAXTAPES) INTO THE BUFFER
+* AREA WE SET ASIDE FOR THEM.
+* ---------------------------------------------------------------
+         OPEN  (INVOLSER,(INPUT))
+         LTR   R15,R15
+         BNZ   ERROPEN              OPEN FAILED
+         LA    R2,0                 USE R2 TO COUNT CARDS
+         LA    R3,TAPELIST          WHERE WE STORE THEM
+NEXTVLSR GET   INVOLSER,INLINE      READ A CARD
+         MVC   0(6,R3),INLINE       SAVE INTO BUFFER
+         A     R2,ONE               INCREMENT COUNTER
+         A     R3,SIX               INCREMENT BUFER OFFSET
+         C     R2,MAXTAPES          AT MAX ALLOWED ?
+         BL    NEXTVLSR             NO, OK TO GET NEXT CARD
+*                                   YES, STOP NOW
+         WTO   'MAX VOLSERS ALLOWED BY PROGRAM, SKIPPING THE REST'
+ENDVOLSR CLOSE (INVOLSER)           EOF ON INVOLSER FILE
+         C     R2,ZERO              MAKE SURE WE READ SOME
+         BNH   ERRVOLSR
+         ST    R2,CNTTAPES          SAVE NUMBER IF ENTRIES READ
+* ---------------------------------------------------------------
+* READ LINES FROM THE BKBYVTOC REPORT, MERGING THE DATE FIELDS
+* FROM THE REPORT BANNER, AND THE CORRECT VOLSER FROM THE VOLSER
+* LIST ONTO EACH LINE.
+* ---------------------------------------------------------------
+         OPEN  (INBKPRPT,(INPUT))
+         LTR   R15,R15
+         BNZ   ERROPEN      DD CARD MISSING OR SECURITY ERROR
+         OPEN  (OUTRPT,(OUTPUT))
+         LTR   R15,R15
+         BNZ   ERROPEN      DD CARD MISSING OR SECURITY ERROR
+*
+         LA    R3,TAPELIST       ADDRESS BUFFERED TAPE LIST
+         S     R3,SIX            MOVE BACK 6, SO LOOP CAN ADJUST
+         L     R2,CNTTAPES       GET BACK TAPE COUNT
+NEXTRPTL GET   INBKPRPT,INLINE
+* IF BANNER UNDERLINE SKIP
+         CLC   INLINE+1(14),=CL14'--- ------ ---'
+         BE    NEXTRPTL
+* IF BANNER LINE, EXTRACT BACKUP DATE FIELDS
+         CLC   INLINE+1(14),=CL14'POS VOLSER ORG'
+         BNE   CONTRPT1
+         MVC   BKPDATE1(10),INLINE+56
+         MVC   BKPDATE2(5),INLINE+73
+         B     NEXTRPTL         DONE WITH THIS REPORT LINE
+* IF TAPE DATASET FILEPOS IS 001 NEXT VOLSER NEEDED
+CONTRPT1 CLC   INLINE+1(3),=CL3'001'
+         BNE   CONTRPT3
+         C     R2,ZERO          ALREADY USED ALL VOLSERS ?
+         BH    CONTRPT2         NO, OK TO CARRY ON
+* ELSE USE ------ AS VOLSER FOR ALL REMAINING REPORT ENTRIES
+         WTO   'REPORT FILE USED MORE TAPES THAN PROGRAM BUFFERED'
+         MVC   TAPELIST(6),=CL6'------'
+         LA    R3,TAPELIST
+         B     CONTRPT3
+CONTRPT2 A     R3,SIX           POINT TO NEXT VOLSER ENTRY
+         S     R2,ONE           ONE LESS VOLSER TO USE
+* MOVE INLINE TO OUTLINE, LEAVE SPACE FOR NEW LEADING FIELDS
+CONTRPT3 MVC   OUTLINE+25(79),INLINE+1
+* AND INSERT THE EXTRA FIELDS, DATES AND VOLSERS
+*   T O D O
+         MVC   OUTLINE(10),BKPDATE1  REPORT BACKUP DATE
+         MVC   OUTLINE+11(5),BKPDATE2  REPORT BACKUP JDATE
+         MVC   OUTLINE+18(6),0(R3)      CURRENT ADDRESSED VOLSER
+* WRITE THE NEW REPORT LINE
+         PUT   OUTRPT,OUTLINE
+         B     NEXTRPTL         AND GET THE NEXT REPORT LINE
+ENDRPT   CLOSE (INBKPRPT)
+         CLOSE (OUTRPT)
+         C     R2,ZERO          DID WE USE ALL VOLSERS READ ?
+         BE    EXIT             YES, ALL OK
+*                               ELSE WRITE A WARNING BUT ALL OK
+         WTO   'REPORT PROVIDED DID NOT CONTAIN ALL TAPES USED'
+* ---------------------------------------------------------------
+* EXIT CODE AND THE TWO POSSIBLE ERRORS WE TEST FOR
+* ---------------------------------------------------------------
+EXIT     L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+EXIT04   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,4              EXIT CODE 4
+         BR    R14                RETURN TO SYSTEM
+ERROPEN  WTO   'UNABLE TO OPEN ALL REQUIRED FILES'
+         B     EXIT04
+ERRVOLSR WTO   'NO DATA CARDS READ FROM DD INVOLSER'
+         B     EXIT04
+* ---------------------------------------------------------------
+* THE JOLLY OLD DATA AREA
+* ---------------------------------------------------------------
+SAVEAREA DS    18F                   ENVIRONMENT SAVE AREA
+INLINE   DC    CL80' '               GENERAL PURPOSE INPUT LINE
+OUTLINE  DC    CL132' '              GENERAL PURPOSE OUTPUT LINE
+TAPELIST DS    CL120                 20x6 BYTE VOLSER LIST
+BKPDATE1 DS    CL10                  REPORT BACKUP DATE YYYY/MM/DD
+BKPDATE2 DS    CL5                   REPORT BACKUP JDATE YYDDD
+MAXTAPES DC    F'20'                 MAX TAPES WE CAN HANDLE
+CNTTAPES DS    F                     NUMBER OF VOLSERS BUFFERED
+RPTTAPES DS    F                     CURRENT TAPE NUMBER IN REPORT
+ZERO     DC    F'0'                  ZERO, FOR COMPARES
+ONE      DC    F'1'                  ONE, FOR COUNTING
+SIX      DC    F'6'                  SIX, FOR BUFFER INDEXING
+INVOLSER DCB   DDNAME=INVOLSER,MACRF=GM,DSORG=PS,RECFM=F,              X
+               LRECL=80,BLKSIZE=80,EODAD=ENDVOLSR
+INBKPRPT DCB   DDNAME=INBKPRPT,MACRF=GM,DSORG=PS,RECFM=F,              X
+               LRECL=80,BLKSIZE=80,EODAD=ENDRPT
+OUTRPT   DCB   DDNAME=OUTRPT,MACRF=PM,DSORG=PS,RECFM=F,                X
+               LRECL=132,BLKSIZE=132
+         YREGS
+         END
+ZZ
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=SYS9.LINKLIB(MDMERGE),DISP=SHR
+//
+./ ADD NAME=MDDAYCC
+//MARKA    JOB (0),' TESTING',CLASS=A,MSGCLASS=T,        
+//   MSGLEVEL=(1,1)
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+// DD DISP=SHR,DSN=SYS2.MACLIB   
+// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME      DATE UTILITIES
+//ASM.SYSIN DD *
+         TITLE 'MDDAYCC - RETURN CC 0-6 BASED ON DAY NUMBER'
+         PRINT NOGEN
+***********************************************************************
+* DESIRED PURPOSE: RETURN CC 0-6 FOR SUN-SAT TO CONTROL BATCH STEPS
+*                  DEPENDANT UPON SPECIFIC DAYS.
+* INVOCATION     : JUST CALL THE PROGRAM. NO PARM DATA OR DD CARDS REQD
+***********************************************************************
+MDDAYCC  CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT08   EXIT08=NO DATE MODULES
+         CLI   D370WKDY,C'0'
+         BE    EXIT00                          00=SUNDAY
+         CLI   D370WKDY,C'1'
+         BE    EXIT01                          01=MONDAY
+         CLI   D370WKDY,C'2'
+         BE    EXIT02                          03=TUESDAY
+         CLI   D370WKDY,C'3'
+         BE    EXIT03                          04=WEDNESDAY
+         CLI   D370WKDY,C'4'
+         BE    EXIT04                          05=THURSDAY
+         CLI   D370WKDY,C'5'
+         BE    EXIT05                          06=FRIDAY
+         CLI   D370WKDY,C'6'
+         BE    EXIT06                          07=SATURDAY
+         B     EXIT12                          EXIT12=DATELIB ERROR
+EXIT00   WTO   'RC=00 SUNDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,0
+         BR    R14
+EXIT01   WTO   'RC=01 MONDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,1
+         BR    R14
+EXIT02   WTO   'RC=02 TUESDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,2
+         BR    R14
+EXIT03   WTO   'RC=03 WEDNESDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,3
+         BR    R14
+EXIT04   WTO   'RC=04 THURSDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,4
+         BR    R14
+EXIT05   WTO   'RC=05 FRIDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,5
+         BR    R14
+EXIT06   WTO   'RC=06 SATURDAY'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,6
+         BR    R14
+EXIT08   WTO   'REQUIRED DATE MODULES ARE NOT IN THE LINKLIST'
+         WTO   'INSTALL MARKS DATE LIBRARIES !'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,0
+         BR    R14
+EXIT12   WTO   'INVALID DATA RETURNED FROM DATE LIBRARY'
+         WTO   'CHECK YOU HAVE THE LATEST VERSION'
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         LA    R15,0
+         BR    R14
+SAVEAREA DC    18F'0'             SAVE AREA
+         UDATEVAR DSECT=NO        BUFFER NEEDED FOR DATE LIBRARY
+         YREGS
+         END   MDDAYCC 
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(MDDAYCC),DISP=SHR
+//*
+//TEST0001 EXEC PGM=MDDAYCC,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//
+./ ADD NAME=MDMETRIM
+//MARKASMJ JOB  (0),'TESTPROG',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB      FOR YREGS
+// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME  MY DATE MACROS
+//ASM.SYSIN DD *
+* *********************************************************************
+* MDMETRIM
+* COPY MERGED REPORT FILE TO A NEW FILE, OMITTING ANY LINES THAT
+* ARE FOR BACKUPS OVER NN DAYS OLD.               
+*
+* RETENTION DEFAULTS TO 14 DAYS, CAN BE OVERRIDDEN VIA PARM FOR A
+* MAX OF 364 DAYS ( ALWAYS KEEP AT LEAST 1 :-) )
+*
+* THERE HAS BEEN NO ATTEMPT TO HANDLE LEAP YEARS, KEEPIND AN EXTRA
+* ONE DAYS DATA FOR ONE DAY EVERY FOUR YEARS IS NOT AN ISSUE WORTH 
+* EXPENDING THE EFFORT ON AS I AM THE ONLY ONE USING THIS.
+* (MAY PUT SOMETHING IN THE DATELIB ONE DAY INSTEAD)
+*
+* DD CARDS REQUIRED
+*  SYSUT1    - (INPUT) OLD MERGED REPORT FILE                       
+*  SYSUT2    - (OUTPUT) NEW MERGED REPORT FILE                
+* *********************************************************************
+MDMETRIM CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* ---------------------------------------------------------------------
+* CHECK THE PARM FIELD TO SEE IF DEFAULT 14 DAYS BEING CHANGED.
+* IF SO THEN IT MUST BE A VALUE FROM 1 TO 364 
+* IF NO PARM IS PROVIDED THE PROGRAM DEFAULT OF 14 WILL BE USED.
+* ---------------------------------------------------------------------
+         LTR   R1,R1         ANY PARM DATA ?
+         BZ    USEDEFLT      NO PARM, USE DEFAULT VALUE
+         L     R2,0(,R1)     R2 TO ADDRESS PARM DATA FIELD
+         SR    R1,R1         CLEAR R1
+         LH    R1,0(R2)      SET R1 TO PARM LEN
+         C     R1,=F'0'      PARM LEN 0 ?
+         BE    USEDEFLT      YES, NO PARM, USE DEFAULT VALUE
+PARMTST3 C     R1,=F'3'      CANNOT BE MORE THAN THREE BYTES
+         BH    BADPARM
+         BL    PARMTST2      IF LOW < 3
+         MVC   PARMVAL(3),2(R2)    SAVE 3 BYTES
+         B     CARRYON
+PARMTST2 C     R1,=F'2'      IS IT TWO BYTES ?                    
+         BL    PARMTST1      IF LOW < 2
+         MVC   PARMVAL+1(2),2(R2)    SAVE 2 BYTES
+         B     CARRYON
+PARMTST1 MVC   PARMVAL+2(1),2(R2)    SAVE 1 BYTES
+* Lets make sure parm is all 0 to 9 values
+* Only three bytes, don't bother with a loop
+CARRYON  CLI   PARMVAL,C'0'
+         BL    BADPARM
+         CLI   PARMVAL,C'9'
+         BH    BADPARM
+         CLI   PARMVAL+1,C'0'
+         BL    BADPARM
+         CLI   PARMVAL+1,C'9'
+         BH    BADPARM
+         CLI   PARMVAL+2,C'0'
+         BL    BADPARM
+         CLI   PARMVAL+2,C'9'
+         BH    BADPARM
+* Its OK then
+         PACK  DBL,PARMVAL(3) TO BINARY
+         CVB   R2,DBL                   
+         C     R2,=F'0'      IF ZERO, BAD PARM
+         BE    BADPARM
+         C     R2,=F'364'    IF > 364 A BAD PARM
+         BH    BADPARM
+         ST    R2,DAYSBACK    SAVE NEW DAYSBACK 
+* ---------------------------------------------------------------------
+USEDEFLT CNOP  0,4
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT08
+* Convert all the ebcdic string data to binary so we can use it
+* Use R2,R2 pair for multiplication
+         PACK  DBL,D370YEAR+2(2)        YY PART OF CCYY FIELD TO ODD
+         CVB   R3,DBL                   YY INTO ODD REGISTER
+         M     R2,=F'1000'              M THE EVEN TO YY000 IN R3
+         LR    R2,R3                    SAVE RESULT IN R2, WE REUSE R3
+         PACK  DBL,D370JDAY(3)          JDATE DDD FIELD TO BINARY
+         CVB   R1,DBL           
+         L     R3,DAYSBACK              R3 WORK REG FOR DAYSBACK+1
+         A     R3,=F'1'
+         CR    R1,R3                    CAN WE SUBTRACT DAYSBACK ?
+         BNL   THISYEAR                 YES, CURRENT YEAR OK
+         S     R2,=F'1000'              NO, DROP YEAR BY 1...
+         A     R1,=F'365'               ...ADD A YEARS DAY TO ADJUST
+*                                       ...SO YY000 AND DDD SHOULD 
+*                                    ...NOW BE (YY-1)000 AND 365+DDD
+THISYEAR AR    R2,R1                    ADD TO YY000 TO GET YYDDD
+         S     R2,DAYSBACK              BACK THE DAYSBACK DAYS NOW
+         ST    R2,JDATEMIN              AND SAVE VALUE
+*
+* DEBUG
+         CVD   R2,DBL                   CHANGE TO DISPLAYABLE FOR WTO
+         UNPK  DSPLYNUM,DBL     
+         OI    DSPLYNUM+7,X'F0'
+         MVC   WTODBG01+34(8),DSPLYNUM
+         L     R2,DAYSBACK
+         CVD   R2,DBL                   CHANGE TO DISPLAYABLE FOR WTO
+         UNPK  DSPLYNUM,DBL     
+         OI    DSPLYNUM+7,X'F0'
+         MVC   WTODBG01+50(3),DSPLYNUM+5
+WTODBG01 WTO   'EXPIRING RECORDS PRIOR TO ....+..., USING nnn DAYS' 
+*
+         OPEN  (SYSUT1,(INPUT))
+         OPEN  (SYSUT2,(OUTPUT))
+NEXTCARD GET   SYSUT1,RPTLINE           READ A CARD
+         PACK  DBL,RPTLINE+11(5)        JDATE FIELD TO BINARY
+         CVB   R1,DBL      
+         C     R1,JDATEMIN        TEST DATE BELOW RETAIN DATE ?
+         BL    NEXTCARD                 YES, DROP CARD AND GET THE NEXT
+         PUT   SYSUT2,RPTLINE           NO, KEEP THE CARD
+         B     NEXTCARD                   AND GET THE NEXT CARD
+ENDCARDS CLOSE (SYSUT1,,SYSUT2)         EOF ON SYSUT1, CLOSE FILES
+* ---------------------------------------------------------------------
+EXIT00   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+EXIT08   WTO   'REQUIRED DATE MODULES NOT IN LINKLIST'
+EXIT08B  L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,8              EXIT CODE 8
+         BR    R14                RETURN TO SYSTEM
+BADPARM  WTO   'INVALID PARM, EXCEEDS 3 BYTES OR NOT BETWEEN 1 AND 364'
+         B     EXIT08B
+* ---------------------------------------------------------------------
+* THE JOLLY OLD DATA AREA
+* ---------------------------------------------------------------------
+SAVEAREA DS    18F                   ENVIRONMENT SAVE AREA
+DAYSBACK DC    F'14'                 DEFAULT 14 DAYS
+DBL      DS    D                     DOUBLEWORD FOR PACK/CVB
+JDATEMIN DS    F                     MINIMUM JDATE TO KEEP
+RPTLINE  DS    CL132                 RECORD IN/OUT LINE
+PARMVAL  DC    CL3'000'              WORK AREA FOR PARM ..N
+DSPLYNUM DS    CL8                   FOR DEBUGGING
+         DS    0F
+SYSUT1   DCB   DDNAME=SYSUT1,MACRF=GM,DSORG=PS,RECFM=F,                X
+               LRECL=132,BLKSIZE=132,EODAD=ENDCARDS
+SYSUT2   DCB   DDNAME=SYSUT2,MACRF=PM,DSORG=PS,RECFM=F,                X
+               LRECL=132,BLKSIZE=132
+         UDATEVAR DSECT=NO           DATA AREA NEEDED FOR DATE MACROS
+         YREGS
+         END
+ZZ
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(MDMETRIM),DISP=SHR
+//
+./ ADD NAME=$$DOC2
+(1) About this file
+(2) Member summary
+(3) Program details
+(4) Bugs and important information
+
+---------------------
+(1) About this member
+---------------------
+This member documents additional programs I have written
+to work in conjunction with the BKBYVTOC program to 
+allow me to automate restores as much as possible.
+
+------------------
+(2) Member Summary
+------------------
+
+$$DOC2   - this documentation member
+
+Utilites section 1 - buggy program
+- - - - - - - - - - - - - - - - - -
+MDEXWRAP - wrapper program used to run the backup utility
+           programs allowing what is actually on the tape
+           to be recorded; it reads the sysut2 jcb info 
+           after the backup completes to obtain details
+           of what the file attributed written to the tape
+           are. SEE BUGS IN THE PROGRAM COMMENTS.
+MDEXDSET - jcl to create the history file used by MDEXWRAP,
+           this NEEDS MDEXWRAP assembled as it uses it
+MDEXTEST - jcl to test only MDEXWRAP
+
+Utilites section 2 - used until above is working, may keep
+MDTAPALC - program I use in the report1 step of the two
+           TEMPLATn members to record the tape allocated to
+           the job. Used in a post backup job I have to merge
+           the tapes used with the backup listing
+MDMERGE  - uses as input (a) the list of tapes used recorded
+           by mdtapalc and the backup listing produced by
+           bkbyvtoc and merges the two to produce a new 
+           backup report which actually includes the tape
+           volsers each file was backed up on.
+MDMETRIM - delete expired entries from the report produced
+           by the above mdmerge program.
+MDDAYCC  - returns RC=00-06 to indicate the day number the
+           batch job is running on; 0=sun thru 6=sat.
+
+Utilities section 3 - linux utilities
+L001BASH - BASH script to clean up the report produced by
+           the MDMERGE program after it has been written
+           to a Linux file via a socket printer; it leaves
+           only the data lines in the file (banners removed)
+L001PHP  - PHP webpage that uses the file created by the
+           script above to provide a point-and-click restore
+           facility. It provides a dsn search, jcl deck
+           generation and job submission via the hercules
+           socket card reader
+L002BASH - The script I use as a hercules Linux socket
+           pipe printer, should you need one.
+
+-------------------
+(3) Program details
+-------------------
+
+MDEXWRAP - HAS KNOWN BUGS !!!, REFER TO PROGRAM COMMENTS
+========
+This program is used as a 'wrapper' around the actual 
+backup programs being run so I know what is really on
+the tapes.
+
+This was written as usefull information such as tape 
+volser being used is not available until the output
+dataset has been opened and resources assigned. By
+using this wrapper program when the real backup program
+finishes the JFCB populated by the backup program is
+available to the wrapper program to it can record
+details of what was actually written to the tape.
+
+That is important as the tape details can be different,
+for example the output dsn does not have to be the
+same as the input dsn, is a pds member is backed up
+the tape file will be dsorg=ps instead of dsorg=po
+of the input file etc. We really need to know what is
+on the tape :-)
+
+It requires all the DD cards the called program
+expects plus a 'histfile' dd card used to record
+the details of whats on the tape.
+
+IT REQUIRES that that called program uses SYSUT2 as
+its output DD card, so can be used with iebgener and
+iebcopy with no issues.
+
+MDTAPALC 
+========
+If used in the report1 step of the backup templates it
+will record the actual volser of the scratch tape
+allocated to the job. 
+Each full days backups should record to a file with
+disp=mod.
+
+MDMERGE
+=======
+Uses as input the tapes volsers recorded by mdtapalc 
+above plus the backup listing produces by bkbyvtoc
+and produces a new report that includes the tape
+volser and backup date used for each file in the 
+bkbyvtoc listing (bkbyvtoc listings written to the
+daily report file using disp=mod... so matching 
+against volsers written by mdtapalc will work).
+I have point and click restores using that merged
+file; printed through a pipe printer to a host text
+file and used to build dropdown lists in a web page.
+No 'restore' clist yet though.
+
+MDMETRIM
+========
+The mdmerge program is designed to always append to an ever 
+growing file.
+This program is simply designed to copy records from that
+file to a new file 'trim'ing off records that are older
+than the selected date; it uses the jdate field in the 
+merged report to decide what has expired.
+By default uses a 14 day retention but that can be
+overridden simply by providing a new number in the jcl 
+parm field.
+
+MDDAYCC
+=======
+Returns a RC=00 thru RC=06 (0=sat thru 6=sun) so my batch jobs can
+archive things under the correct day.
+Trying to code a dynamic allocation program that handled mod to
+existing files, dynamic pds names, and totally variable lrecl new
+dataset creation etc... in progress, on the todo over a few years
+list.
+This is the simply use JCL to decide what to do based on RC version.
+./ ADD NAME=L001BASH
+#!/bin/bash
+# =====================================================================
+#
+# name: mvs_restore_newlist.bash
+#
+# function:
+#    My MVS38J system writes a detailed report of all backups done
+#    to a hercules pipe printer (mvs system printouts -> linux files).
+#    This script cleans up that report so it can be used as a control
+#    file for my point and click restore file webpage.
+#
+# basic logic:
+#  - locate the latest backup listing printed to the linux filesystem
+#    by my MVS38J backup jobs
+#  - strip off the header and trailer banners, leaving only data lines
+#  - done, it can be used by the php webpage now
+#
+# notes: keep linelen <= 80 bytes, will be packaged in a card image PDS
+# =====================================================================
+MY_DIR=`dirname $0`             # we cd here, all files local to here
+# RPT_DIR below is where my pipe printer script writes all MVS printout
+RPT_DIR="/hercules/turnkey3/prt/prt00e/job"   # dir with MVS printouts
+RPT_PREFIX="LOGSTORE*txt"                     # backup listing jobnames
+WORKFILE="temp.wrk"                           # work file base name
+BACKUP_LISTING="combined_history_listing.txt" # filename for webpage
+
+# ---------------------------------------------------------------------
+# Our one subroutine, cleans up any work files
+# ---------------------------------------------------------------------
+clean_workfiles() {
+   if [ -f ${WORKFILE} ];                     # if file exists
+   then                                       #    then
+      /bin/rm ${WORKFILE}                     #       delete it
+   fi
+   if [ -f ${WORKFILE}2 ];                    # repeat for this file
+   then
+      /bin/rm ${WORKFILE}2
+   fi
+   if [ -f ${WORKFILE}3 ];                    # repeat for this file
+   then
+      /bin/rm ${WORKFILE}3
+   fi
+} # end clean_workfiles
+
+# ---------------------------------------------------------------------
+# And do all the processing now.
+# ---------------------------------------------------------------------
+cd ${MY_DIR}
+# Backup listings are produced daily, we only want the latest file
+last_file=`ls -ltr ${RPT_DIR}/${RPT_PREFIX}* | tail -1`
+fname=`echo "${last_file}" | awk {'print $9'}` # get filename from ls
+fdate=`echo "${fname}" | awk -F- {'print $3'}` # get datetime part
+fdate=${fdate:0:8}                             # only want the date 
+# TODO - check the date to make sure a current listing was produced
+
+clean_workfiles                    # remove any old work files
+cp ${fname} ${WORKFILE}            # copy the report, we work on a copy
+dos2unix ${WORKFILE} 2>/dev/null   # convert to unix format
+# remove all remaining control chars and the job start banner
+# IMPORTANT: There are control characters ^M and ^L in the sed commands,
+# they probably will not survive being stored in a PDS member so you
+# will probably have to recreate the sed commands.
+cat ${WORKFILE} | sed -e 's///g' | sed -e 's///g' \
+  | grep -v "G  START  JOB" > ${WORKFILE}2
+# grep for the start of the trailing banner, -n is give line numbers
+# My jobname is LOGSTORE so there is OOOOOOOOOOOO at trailing banner start
+end_data=`grep -n "OOOOOOOOOOOO" ${WORKFILE}2 \
+  | head -1 | awk -F: {'print $1'}`
+if [ "${end_data}." = "." ];
+then
+   end_data=0
+fi
+# if trailing banner on a line < 2 then nothing useful in the file
+if [ "${end_data}." = "." -o ${end_data} -lt 2 ];
+then
+   clean_workfiles
+   echo "No valid data found in ${fname}"
+   exit 1
+else
+   # strip off the trailing banner, leaving only the data
+   end_data=$((${end_data} - 1))    # -1 is last data line
+   head -${end_data} ${WORKFILE}2 > combined_history_listing.txt
+   clean_workfiles
+   exit 0
+fi
+echo "Script error, you should never get here !"
+exit 2
+./ ADD NAME=L001PHP 
+<?php
+/* ===========================================================================
+   name:     mvs_restore.php
+   purpose:  Provide a web page that can be used to request file restores 
+             to be run within my hercules MVS38J system.
+
+   notes:    keep linelen <= 80 bytes, to be packaged in a card image PDS
+
+   requires: 
+             (1) obviously a hercules environment running MVS38J
+                 - host should be Linux (must be Linux if you want to use
+                   my pipe printer script to have output sent to one of
+                   the MVS38J printers written to a linux disk file)
+                 - hercules must have a socket card reader 
+                 - the host running hercules needs a web server running 
+                   in order to run this webpage
+             (1) backup listing in required format with all info needed;
+                 filenames, tape volsers, file positions on tapes,
+                 backup dates etc.
+                 I produce this by...
+                 - bkbyvtoc listing file produced when it runs the backups
+                 - mdtapalc tapes used file, produced by above backup jobs
+                 - mdmerge used to combine above two to get all needed info
+                 - combined listing written to pipe socket printer
+                 - linux script mvs_restore_newlist.bash to get rid of the
+                   control characters and headers from the listing, leaving 
+                   only the data
+                 * all above programs and scripts available on my website,
+                   plus my socket printer script is there if you need one
+             (2) [optional] my tapeman3 application to automate tape mounts
+                 That is optional, but without it you will have to manually
+                 mount the tapes unless you have implemented your own solution.
+
+   functionality:
+        Default page is just the search form (search form is on all pages)
+        From default page enter search string for filename matches.
+        --> Search button goes to search results page.
+
+        Search results page allows selecting a file to restore from a 
+        dropdown list of files that matched the search string, and various
+        options such as restore to a different name, delete old file first, 
+        MVS userid/password to use for the job etc.
+        --> ShowJCL button generates the JCL and goes to the ShowJCL page
+        for JCL review
+
+        The ShowJCL page shows the JCL that will be submitted.
+        --> SubmitJCL button goes to the actual submission task
+
+        The submission task submits the JCL to the hercules tcpip socket
+        card reader device for hercules to execute.
+
+===> For those that don't have my bkbyvtoc and post processing utilities
+===> Example backup listing format required is below
+Original dataset attributes and volser are required for
+restoring to a different name or deleting old dataset first
+requests. Plus dsorg is used to decide which of iebgener and iebcopy
+is needed to do the restore.
+
+backup date
+           backup jdate
+                  tape volser
+                         tape file seq number
+                             disk volser file was backed up from
+                                    dsorg
+                                        recfm
+                                             blksize
+                                                      lrecl
+                                                           dataset name
+2015/07/21 15250  MARK01 001 PUB000 PS  F         80    80 MARK.BKPLISTS
+2015/07/21 15250  MARK01 002 PUB000 PO  U      19069     0 SYS2.CMDLIB
+2015/07/21 15250  MARK01 003 PUB000 PO  U      19069     0 SYS2.LINKLIB
+2015/07/21 15250  MARK01 004 PUB000 PO  FB     19040    80 SYS2.PROCLIB
+2015/07/21 15250  MARK01 005 PUB000 PO  FB     19040    80 SYS2.HELP
+2015/07/21 15250  MARK01 006 PUB000 PO  FB      3120    80 SYS2.SYSINLIB
+2015/07/21 15250  MARK01 007 PUB000 PO  FB      3120    80 MARK.CLIST
+2015/07/21 15250  MARK01 008 PUB000 PO  FB      8000    80 MARK.LIB.SOURCE.PL1
+   ========================================================================== */
+
+// Important variables 
+                                                       // backup listing
+$backupfulllist="/home/mark/work/webwork/combined_history_listing.txt";
+$port = 3505;                                          // hercules card reader
+$ipaddr = "10.0.2.15";                                 // listens on localhost
+/* ---------------------------------------------------------------------------
+   The option to enter a new search term is always displayed.
+   -------------------------------------------------------------------------- */
+?>
+<html>
+<head><title>Restore selection</title></head>
+<body>
+<p>
+<em>Only logged on site adminsitrators can request restores for datasets other
+than guest files</em>.
+</p>
+<p>
+Enter a starting prefix string for the dataset name to be restored (ie:
+GUEST1.LIB.L), any matching backed up entries will then be shown for you to
+select the dataset name to be restored. 
+</p>
+
+<form id="searchform">
+<b>Search:</b>
+<input
+   form="searchform"
+   type="textfield"
+   name="searchstr"
+   value="">
+</input>
+<button
+   form="searchform"
+   type="submit"
+   class="submit"
+   name="option"
+   value="Search"
+   formaction="<?php $_SERVER['SCRIPT_NAME'] ?>"
+   formmethod="post">
+Search
+</button>
+</form>
+
+<?php
+/* ---------------------------------------------------------------------------
+   Called via the Search button:
+   If we have been called with the search button populate
+   the selection list with matching filenames.
+   The file selection dialog only displays if we were called via a search. 
+   -------------------------------------------------------------------------- */
+if ( 
+  ($_SERVER['REQUEST_METHOD'] == "POST") &&
+  (isset($_POST['option'])) &&
+  ($_POST['option'] == "Search") &&
+  (isset($_POST['searchstr'])) &&
+  ($_POST['searchstr'] != "")
+) {
+?>
+<hr>
+<form id="restoreform">
+Select the filename to be restored from the list below.
+The selections are in backup date order.<br />
+<form id="searchform">
+<b>File to restore:</b>
+<select required
+   form="restoreform"
+   name="filename"
+   id="filename" size="1" width="50">
+<?php
+/* search for entries in the backup listing history file */
+   $count = 0;
+   // its not SQL input data, but seems best for sanitising input here
+   // Value in seperate var, in case needed for error message
+   $searchval =
+        strtoupper(filter_var($_POST['searchstr'],FILTER_SANITIZE_STRING));
+   $searchstr = "/".$searchval."/";
+   $handle = fopen($backupfulllist, "r");
+   if ($handle) {
+        while (($line = fgets($handle)) !== false) {
+echo $line."<br />";
+              if (preg_match($searchstr,$line)) {
+                // Use backup date and filename in human readable list for now,
+                // pass full line as the value so later processing can use it.
+                // note: php arrays start at 0
+                $array =  preg_split( '/ /',$line,-1,
+                          PREG_SPLIT_DELIM_CAPTURE|PREG_SPLIT_NO_EMPTY);
+                // Do match test again on filename
+                // (avoid false positives matching TAPE/JOB etc)
+                // Position 9 is filename
+                // Position 0 is backup date
+                if (preg_match($searchstr,$array[9])) {
+                   $humanline = $array[0]." ".$array[9]; // YYYY/MM/DD filename
+                   echo "<option value=\"".$line."\">".$humanline."</option>";
+                   $count++;
+                }
+              }
+        }
+        fclose($handle);
+   } else {
+        echo "Error opening combined_backup_listing.txt file\n";
+   } 
+   echo "</select>";
+   if ($count == 0) {
+      echo "<br /><b>NO DATASETS RETURNED MATCHING ".$searchval."</b><br />";
+   } else {
+?>
+<br />
+MVS user:
+<input form="restoreform"
+   type="text"
+   name="userid"
+   value="GUEST1"
+   maxlength="7"
+   size="7">
+</input>
+Password
+<input form="restoreform"
+   type="password"
+   name="password"
+   value="GUEST"
+   maxlength="8"
+   size="8">
+</input>
+<br />
+<button form="restoreform"
+   type="submit"
+   class="submit"
+   name="option"
+   value="ShowJCL" 
+  formaction="<?php $_SERVER['SCRIPT_NAME'] ?>"
+  formmethod="post">
+ShowJCL</button>
+<br />
+By default the existing dataset is expected to exist and will be overwritten
+by the contents on tape.
+You can modify that behaviour with one of the checkboxes below.
+<br />
+<hr>
+<input form="restoreform" type="checkbox" name="deletedsn">
+Delete the existing disk file, replace from tape copy
+<br />
+<hr>
+<b>Provide the fields below if you do not want to overwrite an existing
+dataset.</b>
+A dataset name of PREFIX.restore will be used.
+<br />
+<hr>
+<input form="restoreform" type="checkbox" name="newdsn">
+Restore as a different name, DSN=PREFIX.restore will be used.
+<br />New volser:
+<input form="restoreform"
+   type="text"
+   name="newvolser"
+   value=""
+   maxlength="6"
+   size="6">
+</input>
+, Space Primary Trks
+<input form="restoreform"
+   type="text"
+   name="primary"
+   value="20"
+   size="3"
+   maxlength="4">
+</input>
+, Secondary Trks
+<input form="restoreform"
+   type="text"
+   name="secondary"
+   value="10"
+   size="3"
+   maxlength="4">
+</input>
+, Directory blocks
+<input form="restoreform"
+   type="text"
+   name="dirblks"
+   value="0"
+   size="3"
+   maxlength="3">
+</input>
+(if a PDS)
+</form>
+<p>
+The JCL that will be run will be shown for you review prior to the job
+being submitted.
+<p>
+<?php
+   }    /* end else datasets were found */
+}       /* end if searchstr provided section */
+
+
+/* ---------------------------------------------------------------------------
+   Called via the ShowJCL button:
+   If we have been called with the showJCL button check the
+   parameters and build a restore jcl deck   
+   -------------------------------------------------------------------------- */
+if ( 
+  ($_SERVER['REQUEST_METHOD'] == "POST") &&
+  (isset($_POST['option'])) &&
+  ($_POST['option'] == "ShowJCL") 
+) {
+   $userid = strtoupper(filter_var($_POST['userid'],FILTER_SANITIZE_STRING));
+   $userpswd =
+       strtoupper(filter_var($_POST['password'],FILTER_SANITIZE_STRING));
+   // full data line stored in filename field, split out what we may need again
+   if (isset($_POST['filename'])) {
+        $line = $_POST['filename'];
+    } else {
+        $line = "";
+    }
+   $array =
+      preg_split( '/ /',$line,-1, PREG_SPLIT_DELIM_CAPTURE|PREG_SPLIT_NO_EMPTY);
+   $filename = $array[9];    // Origional filename
+   $filetape = $array[2];    
+   $filetapepos = $array[3];    
+   $filevol = $array[4];     // volser backed up from
+   $filedsorg = $array[5];   // PO or PS
+   if (isset($_POST['newvolser'])) {
+       $newvolser = $_POST['newvolser'];
+   } else {
+       $newvolser = $filevol;
+   }
+   if ($newvolser == "") { $newvolser = $filevol; }  
+   if (isset($_POST['newdsn'])) {
+      $array2 =  explode( ".",$filename);
+      $newdsn = $array2[0].".RESTORE"; 
+      if (isset($_POST['primary'])) {
+         $primary = $_POST['primary'];
+      } else {
+         $primary = "20";
+      }
+      if ($primary == "") { $primary = "20"; }
+      if (isset($_POST['secondary'])) {
+         $secondary = $_POST['secondary'];
+      } else { 
+         $secondary = "10";
+      }
+      if ($secondary == "") { $secondary = "10"; }
+      if ($filedsorg == "PO") {
+         if (isset($_POST['dirblks'])) {
+            $dirblks = $_POST['dirblks'];
+         } else {
+            $dirblks = "20";
+         }
+         if ($dirblks == "" ) { $dirblks = "20"; }
+      } else {
+         $dirblks = "0";
+      }
+      // addition info from data line if creating dataset
+      $filerecfm = $array[6];   // FB, F etc
+      $fileblksize = $array[7];  
+      $filelrecl = $array[8];    
+   } else {
+      $newdsn = "";
+   }
+?>
+
+<p>
+Review the generated JCL below before submitting the job.
+</p>
+<form id="jclform">
+<textarea cols="72" rows="15" readonly form="jclform" name="jcldata">
+<?php
+echo "//".$userid."J JOB (0),'RESTORE',CLASS=A,MSGCLASS=G, \n";
+echo "// USER=".$userid.",PASSWORD=".$userpswd." \n";
+if (isset($_POST['deletedsn'])) {
+   echo "//DELETE   EXEC PGM=IEFBR14 \n";
+   echo "//DD1      DD   DISP=(OLD,DELETE,DELETE), \n";
+   echo "// DSN=".$filename;
+}
+if ($filedsorg == "PO") {
+   echo "//RESTORE  EXEC PGM=IEBCOPY \n";
+} else {
+   echo "//RESTORE  EXEC PGM=IEBGENER \n";
+}
+echo "//SYSPRINT DD   SYSOUT=* \n";
+echo "//SYSUT1   DD   DISP=OLD,UNIT=TAPE,VOL=SER=".$filetape.", \n";
+echo "// LABEL=(".$filetapepos.",SL), \n";
+echo "// DSN=".$filename;            // filename has a newline for some reason
+if ($newdsn == "") {
+   echo "//SYSUT2   DD   DISP=OLD,DSN=".$filename;  // as above, has a newline
+} else {
+   echo "//SYSUT2   DD   DISP=(NEW,CATLG,DELETE),DSN=".$newdsn.", \n";
+   echo "// UNIT=SYSDA,VOL=SER=".$newvolser.", \n";
+   echo "// DCB=(DSORG=".$filedsorg.",RECFM=".$filerecfm.",LRECL=".
+        $filelrecl.",BLKSIZE=".$fileblksize."), \n";
+   if ($filedsorg == "PO") {
+      echo "// SPACE=(TRK,(".$primary.",".$secondary.",".$dirblks.") \n";
+   } else {
+      echo "// SPACE=(TRK,(".$primary.",".$secondary.") \n";
+   }
+}
+if ($filedsorg == "PO") {
+   echo "//SYSIN    DD   * \n";
+   echo " COPY INDD=((SYSUT1,R)),OUTDD=SYSUT2 \n";
+   echo "/* \n";
+} else {
+   echo "//SYSIN    DD   DUMMY \n";
+}
+?>
+//
+</textarea>
+<br />
+<button form="jclform"
+   type="submit"
+   class="submit"
+   name="option"
+   value="SubmitJCL" 
+   formaction="<?php $_SERVER['SCRIPT_NAME'] ?>"
+    formmethod="post">
+SubmitJCL</button>
+</form>
+
+<?php
+}       /* end if showJCL request */
+
+/* ---------------------------------------------------------------------------
+   Called via the SubmitJCL button:
+   A request to submit the JCL has been requested.
+   -------------------------------------------------------------------------- */
+if ( 
+  ($_SERVER['REQUEST_METHOD'] == "POST") &&
+  (isset($_POST['option'])) &&
+  ($_POST['option'] == "SubmitJCL") 
+) {
+   echo "<hr><p>Status of last restore job submitted.</p>";
+   if (isset($_POST['jcldata'])) {
+      $jcldata = $_POST['jcldata'];
+   } else {
+      $jcldata = "";
+   }
+   echo "<pre>".$jcldata."</pre>";
+   if ($jcldata != "") {
+      $socket = socket_create(AF_INET,SOCK_STREAM,SOL_TCP); 
+      if ($socket === false) {
+         echo "<p>Unable to create a tcpip socket, JCL submission failed.</p>";
+      } else {
+         $result = socket_connect($socket,$ipaddr,$port); 
+         if ($result === false) {
+            echo "<p>Unable to connect to host tcpip port, local MVS system ";
+            echo "may not be running. JCL submission failed.</p>";
+            socket_close($socket);
+         } else {
+            socket_write($socket,$jcldata,strlen($jcldata));
+            socket_close($socket);
+?>
+<p>
+The above JCL has been submitted. Your file will be restored within a few
+minutes (if your site has automated tape mounts). 
+<?php 
+         }
+      }
+   } else {
+      echo "<p>No JCL has been provided. ";
+      echo "Search for a dataset to restore first !</p>";
+   }
+}     /* end if submit JCL request */
+?>
+
+</body>
+</html>
+./ ADD NAME=L002BASH
+#!/bin/bash
+# ----------------------------------------------------------------
+# printer_interface.sh
+# 
+# I have all output from printer 00E piped through this script.
+#
+# The hercules printer definition needed is as below
+# 000E 1403 "|/yourscriptdir/printer_interface.sh" crlf
+#
+# It will create a individual text file for each JOB or STC that
+# is printed to device 00E (I use print class G for that printer
+# as generally only Guest users will use it.
+#
+# 2013/02/26: MID: wrote a bash script to convert the text file
+#                  that was being generated to a PDF file, because
+#                  I could. Also fixed the issue of leading spaces
+#                  being dropped from lines as we wnt the PDF file
+#                  to look correct, didn't matter when the browser
+#                  was displaying just text.
+# ----------------------------------------------------------------
+# Figure out where our prt directory is knowing we are in xxx/mark/scripts
+# Then we know where our prt/prt00e/job and prt/prtooe/stc directories
+# are to use for output
+# (required as I have hercules installed in different directories
+#  between test and play).
+origdir=`pwd`
+mydir=`dirname $0`    # .../mark/scripts/thisscript
+cd ${mydir}/../../prt/prt00e
+PRTDIR=`pwd`
+# PRTDIR="/home/mark/hercules/turnkey3/prt/prt00e"
+
+# And now PRTDIR is set back to my origional code
+PRTDEST="default.txt"
+PRTLINE="YES" # should be NO, but for debugging dump all records to default.txt
+savedjobname=""
+
+cd ${PRTDIR}
+
+# Change IFS to a newline so leading spaces on each line are not
+# dropped off by the read command.
+IFS="
+"
+cat | while read dataline
+do
+   is_start=`echo "${dataline}" \
+       | egrep "CONT   STC|CONT   JOB|START  STC|START  JOB"`
+   if [ "${is_start}." != "." ];
+   then
+      jobname=`echo "${dataline}" | awk {'print $5'}`
+      if [ "${jobname}." != "${savedjobname}." ];
+      then
+         savedjobname="${jobname}"
+         datenow=`date +"%Y%m%d%H%M%S-%N"`
+         is_job=`echo "${dataline}" | egrep "CONT   JOB|START  JOB"`
+         if [ "${is_job}." != "." ];
+         then
+            jobtime=`echo "${dataline}" | awk {'print $8$9'}`
+            PRTDEST="job/${jobname}-${jobtime}-${datenow}.txt"
+         else
+            jobtime=`echo "${dataline}" | awk {'print $7$8'}`
+            PRTDEST="stc/${jobname}-${jobtime}-${datenow}.txt"
+         fi
+      fi
+      PRTLINE="YES"
+   fi
+   is_end=`echo "${dataline}" | egrep "END   STC|END   JOB|END OF JOB"`
+   if [ "${is_end}." != "." ];
+   then
+      is_eoj=`echo "${dataline}" | grep "END OF JOB"`
+      if [ "${is_eoj}." != "." ];
+      then
+         echo "${dataline}" >> ${PRTDEST}
+      fi
+      # added the below to copy printed output files to the
+      # hercules section of my website so users of my guest
+      # system can download the output if they want. Has to 
+      # be a seperate script suid to apache as my hercules
+      # userid cannot access the website directories.
+      # BACKGROUND IT to avoid hanging the printing script
+      # itself.
+      # add to sudoers the below three lines
+      #     # Added for hercules print spooling, to copy to the website
+      #     Defaults:mark !requiretty
+      #     mark osprey=NOPASSWD: /yourdir/printer_copytowebsite.sh
+      if [ -x ${mydir}/printer_copytowebsite.sh ];
+      then
+         if [ "${PRTDEST}." != "default.txt." ];
+         then
+            # added convert to PDF before the copy if my makepdf is present
+            if [ -x ${mydir}/makepdf ];
+            then
+               PRTDEST2=`echo "${PRTDEST}" | sed -e 's/txt/pdf/'`
+               ${mydir}/makepdf "${PRTDEST}" "${PRTDEST2}"
+               nohup sudo ${mydir}/printer_copytowebsite.sh "${PRTDEST2}" &
+            fi
+            # text file to always be there
+            nohup sudo ${mydir}/printer_copytowebsite.sh "${PRTDEST}" &
+         fi
+      fi
+      PRTDEST="default.txt"
+#      PRTLINE="NO"
+      PRTLINE="YES"    # should be NO, but for debugging
+      savedjobname="default.txt"   # mf1 writes two reports with same time so
+                                   # MUST reset this to force appending to the
+                                   # existing file
+      echo "DEBUG: switched to default.txt at:${dataline}" >> ${PRTDEST}
+   fi
+   if [ "${PRTLINE}." = "YES." ];
+   then
+      echo "${dataline}" >> ${PRTDEST}
+   fi
+done
+unset IFS
+exit 0
+./ ENDUP
+AA
+//
