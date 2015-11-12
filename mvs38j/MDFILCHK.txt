@@ -1,0 +1,330 @@
+//MARKA JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=T
+//* ===================================================================
+//*
+//* MDFILCHK : 
+//*
+//* Purpose:
+//*   Keep an eye on some of the files I have that grow over time,
+//*   log files, test load libraries that get used a lot etc.
+//*   It checks how many extents have been allocated to the files,
+//*   and will trigger a maintenance batch job if the number of
+//*   extents used passes a threshold.
+//*   As only 16 extents are allowed under mvs38j this allows log
+//*   files to be rolled and load libraries compressed/recreated
+//*   as needed automatically by a daily job.
+//*
+//* Functional notes:
+//*   The maintenance job in this code is triggered by a mvc34 
+//*   request to issue a console command to start a task to run
+//*   a job from one of my job submission libraries; I need to do
+//*   it that way as my job submission code has lots of fiddles to
+//*   allow them to work under rakf. There are many other ways of
+//*   submitting jobs so adjust the 'action required' block to 
+//*   fit in with the way you have customised your system.
+//*   MUST BE ASSEMBLED AC=1 INTO AN APF AUTHORISED LIBRARY TO
+//*   ALLOW IT TO SWITCH TO KEY ZERO TO ISSUE CONSOLE COMMANDS.
+//*
+//* TO ASSEMBLE - LIBRARIES
+//*    Requires - supplied with a TK3 system: 
+//*      SYS1.MACLIB      - standard system maclib
+//*      SYS2.MACLIB      - yregs
+//*      CBT249.FILE058   - catalog/vtoc mapping 
+//*    Requires - non-standard
+//*      My date library wherever you installed it to, if you have
+//*      not installed it change &DATELIB to 0 to skip the code
+//*      that requires it. The only impact is the report lines
+//*      will not include timestamps. If you use my datelib you
+//*      are expected to have the required program modules in your
+//*      systems linklist.
+//* TO ASSEMBLE - TOGGLES   
+//*    &DEBUGON   set to 1 (debug wtos) or 0 (no debug wtos)
+//*    &DATELIB   set to 1 to use my date library, 0 to not use it
+//*
+//* SYSIN CARD FORMAT: see notes in the program
+//*
+//* JCL REQUIRED: See the test steps at the end of this jobdeck
+//*
+//* ===================================================================
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB     IBM STANDARD MACROS
+// DD DISP=SHR,DSN=SYS2.MACLIB               YREGS
+// DD DISP=SHR,DSN=CBT249.FILE058            #CTGPL,#VTCFMT1,#VTCFMT3
+// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME    MY DATE LIBRARY
+//ASM.SYSIN DD *
+         PRINT NOGEN
+         LCLB  &DEBUGON
+&DEBUGON SETB  1
+         LCLB  &DATELIB
+&DATELIB SETB  1
+*                                        MVS  (OS/VS2 RELEASE 3)        
+*********************************************************************** 
+* KNOWN ISSUES
+* Just a TODO to fix one day, the "dataset not found" WTO when a
+* dataset is provided in sysin that is not cataloged it would be
+* helpfull if I included the dataset name that was not found in the
+* message.
+*********************************************************************** 
+MDFILCHK CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 3
+*********************************************************************** 
+*        OPEN REPORT EARLY SO WE CAN WRITE ERROR MESSAGES             *
+* (ALTHOUGH AT THE MOMENT I AM LAZILY USING WTOS FOR ERRORS)          *
+***********************************************************************
+         OPEN  (REPORT,(OUTPUT))
+***********************************************************************
+* IF MY DATELIB IS BEING USED GET DATE AND TIME NOW                   *
+***********************************************************************
+         AIF   (&DATELIB EQ 0).SKIPD01 IF DATELIB NOT USED SKIP
+         UDATEMAC DATA=UDATEVAR,REQ=CURR,INFMT=DEC,ERROR=NOLNKLST
+.SKIPD01 ANOP
+***********************************************************************
+*  SYSIN CARD FORMAT                                                  *
+*  ....+....1....+....2....+....3....+....4....+....5....+....6       *
+*  DATASET-NAME-44-BYTES....................... PDSMEMBR NN           *
+*                                                                     *
+*  DATASET NAME IS THE DATASET TO CHECK                               *
+*  PDSMEMBR IS THE AOM MEMBER TO RUN IF THRESHOLD EXCEEDED            *
+*  -- NN IS THE NUMBER OF EXTENTS USED THAT TRIGGERS THRESHOLD EVENT  *
+*     BUT THAT HAS NOT BEEN IMPLEMENTED YET, HARD CODED AS 13         *
+*                                                                     *
+***********************************************************************
+         OPEN  (SYSIN,(INPUT))
+NEXTCARD GET   SYSIN                 GET THE SYSIN CARD     
+         MVC   DSNAME,0(R1)          SAVE DATASET NAME
+         CLI   45(R1),C' '           MUST HAVE A MEMBER NAME
+         BE    BADCARD               IF MISSING A BAD SYSIN CARD
+         MVC   MEMBNAME(8),45(R1)    SAVE MEMBER NAME
+*********************************************************************** 
+*        SET UP CATALOG AND VTOC SEARCH CONTROL BLOCKS                * 
+*********************************************************************** 
+*--------SET UP CAMLIST'S                                          
+         LM    R1,R4,SEARCH            OBTAIN, SEARCH         
+         LA    R2,DSNAME                                 
+         LA    R3,DSATSER                             
+         LA    R4,DSATFMT1                          
+         STM   R1,R4,DSATDCB1                  
+         LM    R1,R4,SEEK              OBTAIN, SEEK             
+         LA    R2,DS1PTRDS                                   
+         LA    R3,DSATSER                                   
+         LA    R4,DSATFMT3                               
+         STM   R1,R4,DSATDCB3                         
+         LM    R1,R4,NAME              LOCATE, NAME  
+         LA    R2,DSNAME                        
+         LA    R4,CATBLOCK                
+         STM   R1,R4,LOCLIST           
+         MVC   OUTLINE,BLANKS        
+*********************************************************************** 
+         LOCATE LOCLIST                LOCATE BY NAME                
+         LTR   R15,R15                 TEST RETURN CODE           
+         BZ    OBTAIN1                 ALL OK
+         WTO   'LOCATE ERROR, DATASET NOT FOUND'
+         B     EXIT
+*********************************************************************** 
+*        OBTAIN DSCB'S                                                * 
+*********************************************************************** 
+OBTAIN1  LA    R8,CATBLOCK             LOAD VOLUME LIST ADDRESS         
+LDVOLCNT MVC   HALF,0(R8)              VOLUME COUNT TO ALIGNED AREA    
+         LH    R1,HALF                 LOAD VOLUME COUNT              
+         LA    R8,2(R8)                BUMP POINTER TO FIRST VOL FIELD 
+         CH    R1,=H'20'               TEST AGAINST MAX COUNT       
+         BNH   GETSER                                            
+         LA    R1,20                   SET MAX COUNT           
+GETSER   C     R1,FULLONE              TEST VOLUME COUNT   
+         BL    BADVOLCT                BAD VOLUME COUNT           
+         BE    STOREVCT                                        
+         OI    FLAGS,$MULTVOL          INDICATE MULTIVOLUME         
+* --------- SHOULD PROBABLY DO SOMETHING SPECIAL IF MULTIVOL ------
+         WTO   'WARNING: MULTI VOLUME DATASET, ONLY FIRST PART TESTED'
+STOREVCT STH   R1,VOLCNT               STORE REMAINING VOLUME COUNT     
+         MVC   DSATSER,4(R8)           COPY SERIAL                   
+         CLI   2(R8),X'20'             TEST FOR DIRECT ACCESS      
+         BNE   NOTDASD                                            
+         SR    R1,R1                   CLEAR REG 1              
+         IC    R1,3(R8)                LOAD LAST BYTE OF DEVTYPE FIELD  
+TESTTYPE CH    R1,=H'15'               TEST AGAINST MAX             
+         BH    NOTDASD                                             
+GETFMT1  CNOP  0,4
+         OBTAIN DSATDCB1               GET FORMAT 1 DSCB                
+         LTR   R15,R15                 TEST RETURN CODE              
+         BNZ   DSNERR                                                   
+         NC    DS1PTRDS,DS1PTRDS       SEE IF THERE IS A FORMAT 3 DSCB
+         BZ    PROCESS                                                
+         OBTAIN DSATDCB3               GET THE FORMAT 3 DSCB        
+         LTR   R15,R15                 TEST RETURN CODE           
+         BNZ   DSNERR                                                  
+*********************************************************************** 
+*        PROCESS THE DSCB, WE ONLY CARE ABOUT EXTENTS                 * 
+*********************************************************************** 
+PROCESS  CNOP  0,4
+         SR    R3,R3                                        
+         IC    R3,DS1NOPEV             LOAD EXTENTS           
+         CVD   R3,DSATPDEC             CONVERT TO DECIMAL  
+         MVC   DSATDEC,=X'4020202020202120'  MOVE MASK 
+         ED    DSATDEC,DSATPDEC+4      EDIT FOR LOG MSG
+         AIF   (&DEBUGON NE 1).SKIP01
+*********************************************************************** 
+* IF WE HAVE DEBUGGING TURNED ON SHOW EXTENTS FOUND FOR EVERY DATASET *
+*********************************************************************** 
+         MVC   DBGWTO01+12(2),DSATDEC+6  MOVE INTO MESSAGE
+         MVC   DBGWTO01+17(44),DSNAME    MOVE INTO MESSAGE
+DBGWTO01 WTO   'EXT=nn D=....+....1....+....2....+....3....+....4....'
+.SKIP01  ANOP
+         SPACE 2
+         C     R3,=F'13'               ABOVE 13 EXTENTS ?
+         BNH   NEXTCARD                NO, GET THE NEXT CARD    
+         SPACE 2
+         MVC   OUTLINE,BLANKS
+* IF MY DATE LIBRARY IS NOT BEING USED DO NOT POPULATE TIMESTAMP
+         AIF   (&DATELIB EQ 0).SKIPD02 IF DATELIB NOT USED SKIP
+         MVC   OUTLINE,=CL16'YYYY/MM/DD HH:MM'  ACTION TIME
+         MVC   OUTLINE(4),D370YEAR                   YYYY
+         MVC   OUTLINE+5(2),D370MMDD                 MM
+         MVC   OUTLINE+8(2),D370MMDD+2               DD
+         MVC   OUTLINE+11(2),D370TIME                HH
+         MVC   OUTLINE+14(2),D370TIME+2              MM
+.SKIPD02 ANOP
+         MVC   OUTLINE+17(44),DSNAME            DATASET NAME
+         MVC   OUTLINE+62(5),=CL5'EXTS='
+         MVC   OUTLINE+67(2),DSATDEC+6          CURRENT EXTENTS
+         MVC   OUTLINE+70(12),=CL12'S AOMTASK,J=' COMMAND...
+         MVC   OUTLINE+82(8),MEMBNAME             ...TO RUN
+         PUT   REPORT,OUTLINE                   LOG ACTIVITY
+         SPACE 2
+*********************************************************************** 
+* SWITCH TO KEY ZERO, ISSUE COMMAND, SWITCH BACK TO NON-ZERO          *
+*********************************************************************** 
+         MVC   CMDBUF+12(8),MEMBNAME
+         MODESET KEY=ZERO              GO SUPERVISOR MODE
+         LA    R1,CMDLIST              COMMAND BUFFER ADDRESS
+         LA    R0,1                    CONSOLE ID, JUST USE FIRST
+         SVC   34
+         MODESET KEY=NZERO             END SUPERVISOR MODE
+         SPACE 2    
+         B     NEXTCARD                READ NEXT SYSIN CARD
+CMDLIST  DC    H'24'                   HALFWORD LENGTH INDICATOR
+         DC    H'0'                    REQUIRED PAD HALFWORD
+CMDBUF   DC    CL20'S AOMTASK,J=xxxxxxxx'    COMMAND BUFFER
+CMDEND   DC    CL2' '                  END OF COMMAND BUFFER
+*********************************************************************** 
+*********************************************************************** 
+EXIT     CLOSE (SYSIN)
+         CLOSE (REPORT)
+         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+         EJECT
+*********************************************************************** 
+*        ERROR MESSAGE BLOCKS                                         *
+*********************************************************************** 
+NOLNKLST WTO   'MARKS DATE PROGRAMS ARE NOT IN YOUR LINKLIST !'
+         WTO   'FIX LINKLIST OR RE-ASSEMBLE WITHOUT IT'
+         B     EXIT
+DSNERR   WTO   'UNABLE TO READ DATASET VTOC DSCB'
+         B     NEXTCARD
+NOTDASD  WTO   'DATASET IS NOT ON A DASD VOLUME'  
+         B     NEXTCARD
+BADVOLCT WTO   'DATASET VOLUME COUNT INVALID'
+         B     NEXTCARD
+BADCARD  MVC   BADCARD1+24(35),0(R1)
+BADCARD1 WTO   'BADCARD IGNORED:....+....1....+....2....+....3....+ '
+         B     NEXTCARD
+         TITLE 'DATA AREA'                        
+*********************************************************************** 
+*        DATA AREA                                                    * 
+*********************************************************************** 
+SAVEAREA DS    18F
+FULLONE  DC    F'1'
+SYSIN    DCB   DDNAME=SYSIN,DSORG=PS,MACRF=(GL),EODAD=EXIT      
+REPORT   DCB   DDNAME=REPORT,MACRF=PM,DSORG=PS,RECFM=FB,               X
+               LRECL=132,BLKSIZE=132
+         SPACE 2                                                       
+         LTORG                                                          
+NAME     CAMLST NAME,0,,0                                             
+SEARCH   CAMLST SEARCH,0,0,0                                         
+SEEK     CAMLST SEEK,0,0,0                                            
+         SPACE 2                                                     
+         TITLE 'CONSTANT DATA - MESSAGES'                      
+MODLINE  DC    H'124,0'                                     
+BLANKS   DC    CL132' '                               
+         SPACE
+         TITLE 'WORK AREA'
+*********************************************************************** 
+*                  WORK AREA                                          *
+*********************************************************************** 
+         SPACE 4                                                    
+DSATSAVE DS    18A                     SAVE AREA                
+DSATDCB1 CAMLST SEARCH,0,0,0                                   
+DSATDCB3 CAMLST SEEK,0,0,0                                         
+LOCLIST  CAMLST NAME,0,,0              LOCATE BY NAME            
+VOLCNT   DS    H                       VOLUME COUNT                 
+         SPACE 2
+FLAGS    DS    X                       INDICATORS                 
+NOTEMPTY EQU   X'80'  1... ....          INDEX IS NOT EMPTY         
+GDG      EQU   X'40'  .1.. ....          GDG BEING PROCESSED         
+COUNT    EQU   X'20'  ..1. ....          COUNT THIS DATA SET          
+DSATGRP  EQU   X'10'  ...1 ....          GROUP PROCESSING IN PROGRESS  
+$MULTVOL EQU   X'08'  .... 1...          MULTI-VOLUME DATA SET         
+$NOTPOPS EQU   X'04'  .... .1..          DATA SET NOT PS OR PO       
+$DSPO    EQU   X'02'  .... ..1.          DATA SET IS PARTITIONED     
+$DSPS    EQU   X'01'  .... ...1          DATA SET IS SEQUENTIAL   
+RESET    EQU   $NOTPOPS+$DSPO+$DSPS+$MULTVOL   RESET MASK            
+FLAGS2   DS    X                       MORE INDICATORS                
+$VSAMLOC EQU   X'80'  1... ....          VSAM LOCATE IN PROGRESS    
+$INCMPLT EQU   X'40'  .1.. ....          TOO MANY DSNAMES           
+$FOUND   EQU   X'20'  ..1. ....          DATA SET FOUND             
+$HARDCPY EQU   X'10'  ...1 ....          HARDCOPY OPTION REQUESTED   
+*                     .... XXXX          NOT USED
+         SPACE 2
+DSATSER  DS    CL6
+         DS    0F                                                     
+DSNAME   DS    CL44                    DSNAME                           
+         DS    CL8                     OVERFLOW BLANKS FOR LONG NAMES  
+MEMBNAME DS    CL8                     MEMBER NAME
+OUTLINE  DS    CL132                   OUTPUT LINE                     
+HALF     DS    H                       HALFWORD ALIGNED WORK AREA      
+DSATDEC  DS    D                       WORK AREA FOR DECIMAL CONVERSION 
+DSATPDEC DS    D                       WORK AREA FOR DECIMAL CONVERSION 
+DSATFMT1 DS    0D,148C                 FORMAT 1 DSCB (DS DESCRIPTION)  
+DSATFMT3 DS    0D,148C                 FORMAT 3 DSCB (ADD EXTENTS)    
+CATBLOCK DS    0D,265C                 CATALOG BLOCK                 
+         AIF   (&DATELIB EQ 0).SKIPD03 IF DATELIB NOT USED SKIP
+         UDATEVAR DSECT=NO
+.SKIPD03 ANOP
+         #CTGPL                                                    
+         SPACE                                                 
+         ORG   DSATFMT1-44                               
+         #VTCFMT1                                  
+         ORG   DSATFMT3                
+         #VTCFMT3                    
+         IKJECT             
+         IKJUPT        
+         EJECT
+         YREGS
+         END
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=SYS9.LINKLIB.APFAUTH(MDFILCHK),DISP=SHR
+//*
+//* TEST IT. 
+//* REPORT DD WOULD NORMALLY BE A LOG FILE WE MOD ENTRIES
+//* TO THE END OF SO WE KEEP A LOG OF HOW MANY TIMES THE
+//* RECOVERY JOBS RUN. BUT FOR TESTING USE SYSOUT.
+//* --- REPLACE MY FILENAMES WITH ONES YOU CAN CHECK ---
+//TEST0001 EXEC PGM=MDFILCHK,COND=(0,NE)
+//REPORT   DD   SYSOUT=*
+//SYSIN    DD   *
+MARK.LIB.LOAD                                COMPLOAD 16
+MARK.LIB.JCL                                 COMPJCL  14
+DELIBERATE.BAD.CARD 
+MARK.IPLS.LOG                                ROLLLOG  14
+/*
+//
