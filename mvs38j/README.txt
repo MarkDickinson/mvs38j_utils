@@ -89,6 +89,10 @@ JOBCONT2.txt    - add a continuation card containing the data passed
                   But you can use it to append anything to the job
                   cards
 
+MDDIAG8.txt     - issue commands to hercules CP using DIAG8, replacement
+                  for HERCCMD simply because you can play with the source
+                  to meet your needs
+
 MDJOBREL.txt    - A work in progress, but what is here works.
                   Uses a control file to release held jobs when a
                   running job completes, I submit my daily/weekly
