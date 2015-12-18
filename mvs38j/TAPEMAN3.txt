@@ -112,7 +112,7 @@ RECTMPL  DC    CL6' '         VOLSER         (6)
 DBSLEN   EQU   *-RECTMPL
          MEND
 ./ ADD NAME=TAPEMAN3
-//MARKASM  JOB (0),'TAPEMAN',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//MARKASM1 JOB (0),'TAPEMAN',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)
@@ -130,7 +130,7 @@ DBSLEN   EQU   *-RECTMPL
 * TAPEMAN : Mark Dickinson, December 2008                            *
 *                                                                    *
 * T A P E M A N     T O O L K I T                                    *
-*     Tapeman - Version 3.05 - December 2014                         *
+*     Tapeman - Version 3.06 - December 2015                         *
 * T A P E M A N     T O O L K I T                                    *
 *                                                                    *
 *                                                                    *
@@ -150,7 +150,6 @@ DBSLEN   EQU   *-RECTMPL
 * Desc: automate Tape mounts on a MVS3.8J Hercules system            *
 *                                                                    *
 * Requires : My MMPF message automation tool                         *
-*            HERCCMD program to issue the DIAG8 commands             *
 *            DIAG8CMD ENABLE set in the hercules config file         *
 *            My TAPEMAN programs                                     *
 * See installation documentation.                                    *
@@ -213,7 +212,7 @@ DBSLEN   EQU   *-RECTMPL
 *               Yes - use volser in mount message, --- GOTO 3. ---   *
 *                                                                    *
 *         ...Now we have a volser...                                 *
-*    3.   Use the HERCCMD program to issue via DIAG8 to the HMC      *
+*    3.   Use the MDDIAG8 program to issue via DIAG8 to the CP       *
 *            'devinit CUU tapes/VOLSER.aws'                          *
 *                 CUU is the unit from the IEF233A mount message     *
 *                 VOLSER is the tape volser we worked out            *
@@ -266,10 +265,10 @@ DBSLEN   EQU   *-RECTMPL
 **********************************************************************
 *                                                                    *
 * AUTHOR                                                             *
-*    Mark Dickinson - 2006, with changes thru to 2014                *
+*    Mark Dickinson - 2006, with changes thru to 2015                *
 *                                                                    *
-*        Desc: created to automate my Tape mounts on my MVS3.8J      *
-*              hercules system.                                      *
+*        Desc: created to automate my 'managed' Tape mounts on my    *
+*              MVS3.8J hercules system.                              *
 *                                                                    *
 * TODO                                                               *
 *    Maybe add a field in the TAPEVOLS record to allow people to     *
@@ -379,6 +378,9 @@ DBSLEN   EQU   *-RECTMPL
 *    2014/12 - Minor tweak, discovered scratch tapes can be requested*
 *              with a volser of SCRTCH so added that test for a      *
 *              scratch mount along with the existing PRIVAT test.    *
+* ------- Version 3.06 -------                                       *
+*    2015/12 - Minor tweak, replaced the requirement for HERCCMD.    *
+*              Now using MDDIAG8 so no 3rd party software is needed. *
 *                                                                    *
 **********************************************************************
          EJECT   
@@ -475,7 +477,7 @@ EXIT1    CNOP  0,4                  ALIGN, COULD BE CALLED FROM VSAM
 *
 * Get the jobname and volser required. If the volser is PRIVAT 
 * or SCRTCH then find a free scratch tape to use as the volser.
-* When we have the jobname and volser populated call HERCCMD
+* When we have the jobname and volser populated call MDDIAG8
 *
 * RECDATA WILL CONTAIN -  MSGNUMID CUU VOLSER JOBNAME
 * -----------------------------------------------------------
@@ -489,12 +491,12 @@ IEC501A  EQU   *
          BE    FNDSPARE
          CLC   VOLSER(L'VOLSER),SCRTCH  <-- SCRATCH TAPE RQST
          BE    FNDSPARE
-         B     HERCCMD                  EXACT TAPE NEEDED, CARRY ON
+         B     MDDIAG8                  EXACT TAPE NEEDED, CARRY ON
 *        -- FIND ANY SCRATCH TAPE TO USE
 FNDSPARE MVI   VSOPCODE,C'S'            WE ARE SEARCHING FOR A SPARE
          CNOP  0,4                      IF THIS IS NOT HERE WE SOC1
          BAL   R4,GETSPARE
-         B     HERCCMD                  ISSUE THE DEVINIT COMMAND
+         B     MDDIAG8                  ISSUE THE DEVINIT COMMAND
          EJECT     
 * -----------------------------------------------------------
 * IEHINITT message
@@ -517,7 +519,7 @@ IEC701D  MVC   DEVICE(3),RECDATA+8
          LA    R4,CMDDVINI+20
          A     R4,VOLSERL
          MVC   0(4,R4),=CL4'.aws'
-         LINK  EP=HERCCMD,PARAM=CMDDVINI,ERRET=LINKERR
+         LINK  EP=MDDIAG8,PARAM=CMDDVINI,ERRET=LINKERR
          SPACE 1
 * WAIT A FEW SECONDS AND REPLY TO THE WTOR FOR IEC701D
          STIMER WAIT,,DINTVL=SECS6      6 secs
@@ -551,7 +553,7 @@ WTO701D  WTO   '>>TAPEMAN3 ......     ',DESC=(5)   WTO TO LOG ONLY
 * Get the CUU device to be used from the parm field, we
 * do not sanity check it.
 * Get the jobname from the parm field, do not sanitycheck it
-* Call HERCCMD to mount the tape.
+* Call MDDIAG8 to mount the tape.
 * -----------------------------------------------------------
 SECS30   DC      CL8'00003000'       * THIRTY  SECONDS
 BATCHMNT MVC   DEVICE(3),RECDATA+13
@@ -562,10 +564,10 @@ BATCHMNT MVC   DEVICE(3),RECDATA+13
          MVI   VSOPCODE,C'S'      WE ARE SEARCHING FOR A SPARE
          CNOP  0,4                IF THIS IS NOT HERE WE SOC1
          BAL   R4,GETSPARE
-         B     HERCCMD            ISSUE THE DEVINIT COMMAND
+         B     MDDIAG8            ISSUE THE DEVINIT COMMAND
          EJECT     
 * -----------------------------------------------------------
-* HERCCMD
+* MDDIAG8
 *   1 - update the volume entry, expiry to be +14 days from now
 *       if the update fails, then not a volume we manage so
 *       just exit out (or a vsam error, still exit out).
@@ -599,7 +601,7 @@ BATCHMNT MVC   DEVICE(3),RECDATA+13
 *   that one has been created specially.
 * -----------------------------------------------------------
          DS    0F
-HERCCMD  CNOP  0,4                     AVOID SOC1
+MDDIAG8  CNOP  0,4                     AVOID SOC1
          BAL   R4,UPDATVOL
          CNOP  0,4                     AVOID SOC1
 * IF WE ARE STILL HERE THE TAPE IS IN THE VSAM CATALOG
@@ -616,7 +618,7 @@ HERCWTO  WTO   'TAP006I ALLOCATED vvvvvv TO ddd. '
          LA    R4,CMDDVINI+20
          A     R4,VOLSERL
          MVC   0(4,R4),=CL4'.aws'
-         LINK  EP=HERCCMD,PARAM=CMDDVINI,ERRET=LINKERR
+         LINK  EP=MDDIAG8,PARAM=CMDDVINI,ERRET=LINKERR
          SPACE 1
          B     EXIT                WE ARE FINISHED
          SPACE 2
@@ -624,7 +626,7 @@ HERCWTO  WTO   'TAP006I ALLOCATED vvvvvv TO ddd. '
 * LINKERR: triggered when the LINK command fails
 * -----------------------------------------------------------
 LINKERR  CNOP  0,4 
-         WTO   'TAP004E PROGRAM HERCCMD NOT FOUND'
+         WTO   'TAP004E PROGRAM MDDIAG8 NOT FOUND'
          B     EXIT
          EJECT
 * -----------------------------------------------------------
@@ -1104,7 +1106,7 @@ WTORTAPE WTO   'TAP008I USING TAPE vvvvvv'
          MVI   VSOPCODE,C'M'       MANUAL FLAG, DONT ERROR IF LATER 
 *                                  VSAM FILE UPDATE FAILS AS THIS TAPE
 *                                  MAY NOT BE IN OUR DBS.
-         B     HERCCMD         USE THIS VOLSER FOR MOUNT AND UPDATE
+         B     MDDIAG8         USE THIS VOLSER FOR MOUNT AND UPDATE
 * BELOW TRIGGERED ON TIMER TIMEOUT, POSTS TO THE ENTRY WATCHED
 * BY THE ECBLIST.
 WTORTIMO SAVE  (14,12)
@@ -1161,7 +1163,7 @@ ZZ
 /*
 //
 ./ ADD NAME=TAPEMCUU
-//MARKASM  JOB (0),'TAPEMCUU',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//MARKASM2 JOB (0),'TAPEMCUU',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)
@@ -1218,7 +1220,7 @@ ZZ
 *          //TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=T
 *          //STEPMCUU EXEC PGM=TAPEMCUU,PARM='487'
 *          //TAPEVOLS DD DISP=OLD,
-*          //          DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+*          //          DSN=VSAM.INSTALL.TAPEMAN33.VVDS.VOLSERS
 *          //
 *          ZZ
 *          //*
@@ -1388,7 +1390,7 @@ ZZ
 /*
 //
 ./ ADD NAME=TAPEMDES
-//MARKASM  JOB (0),'TAPEMDES',CLASS=A,MSGCLASS=T,        
+//MARKASM3 JOB (0),'TAPEMDES',CLASS=A,MSGCLASS=T,        
 //   MSGLEVEL=(1,1)                                               
 //ASM     EXEC PGM=IFOX00,                                         
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -1799,7 +1801,7 @@ R15      EQU   15
 /*                         
 //                   
 ./ ADD NAME=TAPEMEXP
-//MARKASM  JOB (0),'TAPEMEXP',CLASS=A,MSGCLASS=T,
+//MARKASM4 JOB (0),'TAPEMEXP',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -2281,7 +2283,7 @@ R15      EQU   15
 /*
 //
 ./ ADD NAME=TAPEMSCR
-//MARKASM  JOB (0),'TAPEMSCR',CLASS=A,MSGCLASS=T,
+//MARKASM5 JOB (0),'TAPEMSCR',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -2680,7 +2682,7 @@ R15      EQU   15
 /*
 //
 ./ ADD NAME=TAPEMUTL
-//MARKASM  JOB (0),'TAPEMUTL',CLASS=A,MSGCLASS=T,
+//MARKASM6 JOB (0),'TAPEMUTL',CLASS=A,MSGCLASS=T,
 //   MSGLEVEL=(1,1)
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -4136,6 +4138,270 @@ IHARB    DSECT
 &ID.DESCD DC   BL2'&CD(1)&CD(2)'
 &ID.ROUTC DC   BL2'&CD(3)&CD(4)'
          MEND
+./ ADD NAME=MDDIAG8
+//MARKDIG8 JOB (0),'ASSEMBLE MDDIAG8',CLASS=A,MSGCLASS=T
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+//ASM.SYSIN DD *
+         PRINT NOGEN
+         TITLE 'MDDIAG8 - ISSUE VM CP COMMAND FROM MVS3.8J'
+***********************************************************************
+*                                                                     *
+* MDDIAG8 - Mark Dickinson, 2015                                      *
+* Release level : MVS3.8J (OS/VS2) ... turnkey3 under hercules        *
+*                                                                     *
+* FUNCTION                                                            *
+* Use the DIAGNOSE 0008 function to issue a command to the CP, which  *
+* in the case of MVS3.8J under hercules is to issue a command to      *
+* hercules itself (ie: tape devinits etc).                            *
+*                                                                     *
+* - Command to be issued is passed as a program parm, max 128 bytes   *
+* - The caller must have access to resource FACILITY DIAG8, if that   *
+*   resource is not defined or there is no security product access is *
+*   permitted (the security auth checks can be omitted from program   *
+*   by toggling the &USERAKF flag in the code if you really must)     *
+* - command is passed to the CP to execute via DIAG8 and the response *
+*   from the CP is wto'ed to the console                              *
+*                                                                     *
+* REQUIREMENTS                                                        *
+* This program must be assempled with AC=1 and reside in an APF       *
+* authorised library, as it must switch to supervisor mode to issue   *
+* the diagnose instruction.                                           *
+* Also of course the MVS system needs to be running as a guest under  *
+* a control program such as hercules.                                 *
+*                                                                     *
+* References: GC20-1807-7 VM370 System Programmers Guide Rel 6.4-81   *
+*                                                                     *
+* Enhancements you may want ToDo                                      *
+* (1) Use a getmained area as a reply buffer to allow a larger        *
+*     response buffer area. I don't need that at the moment.          *
+* (2) The manual says interrupts should be disabled during the diag   *
+*     call, I don't; doesn't seem to be an issue, yet.                *
+* (3) The manual says there should always be a check to make sure the *
+*     O/S is running as a guest under a CP, I don't as I will always  *
+*     be running under hercules.                                      *
+*                                                                     *
+***********************************************************************
+         LCLB  &USERAKF
+&USERAKF SETB  1         1=USE SECURITY(FOR RAKF), 0=NO SECURITY CHECKS
+*
+MDDIAG8  CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 3
+***********************************************************************
+*                                                                     *
+* TEST THAT A PARM WAS PROVIDED                                       *
+*                                                                     *
+***********************************************************************
+         LTR   R1,R1          TEST FOR PARM BEING PROVIDED
+         BZ    ERRPARM        NO PARM PROVIDED
+         L     R2,0(,R1)      ADDRESS PARM AREA, PARM LEN HALFWORD
+         SR    R3,R3          CLEAR R3
+         LH    R3,0(,R2)      GET PARM LENGTH
+         C     R3,=F'128'     WE ALLOW MAX LEN 128 BYTES
+         BL    TESTLEN0       IF < 128 THEN MAYBE OK
+         L     R3,=F'128'     ELSE SET TO 128
+TESTLEN0 C     R3,=F'0'
+         BE    ERRPARM
+         ST    R3,COMMANDL    SAVE PARM LENGTH
+         LA    R2,2(,R2)      ADDRESS PARM DATA BYTES
+         EX    R3,EXCPYPRM    SAVE PARM DATA STRING, LEN IN R3
+         EJECT                         
+         AIF    (&USERAKF EQ 0).NORAKF1
+***********************************************************************
+*                                                                     *
+* CHECK RAKF AUTHORISATION TO FACILITY DIAG8                          *
+* - if access to resource is authorised, proceed                      *
+* - if there is no security rule for the resource, proceed            *
+* - if there is no security product installed, proceed                *
+* - if there is a resource rule and access is denied, to not proceed  *
+*                                                                     *
+***********************************************************************
+         MVC   AUTHCHK(LRACHECK),RACHECKL            INIT RACHECK MACRO           
+RACSVC   RACHECK CLASS=RACLASS,ENTITY=RAOBJECT,MF=(E,AUTHCHK)   
+         SR    R3,R3               SET DEFAULT RC                       
+         C     R15,=F'0'           RC < OR = 0?   0 = PERMITTED 
+         BE    DIAG8GO          
+         C     R15,=F'8'           EXPLICITLY NOT AUTHORIZED? 
+         BE    ERRRAKF
+         C     R15,=F'4'           4 = RESOURCE NOT PROTECTED
+         BNE   CHKERR              (RAKF RETURNS 0 NOT 4)
+         WTO   'MDDIAG8:WARNING-NO SECURITY RULES ON FACILITY DIAG8'
+         B      DIAG8GO
+CHKERR   DS    0H                                                      
+         WTO   'MDDIAG8:INVALID RETURN CODE FROM RACHECK, ALLOWING'
+         EJECT                         
+.NORAKF1 ANOP
+***********************************************************************
+*                                                                     *
+* Diag8 as usable in MVS3.8J is documented in IBM manual              *
+* GC20-1807-7 VM370 System Programmers Guide Rel 6.4-81               *
+* which is available at bitsavers.org                                 *
+*                                                                     *
+* SWITCH TO SUPERVISOR MODE AND ISSUE THE COMMAND                     *
+*   Rx   - real address of command                                    *
+*   Rx+1 - real address of reponse buffer                             *
+*   Ry   - length of command                                          *
+*   Ry+1 - max length of response we accept                           *
+* on response                                                         *
+*   Rx+1 - either 0 if OK, or the CP error code                       *
+*   Ry   - response will be in response buffer                        *
+*   Ry+1 - actual length of response, or is response was too long     *
+*          contains number of response bytes that would not fit       *
+* SWITCH BACK TO PROBLEM MODE WHEN DONE                               *
+*                                                                     *
+* Note: we set the flags to X'40' to request the response be returned *
+*       to this program (by default output would be written to the CP *
+*       terminal, which is the hercules console).                     *
+*                                                                     *
+***********************************************************************
+DIAG8GO  CNOP  0,4
+* MAX WTO LEN IS 115, TRUNCATED AFTER THAT IN MVS38J
+* SO TRUNCATE PARM TO FIT INTO BUFFER IF WE MUST
+         L     R3,COMMANDL              RETRIEVE LEN OF COMMAND
+         C     R3,=F'117'               SEE IF MAX FOR WTO
+         BL    OKTOLOG                  IF < THEN OK
+         LA    R3,117                   ELSE ONLY LOG 117 BYTES
+OKTOLOG  EX    R3,EXLOGPRM
+DIAGLOG  WTO   'MDDIAG8:                                               X
+                                                                       X
+                             '          END OF WTO LINE
+         MODESET KEY=ZERO,MODE=SUP
+         LRA   R2,COMMAND               LRA OF STORAGE VADDR
+         L     R4,COMMANDL              COMMAND LEN
+         ST    R4,WORKREG               LAZY WAY OF SETTING BYTE1 FLAG
+         MVI   WORKREG,X'40'            FLAGS X'40', WE WANT A RESPONSE
+         L     R4,WORKREG
+         LRA   R3,RESPONS               LRA OF RESPONSE VADDR
+         LA    R5,RESPONSL              RESPONSE BUFFER LENGTH (MAX4K)
+         CNOP  0,8                      DOUBLEWORD ALIGN
+         DC    X'83',X'24',XL2'0008'    DIAGNOSE CODE 8
+         MODESET KEY=NZERO,MODE=PROB
+*
+* CHECK THE CP RC WAS 0 AND THERE IS DATA IN THE RESPONSE BUFFER
+* IF NON-ZERO OR NO DATA, JUST EXIT
+         LTR   R4,R4                    RETURN CODE 0 (OK) ?
+         BNZ   EXIT04                   NO, WE ARE DONE
+         LTR   R5,R5                    ANY RESPONSE DATA ?
+         BZ    EXIT                     NO, WE ARE DONE
+*
+***********************************************************************
+*                                                                     *
+* PARSE THE DATA IN THE RESPONSE BUFFER, WRITING IT ONE LINE AT A     *
+* TIME TO THE CONSOLE AS AN AUDIT TRAIL.                              *
+*                                                                     *
+***********************************************************************
+         LA    R3,RESPONS               ADDRESS RESPONSE BUFFER
+         AR    R3,R5                    ADD LENGTH RETURNED
+         MVI   0(R3),X'15'              ENSURE TERMINATION CHAR EXISTS
+*
+         LA    R3,RESPONS               PARSE THE RESPONSE AREA
+         SLR   R4,R4                    KEEP BYTE COUNT
+         LA    R5,WTORESP+16            OFFSET IN OUTPUT BUFFER
+NEXTCHAR CLI   0(R3),X'15'              END OF RESPONE ?
+         BE    EXIT                     ALL RESPONSE DATA SHOWN
+         CLI   0(R3),X'25'              END OF LINE ?      
+         BE    WTORESP
+         MVC   0(1,R5),0(R3)            MOVE CHAR TO OUTPUT
+         C     R4,=F'69'                CHECK COUNTER
+         BNL   WTORESP                  IF MAX FLUSH OUTPUT BUFFER
+         A     R3,=F'1'                 INC PTR
+         A     R4,=F'1'                 INC COUNTER
+         A     R5,=F'1'                 INC PTR
+         B     NEXTCHAR                 GO GET NEXT CHARACTER
+* ALLOW 70 REPONSE BYTES PER WTO
+WTORESP  WTO   'MDDIAG8:                                               X
+                                      '
+         SLR   R4,R4                    RESET BYTE COUNT
+         LA    R5,WTORESP+16            RESET OFFSET IN OUTPUT BUFFER
+         A     R3,=F'1'                 INC PTR PAST X'15'
+         B     NEXTCHAR                 GO GET NEXT RESPONSE CHARACTER
+         EJECT                         
+***********************************************************************
+*                                                                     *
+*                            ALL DONE - EXIT                          *
+*                                                                     *
+***********************************************************************
+EXIT     CNOP  0,4
+         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+*
+* ANY ERROR MESSAGES WE REQUIRE
+ERRPARM  WTO   'MDDIAG8:INVALID OR NO PARM PROVIDED'
+         B     EXIT04
+         AIF    (&USERAKF EQ 0).NORAKF2
+ERRRAKF  WTO   'MDDIAG8:YOU ARE NOT AUTHORISED FOR THIS RESOURCE'
+         B     EXIT04
+.NORAKF2 ANOP
+ERRCP    WTO   'MDDIAG8:ERROR RESPONSE FROM CP, CHECK CP CONSOLE LOG'
+EXIT04   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,4              EXIT CODE 4
+         BR    R14                RETURN TO SYSTEM
+         SPACE 5
+***********************************************************************
+*                                                                     *
+*        D A T A   A R E A   B I T S                                  *
+*                                                                     *
+***********************************************************************
+SAVEAREA DC    18F'0'                    MAIN PROGRAM SAVE AREA
+EXCPYPRM MVC   COMMAND(0),0(R2)          EX CMD TO SAVE PARM TO COMMAND
+EXLOGPRM MVC   DIAGLOG+16(0),COMMAND     EX CMD TO LOG COMMAND
+         AIF    (&USERAKF EQ 0).NORAKF3
+*
+* VARIABLES USED FOR SECURITY AUTH CHECKING
+RACLASS  DC    AL1(L'RACLASSN)     CLASS NAME FOR RACCHECK              
+RACLASSN DC    C'FACILITY'         CLASS NAME FOR RACCHECK    
+RACHECKL RACHECK MF=L                                               
+LRACHECK EQU   *-RACHECKL          LENGTH OF RACHECK MACRO 
+AUTHCHK  RACHECK MF=L
+* NOT SURE HOW LONG A FACILITY NAME IS, 20 BYTES GIVES ENOUGH PADDING
+RAOBJECT DC    CL20'DIAG8 '        OBJECT WITHIN CLASS TO CHECK
+.NORAKF3 ANOP
+*
+* VARIABLES USED FOR DIAG8 SECTION
+WORKREG  DS    F                   WORK AREA
+         DS    0D
+COMMAND  DC    CL128' '            MAX CP CMDLEN IS 128
+COMMANDL DS    F                   ACTUAL LENGTH OF CMD FROM PARM
+RESPONS  DC    CL250' '
+         DC    CL250' '
+         DC    CL250' '
+         DC    CL250' '
+RESPONSL EQU   *-RESPONS
+         DC    X'15'             PARANOID, TERMINATE RESPONSE AREA
+         EJECT                         
+* STANDARD REGISTER EQUATES HERE
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   MDDIAG8 
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=INSTALL.TAPEMAN3.LINKLIB(MDDIAG8),DISP=SHR
+//
 ./ ENDUP
 QQ
 //DOCLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
@@ -4444,8 +4710,7 @@ All the tasks are covered in detail after this index.
 1. Preparation - gather information you will need
 2. Create a 'tapes' directory and create some .aws tape files
    in it. You will need to initialise them also.
-3. Install the HERCCMD program   (into APF authorised library)
-4. Install TAPEMAN and TAPEMCUU programs (into APF authorised library)
+4. Install TAPEMAN, TAPEMCUU, MDDIAG8 (into APF authorised library)
 5. Install the utility programs (not APF authorised)
 6. Create the VSAM 'volser' database
 7. Load some tape volsers into the VSAM database
@@ -4492,7 +4757,7 @@ Appendix C - installtion checklist (very short)
      If you do not have one already see...
          Appendix A: create a dedicated VSAM volume (3330)
    - Identify an APF authorised library you can use, that is in the
-     linklist. Both the HERCCMD and TAPEMAN3 programs must be in APF
+     linklist. Both the MDDIAG8 and TAPEMAN3 programs must be in APF
      authorised libraries that are also in the linklist.
    - Check you have all the expected files from the tape
      <pref>.TAPEMAN3.SRC       source files
@@ -4506,7 +4771,7 @@ Appendix C - installtion checklist (very short)
 
    - Under the directory you start hercules from
      create a directory 'tapes'.
-     ***DOS/WIN*** the TAPEMAN3 program builds the HERCCMD comand
+     ***DOS/WIN*** the TAPEMAN3 program builds the MDDIAG8 comand
                    as tapes/<volser>.aws and as I have never tried
                    to use this under DOS/WIN you may need to change
                    the tapes/ to a tapes\ in the code. (dunno)
@@ -4533,37 +4798,17 @@ Appendix C - installtion checklist (very short)
                    INSTALL THE PROGRAMS
 ---------------------------------------------------------------
 
-3. Install the HERCCMD program into a APF library
-   This HERCCMD was written by Grzes Plucinski, obtained from
-   http://www.grzes.com/herccmd.aws.
+3. Obsolete, HERCCMD is no longer required, replaced by MDDIAG8
 
-   This is some old JCL I had lying around from when I installed 
-   it. It you do not already have HERCCMD installed obtain the
-   tape from Gregs site above and try this.
-   The target needs to be a 3350 linklib dataset.
-
-//IEBCOPYR JOB (001),'RESTORE HERCCMD',CLASS=A,MSGCLASS=T
-//RELOAD  EXEC PGM=IEBCOPY,REGION=1024K
-//SYSPRINT DD  SYSOUT=*
-//TAPEIN   DD  UNIT=TAPE,DISP=OLD,DSN=GRZES.HERCCMD,
-//             VOL=SER=DHRCMD,LABEL=(,SL)
-//LIBOUT   DD  DISP=SHR,DSN=SYS2.LINKLIB
-//SYSUT3   DD  UNIT=SYSDA,SPACE=(80,(60,45)),DISP=(NEW,DELETE)
-//SYSIN    DD  *
-  COPY INDD=TAPEIN,OUTDD=LIBOUT
-/*
-//
-
-
-4. Install the TAPEMAN3 and TAPEMCUU programs into a APF library
-   Two options here...
+4. Install the TAPEMAN3, TAPEMCUU, MDDIAG8 programs into a APF
+   library. Two options here...
    Either
      a) Customise CTAPEMAN in <pref>.TAPEMAN3.INSTALL and run the job
-        to copy the program to an APF authorised library.
+        to copy the programs to an APF authorised library.
    OR
      b) assemble from source, so you know what you are getting. The
         job to assemble the programs are in <pref>.TAPEMAN3.SRC and
-        named TAPEMAN3 and TAPEMCUU
+        named TAPEMAN3, TAPEMCUU and MDDIAG8
         Update the jobdecks to assemble it into an APF authorised
         library in your site.
    **NOTE** if using under DOS/WIN you should probably re-assemble
@@ -4664,7 +4909,7 @@ V 311,ONLINE
   The change this time is to ensure you have the line
 DIAG8CMD  ENABLE
   present in your hercules config file. The diag8 interface is
-  used by the HERCCMD program to issue the devinit command to
+  used by the MDDIAG8 program to issue the devinit command to
   mount your tape files, so it must be present.
 
   You should also add the below entry to your hercules config file
@@ -4696,7 +4941,7 @@ SHCMDOPT DISABLE
   (1) add an extra DD card to the MMPF proc you use, it should be
       using the filename you selected, the example here is what
       is used on my system
-//TAPEVOLS DD   DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS,DISP=OLD
+//TAPEVOLS DD   DSN=VSAM.TAPEMAN3.VVDS.VOLSERS,DISP=OLD
       Yes, disp must be old !. shr will run in mmpf ok but then
       all other utilities trying to share the database will get
       IO errors on sharing violations.
@@ -4770,6 +5015,8 @@ A.3 - create a new catalogue and dataspace
 
   You will need to know the master catalogue password for your
   site for this step. You will be prompted for it twice.
+  (unless you are running RAKF and have given yourself access
+  to create new catalogs and datasets)
 
   Run the below batch job. It will create a 30 cylinder user
   catalogue named USERCAT.VSAM and an alias of VSAM that can be
@@ -4869,7 +5116,7 @@ Appendix C - installation checksheet
 |   [ ] Restored files                                        |
 |   [ ] Read $ABOUT                                           |
 |   [ ] Read $INSTALL (this file)                             |
-|   [ ] Installed HERCCMD to an APF authorised library        |
+|   [ ] Installed MDDIAG8 to an APF authorised library        |
 |   [ ] Copied TAPEMAN to an APF authorised library           |
 |   [ ] Copied UTILITY programs (or STEPLIBed jobs)           |
 |   [ ] Created the VSAM datafile                             |
@@ -4946,7 +5193,7 @@ Example Job using TAPEMCUU
 //TAPEMCUU JOB  (0),'SPAWN TAPEMCUU',CLASS=A,MSGCLASS=T
 //STEPMCUU EXEC PGM=TAPEMCUU,PARM='487'
 //TAPEVOLS DD DISP=OLD,
-//          DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//          DSN=VSAM.INSTALL.TAPEMAN33.VVDS.VOLSERS
 //
 ZZ
 //*
@@ -4996,7 +5243,7 @@ test program it does no verification on the date field passed.
 
 //MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=T
 //TAPEMUTL EXEC PGM=TAPEMUTL
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 TAPE01 07099
@@ -5041,7 +5288,7 @@ The contents of that member are below
 //* THAT HAVE PASSED THEIR EXPIRY DATES.
 //*
 //DAILYSCR EXEC PGM=TAPEMSCR
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS VSAM FILE
 //SYSPRINT DD   SYSOUT=*
 //
 
@@ -5076,7 +5323,7 @@ you use to restore these files down, there are sample jobs
 
 //MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=T
 //TAPEMUTL EXEC PGM=TAPEMUTL
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 INSERT TAPE01
@@ -5144,20 +5391,20 @@ QQ
 //* DBREC definition) fits nicely with sysprin output.
 //*
 //SYSIN    DD   *
- DELETE (VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS) CLUSTER SCRATCH
+ DELETE (VSAM.TAPEMAN3.VVDS.VOLSERS) CLUSTER SCRATCH
  SET MAXCC = 0
  DEFINE CLUSTER  -
-         (NAME(VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS) -
+         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS) -
          VOLUMES(VSAM01) -
          RECORDS(100 50)) -
        DATA -
-         (NAME(VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS.DATA) -
+         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS.DATA) -
          KEYS(6 0) -
          RECORDSIZE(132 132) -
          FREESPACE(20 10) -
          BUFFERSPACE(2000) ) -
        INDEX -
-         (NAME(VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS.INDEX) )
+         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS.INDEX) )
 /*
 //
 ./ ADD NAME=CTAPEMAN
@@ -5165,10 +5412,13 @@ QQ
 //* -----------------------------------------------
 //* COPY THE TAPEMAN PROGRAMS THAT ARE AUTHORISED
 //* TO AN APF AUTHORISED LIBRARY
-//*   TAPEMAN  - AS IT MUST CALL HERCCMD WHICH IS
+//*   TAPEMAN  - AS IT MUST CALL MDDIAG8 WHICH IS
 //*              AUTHORISED.
 //*   TAPEMCUU - AT IT USES SVC34 TO INVOKE
 //*              TAPEMAN
+//*   MDDIAG8  - NEEDS TO SWITCH TO SUPERVISOR
+//*              MODE TO ISSUE DIAGNOSE 0008 TO
+//*              PASS COMMANDS TO THE CP.
 //* -----------------------------------------------
 //STEP1    EXEC PGM=IEBCOPY
 //SYSPRINT DD   SYSOUT=*
@@ -5178,6 +5428,7 @@ QQ
  COPY INDD=SYSUT1,OUTDD=SYSUT2
  SELECT MEMBER=TAPEMAN3
  SELECT MEMBER=TAPEMCUU
+ SELECT MEMBER=MDDIAG8 
 /*
 //
 ./ ADD NAME=CUTILS
@@ -5220,7 +5471,7 @@ QQ
 //*
 //DAILYSCR EXEC PGM=TAPEMSCR
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //
 ./ ADD NAME=TAPLABEL
@@ -5282,7 +5533,7 @@ TAPE1 INITT SER=MARK30,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
 //*
 //ADDTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 INSERT MARK01
@@ -5324,7 +5575,7 @@ INSERT MARK30
 //*
 //DELTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALLS.TAPEMAN.LINKLIB     SITE SPECIFIC
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 DELETE MARK01
@@ -5339,7 +5590,7 @@ DELETE MARK02
 //*
 //EXPIRCTL EXEC PGM=TAPEMEXP
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB     SITE SPECIFIC
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 MARK01 09360
@@ -5359,7 +5610,7 @@ MARK03 10001
 //*
 //LSTTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB     SITE SPECIFIC
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 LIST ALL
@@ -5376,7 +5627,7 @@ LIST MARK01
 //*
 //SCRTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 SCRATCH MARK01
@@ -5413,37 +5664,6 @@ SCRATCH MARK30
 //
 ./ ENDUP
 QQ
-//EXITLIB EXEC PGM=IEBUPDTE,COND=(0,NE)
-//SYSPRINT DD SYSOUT=*
-//SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.IEECVXIT
-//SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.IEECVXIT
-//SYSIN DD DATA,DLM=QQ
-         MACRO                                                          00010000
-./ ADD NAME=YREGS
-         MACRO
-         YREGS &DUMMY                                                   00020000
-         GBLA  &REGS                                                    00030000
-&REGS    SETA  1                                                        00040000
-         SPACE 1                                                        00050000
-R0       EQU   0                                                        00060000
-R1       EQU   1                                                        00070000
-R2       EQU   2                                                        00080000
-R3       EQU   3                                                        00090000
-R4       EQU   4                                                        00100000
-R5       EQU   5                                                        00110000
-R6       EQU   6                                                        00120000
-R7       EQU   7                                                        00130000
-R8       EQU   8                                                        00140000
-R9       EQU   9                                                        00150000
-R10      EQU   10                                                       00160000
-R11      EQU   11                                                       00170000
-R12      EQU   12                                                       00180000
-R13      EQU   13                                                       00190000
-R14      EQU   14                                                       00200000
-R15      EQU   15                                                       00210000
-         SPACE 1                                                        00220000
-         MEND                                                           00230000
-QQ
 //SUBJOBS  EXEC PGM=IEBGENER,COND=(0,NE)
 //SYSPRINT DD   SYSOUT=*
 //SYSUT1   DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMCUU)
@@ -5452,6 +5672,7 @@ QQ
 //         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMSCR)
 //         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMUTL)
 //         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMAN3)
+//         DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(MDDIAG8)
 //SYSUT2   DD   SYSOUT=(A,INTRDR)
 //SYSIN    DD   DUMMY
 //
