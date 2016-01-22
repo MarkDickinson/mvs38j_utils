@@ -66,6 +66,9 @@ GETMAXCC.txt    - I needed code to scan the return codes of all prior
                   would need to put it into a program that made
                   decisions on that information :-)
 
+GETPCCA.txt     - Demo of getting PCCA info as 3.8J does not have the
+                  STIDP instruction to obtain that info
+
 IPLINFO.txt     - I wanted more info logged than the default reason
                   for ipl the OS provides (which we have all disabled
                   anyway). This records the ipltime, ipl volser and cuu

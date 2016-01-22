@@ -1,5 +1,4 @@
-//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T,
-// USER=MARK,PASSWORD=MVS38J
+//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T
 //*
 //*   My MPF / Marks MPF / MVS 3.8J console automation 
 //*      without IEECVXIT (almost, see notes below)

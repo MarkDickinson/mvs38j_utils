@@ -1,0 +1,131 @@
+//MARKA JOB (0),'TEST CODE BLOCK',CLASS=A,MSGCLASS=T
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//ASM.SYSIN DD *
+         PRINT NOGEN
+***********************************************************************
+*
+* TESTCODE
+*
+* Example of how to extract the PCCA information for CPU 0 (MVS3.8J)
+* This code does not need to be authorised.
+*
+* Purpose: to see if MVS3.8J under hercules sets the cpuid version
+*          field to x'ff' as the VM manual says MVS under a CP should
+*          do that... results: it is not set under hercules for 3.8J
+*
+* Also Requires: SYS1.AMODGEN for the CVT macro
+*
+* In OS/390 STIDP instruction/query should return x'FF' in the version
+* number (in the first byte) of the CPUID field if the OS is running
+* under a CP. "GC20-1807-7 VM370 System Programmers Guide Rel 6.4-81"
+*
+* The STIDP instruction does not exist in MVS3.8J but the PCCA table
+* can still be queried using standard problem mode code as below.
+* Each PCCA entry contains 16 bytes as
+*  4 bytes, chars 'PCCA'
+*  2 byte version code
+*  1 byte cpu number
+*  5 bytes cpu serial number
+*  4 bytes cpu type
+*
+* ***** IT DOES NOT CONTAIN X'FF' WHEN RUNNING UNDER HERCULES *****
+* CPU 0 info is PCCAFD0006113033 (Hex:D7C3C3C1C6C4F0F0F0F6F1F1F3F0F3F3)
+*               ^^^^vv^^^^^^^^^^   ^=absolutely correct, v=unexpected
+* All data exactly as expected except FD (hex C6C4) in the version
+* field, a C6 instead of a FF as expected if MVS38J detected hercules
+* as a CP. So cannot use that to test if safe to issue diagnose cmds.
+* Note: results match the "D M=CPU" console command, I appear to be
+*       testing the correct field :-)
+*
+* This is an example, the result of a test I wanted to perform.
+* I had no need to loop thru all possible 16 cpus.
+*
+***********************************************************************
+TESTCODE CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 3
+***********************************************************************
+* LOCATE THE PCCA FOR CPU 0 AND WTO IT
+***********************************************************************
+         LA    R3,16                    ADDRESS CVT POINTER
+         L     R2,0(R3)                 LOAD ADDRESS OF CVT
+         USING CVTDATA,R2               MAP THE CVT
+         L     R3,CVTPCCAT              ADDR OF PHYSICAL CCA TABLE
+         DROP  R2
+* Each PCCA contains 16 bytes as
+*  4 bytes, chars 'PCCA'
+*  2 byte version code
+*  1 byte cpu number
+*  5 bytes cpu serial number
+*  4 bytes cpu type
+         L     R4,0(R3)                 PTR TO PCCA FOR CPU 0
+*DOCONLY L     R4,4(R3)                 PTR TO PCCA FOR CPU 1
+*DOCONLY L     R4,8(R3)                 PTR TO PCCA FOR CPU 2
+*DOCONLY L     R4,12(R3)                PTR TO PCCA FOR CPU 3
+*DOCONLY L     R4,16(R3)                PTR TO PCCA FOR CPU 4
+*DOCONLY L     R4,20(R3)                PTR TO PCCA FOR CPU 5
+*DOCONLY L     R4,24(R3)                PTR TO PCCA FOR CPU 6
+*DOCONLY L     R4,28(R3)                PTR TO PCCA FOR CPU 7
+*DOCONLY L     R4,32(R3)                PTR TO PCCA FOR CPU 8
+*DOCONLY L     R4,36(R3)                PTR TO PCCA FOR CPU 9
+*DOCONLY L     R4,40(R3)                PTR TO PCCA FOR CPU 10
+*DOCONLY L     R4,44(R3)                PTR TO PCCA FOR CPU 11
+*DOCONLY L     R4,48(R3)                PTR TO PCCA FOR CPU 12
+*DOCONLY L     R4,52(R3)                PTR TO PCCA FOR CPU 13
+*DOCONLY L     R4,56(R3)                PTR TO PCCA FOR CPU 14
+*DOCONLY L     R4,60(R3)                PTR TO PCCA FOR CPU 15
+*
+* WTO the contents of the PCCA for CPU 0
+         MVC   PRTWTO+8(16),0(R4)
+PRTWTO   WTO   'pccaVVCSSSSSTTTT'
+*
+***********************************************************************
+*                            ALL DONE - EXIT                          *
+***********************************************************************
+EXIT     CNOP  0,4
+         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+         SPACE 3 
+***********************************************************************
+*        D A T A   A R E A   B I T S
+***********************************************************************
+SAVEAREA DC    18F'0'             MAIN PROGRAM SAVE AREA
+CVTDATA  CVT   DSECT=YES,PREFIX=NO
+         SPACE 3
+* STANDARD REGISTER EQUATES HERE
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   TESTCODE
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(TESTCODE),DISP=SHR
+//*
+//* RUN THE TEST CODE
+//TESTCODE EXEC PGM=TESTCODE,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//

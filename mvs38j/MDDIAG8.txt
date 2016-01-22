@@ -40,7 +40,12 @@
 *     call, I don't; doesn't seem to be an issue, yet.                *
 * (3) The manual says there should always be a check to make sure the *
 *     O/S is running as a guest under a CP, I don't as I will always  *
-*     be running under hercules.                                      *
+*     be running under hercules. Plus mvs3.8j running under hercules  *
+*     does not set the indicator flag in the cpuid version field to   *
+*     indicate it is running under a CP anyway so I cannot test that  *
+*     THe PCCA entry for CPU 0 serial 000611 model 3033 is,           *
+*     PCCAFD0006113033, if under a CP byte five should be x'FF',      *
+*     it's not.                                                       *
 *                                                                     *
 ***********************************************************************
          LCLB  &USERAKF
