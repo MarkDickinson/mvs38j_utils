@@ -1,4 +1,5 @@
-//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T
+//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T,
+// USER=MARK,PASSWORD=MVS38J
 //* *****************************************************************
 //*
 //* INSTALL DATE/TIME UTILITY PROGRAM
@@ -15,9 +16,9 @@
 //* after this comment block.
 //*
 //* Also the programs are setup to assemble into dataset name
-//* MARK.LIB.LOAD.
-//* You may want to globally change that before running this job
-//* to save on editing later.
+//* MARK.LIB.LOAD. You may want to globally change that before
+//* running this job to save on editing later.
+//*
 //* The SYSLIB macro searchlist for the programs and example
 //* programs will source macros from the install library name
 //* you chose so will assemble correctly, but to use them in
@@ -28,23 +29,14 @@
 //* so page down to that to see what the program will actually
 //* do for you.
 //*
-//* Example usage in member TESTALL.
+//* Example usage for calling from asm/370 is in member TESTALL.
 //*
 //* --------------------------------------------------------------
 //*
 //* Credits: programs I have copied and modified bits of code from
-//*          to get these utility programs working.
-//*          Where I have merged other programs code into my
-//*          utilities I hope I have listed all the credits here.
+//*          or used as a reference to get these utility programs
+//*          working.
 //*
-//*          I have just fixed bugs in the code I copied, then
-//*          fiddled with it to get it doing what I wanted, merged
-//*          the code as appropriate, and created a data area mapping
-//*          macro and a 'all-encompassing' macro to call the 
-//*          appropriate module for the requested function.
-//*
-//* COPIED FROM
-//* ===========
 //* U370DATE - by James M. Morrinson (2002) which I found found
 //*            via google when searching for a date issue I had.
 //*            Don't know origional URL found
@@ -56,19 +48,17 @@
 //*            (1)used the day of week calculation code from here,
 //*               merged it into my modified UDATE001
 //* CBT249.FILE029(MACROS) - $STCK macro
-//*            (1)All of the 'working' STCK time conversion has been 
-//*               coipied from the $STCK macro in CBT249.FILE029(MACROS), 
-//*               but changed to use a passed STCK time I provide.
-//*               Code that did not work I replaced (that $STCK macro
-//*               did not use STCK to obtain the date, my changes get
-//*               the date using STCK 
-//*               Usefull code merged into UDATE002 program.
+//*            (1)Some of the 'working' STCK time conversion has been 
+//*               copied from the $STCK macro in CBT249.FILE029(MACROS), 
+//*               that code was incomplete, only handled hh:mm:ss
+//*               correctly (and used current system yyyy/mm/dd date)
+//*               but used as a starting point 
 //* DUPTIME - Is in one of the CBT249 files in TK3, sorry forgot
 //*           which one.
 //*            (*)No code copied directly as it does not do what I  
 //*               was trying to achieve, but I may have gotten the
 //*               RMCTTOD control block/area address from there?.
-//* Additional
+//* Additionally
 //* The day of week algorythm used in the DAYOWEEK macro is credited
 //* to Tomohiko Sakamota in the Wikipedia article I found it in.
 //* I just converted the C logic to 370/ASM
@@ -76,7 +66,7 @@
 //* *****************************************************************
 //CREATE   EXEC PGM=IEFBR14
 //* BLOCKSIZE 19040 IS REQUIRED FOR TK3 MVS3.8J AS
-//* WE USE THSI FILE AS A MACRO LIBRARY FOR ASSEMBLY.
+//* WE USE THIS FILE AS A MACRO LIBRARY FOR ASSEMBLY.
 //* BUT LETS BE GENERIC, USE THE DCB FROM SYS1.MACLIB
 //DD1      DD   DISP=(NEW,CATLG,DELETE),
 // DCB=SYS1.MACLIB,
@@ -93,9 +83,23 @@
 ./ ADD NAME=$DOC
 Main Purpose - why I created this library
 =========================================
-Obtain and return date and time information, all the below
-information is returned from all UDATEnnn programs, just pick
-out the bits your program needs.
+I got sick of imbedding code into my programs to display the
+date and time in human readable format. I decided against
+using macros as that is effectively embedding the code again.
+
+As the requirement is multiple programs need the information
+for my personal use I started placing the functions into
+linklisted programs that all my programs could use.
+
+And to keep it all simple to use no matter how many new
+enhancements or updates are made the only (recomended)
+interface to the progams is via a single interface macro
+plus a single data area mapping macro making it extremely
+easy to use, which will always be backward compatible.
+
+The main purpose is to obtain and return date and time information,
+all the below information is always returned from all UDATEnnn
+programs, just pick out the bits your program needs.
  - CCYY       century and year
  - JJJ        julian day number (as returned from "D T" command but
               without the YY)
@@ -120,23 +124,26 @@ complex stuff.
 
 Quick install (assumes you are running TK3, sys2.maclib for YREGS)
 =============
-Edit UDATE001,
+Edit UDATE001  (date calculations using TIME DEC values)
  - change the load library from MARK.LIB.LOAD to one you want to use
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
    you installed this file as
  - run the job
-Edit UDATE002,
- - change the load library from MARK.LIB.LOAD to one you want to use
- - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
-   you installed this file as
- - run the job
-Edit UDATE003,
+Edit UDATE003  (date calculations using time STCK values)
  - change the load library from MARK.LIB.LOAD to one you want to use
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
    you installed this file as
  - run the job
 
-----> Optional SCHED* utilities
+----> Optional Additional SCHED* utilities (B E T A)
+      Truely BETA, no sanity chacking of input data is done yet
+      These are used to obtain information on future dates/times
+      and require a different data mapping macro to the UDATE*
+      programs that are only concerned with activities around the
+      current time; refer to the test programs for syntax.
+      ---> they are refenced by the main u370date macro if you
+           intend to use some of the BETA functions such as
+           CALCCARD
 Edit SCHED001,
  - change the load library from MARK.LIB.LOAD to one you want to use
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
@@ -154,7 +161,9 @@ Edit SCHEDTST ( *** very optional, the scheduler will start ***)
  - CHANGE THE TEST DATA CARDS, CHANGE THE JOBDECKS DD TO A DATASET
    YOU HAVE JOBS DERFINED IN
  - run the job to assemble the program, IT WILL ALSO START THE
-   PROGRAM running, use 'P jobname' to stop the text.
+   PROGRAM running, use 'P jobname' to stop the test.
+ * This is not a job scheduler, it exists to test the functions
+   of the programs only
  
 
 Testing
@@ -192,9 +201,6 @@ TESTALL  - test all the UDATEnnn programs, examples of how to
 
 UDATE001 - the date program to convert TIME DEC format values
            to displayable date information
-UDATE002 - the program to determine the last IPL date and time,
-           will be obsoleted from the library soom as functionality
-           is now available in udate003
 UDATE003 - the date program to convert STCK format values to
            displayable date information; and also now used to
            provide the last IPL time... will eventually obsolete
@@ -250,7 +256,7 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
                   INFMT=  DEC or STCK (default DEC)
                           Indicates if the time value to be used is
                           in 'TIME DEC' or 'STCK' format.
-                  REQ=    CURR, DATA, DATATZ, IPL or IPL2
+                  REQ=    CURR, DATA, DATATZ, IPL
                           CURR is get the values for the current 
                                date and time
                           DATA is use the timestamp information
@@ -263,13 +269,13 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
                           IPL  will return the last IPL time
                                information using the new STCK program
                                udate003
-                          IPL2 will return the last IPL time 
-                               information using the soon to be
-                               obsoleted udate002 program; retained
-                               just for testing against udate003 now
                           CALCCARD used to request information on a 
                                future date, date determined by request 
                                type information in D370SCHD area
+                               * ==> in testing
+                               *  --> REQUIRES SCHED001 IN LINKLIST 
+                               *  --> data mapping is D370SCHD
+                               *  --> you should not play with this
                 Extra Macro parameters required if REQ=DATA or DATATZ
                   DATEREG=     required if INFMT=DEC,REQ=DATA is used
                   TIMEREG=     required if INFMT=DEC,REQ=DATA is used
@@ -282,12 +288,12 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
                           If these values are NOT provided (default)
                           the date/time values returned will be for
                           the current date and time.
-                          Ignored if REQ=CURR, IPL or IPL2
+                          Ignored if REQ=CURR or IPL
                   STCKVAL=  required if INFMT=STCK,REQ=DATA[TZ] used
                           this is the name of a DS 2F field containing
                           the STCK timestamp value to be used
                           instead of the current STCK date value
-                          Ignored if REQ=CURR, IPL or IPL2
+                          Ignored if REQ=CURR or IPL
 
 MEMBER    TYPE PURPOSE
 --------  ----- ------------------------------------------------------
@@ -307,18 +313,6 @@ UDATE001  ASM   The actual program that does all the work, preferably
                 provided. Uses UDATEVAR macro with the DSECT option
                 to address the data area passed by the caller to
                 ensure fields are mapped correctly.
-                Note: uses MARK.LIB.LOAD for the program, change to
-                      one of your existing load libraries before
-                      running this.
-                USE THE UDATEMAC MACRO TO CALL THIS PROGRAM.
-
-MEMBER    TYPE PURPOSE
---------  ----- ------------------------------------------------------
-UDATE002  ASM   This program returns the date and time of the last IPL
-                Uses UDATEVAR to map the data area
-                Note: for other IPL related values look at my IPLREASN
-                      for IPL related control blocks, this program is
-                      only interested in the date/time.
                 Note: uses MARK.LIB.LOAD for the program, change to
                       one of your existing load libraries before
                       running this.
@@ -459,11 +453,12 @@ UDATEVRL EQU   *-UDATEVAR
 .*          (see D3270 dsect for mapping)
 .*
 .*  Syntax: all combinations so far
-.*         - for REQ=CURR, IPL or IPL2 pretty simple
+.*         - for REQ=CURR or IPL pretty simple
 .*         - for REQ=DATA or REQ=DATATZ the caller must propvide
 .*           pre-populated timestamp values in the correct format
 .*         - for REQ=CALCCARD D370SCHD must be a valid syntax, no
 .*           checking is done and SCHED001 will SOC7 on bad data
+.*           as this is still in prototype
 .*         - in all examples UDATEVAR is assumed to have been created
 .*           for your program using the UDATEVAR macro
 .*         - in all examples ERREXIT is assumed to be a label in your
@@ -478,8 +473,7 @@ UDATEVRL EQU   *-UDATEVAR
 .* (5) UDATEMAC DATA=UDATEVAR,ERROR=ERREXIT,INFMT=STCK,REQ=DATATZ,
 .*        STCKVAL=DS2Fxxx
 .* (6) UDATEMAC DATA=UDATEVAR,ERROR=ERREXIT,REQ=IPL
-.* (7) UDATEMAC DATA=UDATEVAR,ERROR=ERREXIT,REQ=IPL2
-.* (8) UDATEMAC DATA=UDATEVAR,ERROR=ERREXIT,REQ=CALCCARD
+.* (7) UDATEMAC DATA=UDATEVAR,ERROR=ERREXIT,REQ=CALCCARD
 .* Explained...
 .* 1--> Default, returns the current date and time using TIME DEC
 .* 2--> Returns the date and time for register values the user has
@@ -496,9 +490,7 @@ UDATEVRL EQU   *-UDATEVAR
 .*      field. This is adjusted for timezone (DATATZ uses instead
 .*      of DATA in the REQ=)
 .* 6--> Returns the date and time of the last IPL using UDATE003
-.* 7--> Returns the date and time of the last IPL using the soon to be
-.*      obsoleted UDATE002 program
-.* 8--> Added as a scheduler support function, calculates a future
+.* 7--> Added as a scheduler support function, calculates a future
 .*      date based on various criteria, refer to SCHED001 source
 .*      documentation for the valid formats of the D370SCHD text area
 .*
@@ -524,7 +516,7 @@ D3R&SYSNDX DS F
          L     1,D3R&SYSNDX        RESTORE REG
 .*
          AIF   ('&REQ' EQ 'IPL').DTSTCK0   IPL always via STCK
-         AIF   ('&REQ' EQ 'IPL2').DTIPL00  IPL2 always via utime002
+         AIF   ('&REQ' EQ 'IPL2').DTERR8   Obsoleted 2016/02/06
 .* (2013/12/11) Added calccard function for scheduler use
          AIF   ('&REQ' EQ 'CALCCARD').DTCALC0  CALCCARD has all data    
 .* (2013/07/25) Merging all macros into one now, what format ?
@@ -605,14 +597,6 @@ D3R&SYSNDX DS F
          B     DTX&SYSNDX
          AGO   .DTEND
 .* ------------------------------------------------------
-.* REQ=IPL2 always goes here, to be obsoleted as an option
-.* once IPL via udate003 has been tested OK.
-.* ------------------------------------------------------
-.DTIPL00 ANOP
-         LINK  EP=UDATE002,PARAM=&DATA,ERRET=DT&SYSNDX
-         B     DTX&SYSNDX
-         AGO   .DTEND
-.* ------------------------------------------------------
 .* REQ=CALCCARD, ADDED DEC 11 2013
 .* ------------------------------------------------------
 .DTCALC0 ANOP
@@ -635,6 +619,8 @@ D3R&SYSNDX DS F
 .DTERR6  MNOTE 12,'STCKVAL MUST BE PROVIDED FOR INFMT=STCK REQ=DATA'
          AGO   .DTEND
 .DTERR7  MNOTE 12,'REQ MUST BE CURR OR DATA FOR INFMT=DEC'
+         AGO   .DTEND
+.DTERR8  MNOTE 12,'REQ=IPL2 OBSOLETED, USE REQ=IPL INSTEAD'
 .DTEND   ANOP
 DT&SYSNDX WTO 'DATE MODULE NOT FOUND IN LINKLIST LIBRARIES'
          B     &ERROR
@@ -652,9 +638,9 @@ DTX&SYSNDX CNOP 0,4
 //SYSLIB   DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
 //         DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS2.MACLIB
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -665,7 +651,6 @@ TESTPROG TITLE 'Test UDATEnnn Programs'
 *    UDATEVAR dsect mapping macro
 *    UDATEMAC interface macro
 *    UDATE001 program functions
-*    UDATE002 ipl time function
 *    UDATE003 program functions
 *
 *----------------------------------------------------------------------
@@ -690,10 +675,6 @@ TESTPROG CSECT
          L     R0,PACKTEMP     
          UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATA,                   X
                DATEREG=R1,TIMEREG=R0
-         BAL   R3,DUMPDATA
-* ADDED FOR UDATE002
-         WTO   '--- UDATE002 : IPL TIME'
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=IPL2
          BAL   R3,DUMPDATA
 * ADDED FOR UDATE003 
          WTO   '--- UDATE003 : IPL TIME'
@@ -778,9 +759,9 @@ STCKTEMP DS    2F
 //SYSLIB   DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
 //         DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS2.MACLIB
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -1147,400 +1128,6 @@ DAYTABLE DC    AL1(SUN),AL1(MON),AL1(TUES),AL1(WED),AL1(THUR),AL1(FRI)
  NAME UDATE001(R)
 /*
 //
-./ ADD NAME=UDATE002
-//MARK002 JOB (0),'ASM UDATE002',CLASS=A,MSGCLASS=T
-//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
-//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
-//             PARM.LKED='LIST,MAP,NCAL,AC=0'
-//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
-// DD DISP=SHR,DSN=SYS1.AMODGEN
-// DD DISP=SHR,DSN=MVSSRC.SYM101.F01
-// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-// DD DISP=SHR,DSN=SYS2.MACLIB
-//ASM.SYSIN DD *
-UDATE002 CSECT
-* *********************************************************************
-*
-* UDATE002: CALCULATE THE IPL TIME OF THE MVS3.8J SYSTEM
-*           RETURN THE RESULTS IN MY STANDARD UDATEVAR DATA AREA.
-*
-* LOSELY BASED ON THE $STCK MACRO DEFINED IN CBT249.FILE029(MACROS)
-*
-* I USE R9 FOR ADDRESSING THE UDATEVAR DSECT, DON'T USE IT FOR
-* ANYTHING ELSE.
-*
-* MAJOR CHANGES MADE TO THAT $STCK BASE FOR THIS PURPOSE ARE
-* (1) DON'T RETURN VALUES FOR THE CURRENT DATE, INSTEAD SUBTRACT
-*     THE RMCTTOD TIME AND WORK OUT THE IPL TIME.
-* (2) CHANGE TO USE MY UDATEVAR MACRO DATA AREAS INSTEAD OF THE
-*     DATA AREAS ORIGIONALLY USED
-* (3) THE $STCK MACRO RETURNED 0-MON THRU 6-SUN AS A WEEKDAY BIN 
-*     HEX FIELD. HAD TO CHANGE THAT TO THE NORMAL 0-SUN TRU 6-SAT
-*     CHAR VALUES I WANT. AND ADD IN THE DAYNAME AS WELL.  
-* (4) THE $STCK MACRO ONLY USED THE STCK RESULT TO CALCULATE THE
-*     TIME AND DAY NUMBER; IT THEN USED THE CURRENT SYSTEM DATE
-*     FROM THE CVT TO FORMAT THE DATE... SO THE MACRO PROBABLY
-*     SHOULD NOT HAVE BEEN CALLED $STCK UNTIL THE AUTHOR COMPLETED
-*     IT. ANYWAY RIPPED OUT ALL THE DATE CODE AND PUT CODE IN THAT
-*     WOULD WORK OUT THE DATE FROM ACTUALLY USING THE 64BIT
-*     STCK/TOD VALUE THAT WAS REQUIRED BY THIS PROGRAM.
-* (5) ADD THE CODE TO RETURN THE DDD PART OF THE YYDDD DATE AS I 
-*     HAD TO WRITE ALL THE DATE STUFF ANYWAY, SO NOW THE UDATEVAR
-*     DATA AREA IS FULLY POPULATED.
-* (6) MAKE A STANDALONE CALLABLE PROGRAM; TO BE ADDED TO MY DATE
-*     UTILITY LIBRARY.
-* (7) PUT COMMENTS IN EXPLAINING WHAT IS IN EACH OF THE TIME
-*     VALUES AS THAT DOCUMENTATION IS HARD TO FIND.
-*
-* KNOWN BUGS AND ISSUES
-* (A) USING A MESSY INSDYNAM ROUTINE TO INSERT THE DAYNAME,
-*     NOT A BUG BUT THE CLEANER ADDRESS TABLE BY REGISTER ADDR
-*     I JUST COULD NOT GET WORKING. WILL REVISIT THAT CODE ONE
-*     DAY MAYBE, BUT THE PROGRAM IS WORKING OK NOW.
-* (B) HMM, I ALWAYS ADD THE TIME DIFFERENTIAL AS I WILL ALWAYS BE
-*     IN A +TIMEZONE. POSSIBLE NEEDS A CHECK TO SEE IF IT SHOULD
-*     BE SUBTRACTED OR MAYBE A NEGATIVE NUM IS ADDED SO ALL IS OK?.
-*     I WILL NEVER BE IN A -TIMEZONE SO OVER TO YOU TO TEST IF YOU
-*     WANT; I'M HAPPY AS IT IS.
-*
-* *********************************************************************
-         STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-**********************************************************************
-         LTR   R1,R1
-         BZ    NOPARM
-         LR    R2,R1        put address of address list in R2
-         L     R9,0(,R2)    R9 address parm1 field
-         USING UDATEVAR,R9  data area to update with results
-**********************************************************************
-* WE DO NOT USE TIME HERE, BUT DOCUMENT THE FIELDS
-* ----- whats in the TIME BIN values
-* R0 = hundredths of seconds since midnight
-* R1 = 00YYDDDF  (or 01 leading after year 2000)
-**       TIME  BIN
-* ----- whats in the TIME DEC values
-* R0 = packed decimal HHMMSSth
-* R1 = 00YYDDDF  (or 01 leading after year 2000)
-**       TIME  DEC
-*
-* ---------------------------------------------------------------------
-* Start of the STCK time calculations.
-* Calculating the IPL time from the current STCK plus local time
-* deviation, and subtracting the RMCTTOD (1024Usecs since IPL).
-* ---------------------------------------------------------------------
-* ----- whats in the STCK values
-* 104 bit time field, STCK instruction returns the top 64 bits.
-* Microseconds since 1Jan1900 00:00 incremented each microsecond
-* at BIT51, so microseconds are only down to Bit 51.
-* You MUST also add the time deviation to get the correct time,
-* assuming you are using UTC and have an offset set in 
-* SYS1.PARMLIB(PARMTZ), you need to manually include that as
-* the time offset is not part of the STCK value.
-* Note: STCK value will overflow/wrap back to 1Jan1900 00:00 in 2042
-*       z/OS has STCKE which is intended to work around that one
-*       day, but that doesn't exist on MVS3.8J.
-         STCK  VALSTCK            STORE THE TIME-OF-DAY CLOCK         
-         LM    R0,R1,VALSTCK
-         L     15,16              GET CVT ADDRESS                  
-         A     0,304(15)          ADD LOCAL TIME DEVIATION...
-         SRDL  0,12               ISOLATE NUMBER OF MICROSECONDS
-         STM   R0,R1,VALSTCK      !!!! DBG save before sldl later
-* ----- whats in the RMCTTOD
-* 1024 Micro Seconds since the system was IPLed
-         L     R5,16            POINT TO THE CVT.
-         L     R5,604(,R5)      POINT TO THE RMCT.
-         L     R5,124(,R5)      LOAD RMCTTOD (1024USEC SINCE IPL).
-         XR    R4,R4            Zeros in upper word, rmcttod in lower
-         M     R4,=F'1024'      M R4,R5 pair by 1024
-         STM   R4,R5,VALTTOD    Store result
-* ----- ok subtract microsecs since IPL from STCK microsecs
-*       and see what result we get now. It will be the IPL time.
-         LM    R0,R1,VALSTCK
-         SL    R1,VALTTOD+4     Subtract low order byte
-         BC    11,*+6           Branch if no borrow
-         BCTR  R0,0             Perform borrow
-         SL    R0,VALTTOD       Complete the substraction
-         STM   R0,R1,VALSTCK    Save it
-* ----- Roll the bits back up to the expected STCK format and
-*       go and format the result data.
-         LM    0,1,VALSTCK
-         SLDL  0,12             MOVE BACK UP, STCKCONV
-*                               expects a STCK format not one
-*                               we fiddled with
-         STM   0,1,VALSTCK
-         BAL   R1,STCKCONV      NOW DO ALL THE MESSY EXTRACTION WORK
-* ---------------------------------------------------------------------
-* Sucess, time values being returned are now the IPL time
-* ---------------------------------------------------------------------
-*
-EXIT     CNOP  0,4
-         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
-         LM    R14,R12,12(R13)    RESTORE REGISTERS
-         SLR   R15,R15            EXIT CODE 0
-         BR    R14                RETURN TO SYSTEM
-NOPARM   WTO   'NO PARM PASSED TO MODULE UDATE002'
-         B     EXIT
-         EJECT
-* ---------------------- START STCKCONV ------------------------
-* CALL BAL R1,STCKCONV
-STCKCONV ST    R1,STCKV01         SAVE R1
-         ST    R1,STCKV13          SAVE R13
-         LA    R13,STCKVWA         R13 SET TO THE WORKAREA WE USE
-         LM    0,1,VALSTCK         GET PROVIDED
-         STM   0,1,8(13)           AND STORE WHERE EXPECTED
-         SRDL  0,12               ISOLATE NUMBER OF MICROSECONDS        00000920
-         D     0,=F'60000000'     DIVIDE BY 60M (R1=MINUTES AFT EPOCH)  00000930
-         LR    15,0               COPY REMAINDER OF MICS TO GET SECS    00000940
-         SR    14,14              CLEAR FOR DIVIDE                      00000950
-         D     14,=F'951424'      DIVIDE TO GET REMAINING SECONDS (R5)  00000960
-         LR    14,15              COPY TO WORK REG                      00000960
-STCK001  SL    14,=F'60'          DECREMENT BY 60 SECONDS               00000960
-         BM    STCK002            LESS THAN SIXTY, CONTINUE             00000960
-         SL    15,=F'60'          MORE THAN SIXTY, ADJUST FOR LEAP      00000960
-         AL    1,=F'1'            BUMP MINUTES                          00000960
-         B     STCK001            CHECK AGAIN                           00000960
-STCK002  CVD   15,8(13)           CONVERT SECONDS TO PACKED FORMAT      00000980
-         UNPK  24(4,13),14(2,13)  UNPACK SECONDS FOR PRINT              00000990
-         OI    27(13),X'F0'       SET UP FOR PRINTING                   00001000
-         MVC   D370TIME+4(2),26(13)   MOVE THE SECONDS                  00001010
-         CVD   1,8(13)            CONVERT MINUTES TO PACKED FORMAT      00001030
-         DP    8(8,13),=P'60'     DIVIDE INTO HOURS AND MINUTES         00001050
-         UNPK  24(4,13),14(2,13)  UNPACK THE MINUTES                    00001060
-         OI    27(13),X'F0'       SET UP FOR PRINTING                   00001070
-         MVC   D370TIME+2(2),26(13)   MOVE THE MINUTES                  00001080
-         ZAP   8(8,13),8(6,13)    RESET TO FULL LENGTH                  00001090
-         DP    8(8,13),=P'24'     DIVIDE INTO DAYS AND HOURS            00001110
-         UNPK  24(4,13),14(2,13)  UNPACK THE HOURS                      00001120
-         OI    27(13),X'F0'       SET UP FOR PRINTING                   00001130
-         MVC   D370TIME(2),26(13)     MOVE THE HOURS                    00001140
-         ZAP   8(8,13),8(6,13)    RESET TO FULL LENGTH                  00001150
-         DP    8(8,13),=P'7'      DIVIDE BY NUMBER OF DAYS IN A WEEK    00001610
-         ZAP   8(8,13),15(1,13)   FILL DOUBLEW WITH THE REMAINDER       00001620
-         CVB   0,8(13)            CONVERT RELATIVE DAY TO BINARY        00001640
-         A     0,=F'1'            0-MON TO 6-SUN TO 0-SUN TO 6 SAT
-         C     0,=F'7'            ABOVE 6 ?
-         BL    WKDYOK             IF LOW THEN OK
-         LA    0,0                ELSE SET TO 0
-WKDYOK   STC   0,D370WKDY         SET RELATIVE DAY OF WEEK              00001670
-         OI    D370WKDY,X'F0'     MID:DEBUG PRINTABLE?
-*** MOVE IN DAYNAME... DOES NOT WORK
-***   SO A BAL TO A MESSY INSDYNAM AND THE END OF THIS ROUTINE
-***      LR    R1,R0
-***      XR    R0,R0
-***      M     R0,=F'3'
-***      LA    R0,STCKDAYS
-***      AR    R0,R1
-***      MVC   D370DNAM(3),0(R0)
-*
-* MID: COMPLETELY REPLACE ALL THE DATE CALCULATION CODE
-*      THAT USED BE BE BELOW HERE
-*      AS THE $STCK MACRO I BASED THIS PROGRAM ON FOR
-*      SOME STUPID REASON USES THE ACTUAL SYSTEM DATE
-*      INSTEAD OF WHAT IS IN THE STCK VALUE.
-*      I GUESS WHEOEVER WROTE $STCK GAVE UP HALF WAY THROUGH.
-*      AS IT'S A MOJOR CHANGE PUT IT IN A SEPERATE BLOCK OF
-*      CODE (FINDDATE)
-         BAL   R3,FINDDATE
-*
-         BAL   R1,INSDYNAM        INSERT THE DAYNAME
-         L     R13,STCKV13        RESTORE R13
-         L     R1,STCKV01         RESTORE R1
-         BR    R1                 RETURN
-         EJECT
-* YES THIS IS MESSY, I JUST COULDN'T FIGURE OUT WHY THE
-* MORE SENSIBLE CODE IN THE MAINLINE WONT WORK
-INSDYNAM CLI   D370WKDY,C'0'
-         BNE   INSDY001
-         MVC   D370DNAM(3),STCKDAYS
-         B     INSDYEND
-INSDY001 CLI   D370WKDY,C'1'
-         BNE   INSDY002
-         MVC   D370DNAM(3),STCKDAYS+3
-         B     INSDYEND
-INSDY002 CLI   D370WKDY,C'2'
-         BNE   INSDY003
-         MVC   D370DNAM(3),STCKDAYS+6
-         B     INSDYEND
-INSDY003 CLI   D370WKDY,C'3'
-         BNE   INSDY004
-         MVC   D370DNAM(3),STCKDAYS+9
-         B     INSDYEND
-INSDY004 CLI   D370WKDY,C'4'
-         BNE   INSDY005
-         MVC   D370DNAM(3),STCKDAYS+12
-         B     INSDYEND
-INSDY005 CLI   D370WKDY,C'5'
-         BNE   INSDY006
-         MVC   D370DNAM(3),STCKDAYS+15
-         B     INSDYEND
-INSDY006 CLI   D370WKDY,C'6'
-         BNE   INSDY007
-         MVC   D370DNAM(3),STCKDAYS+18
-         B     INSDYEND
-INSDY007 MVC   D370DNAM(3),=CL3'ERR'
-INSDYEND BR    R1
-         EJECT
-**********************************************************************
-* FINDDATE:
-* 
-* ALL THE WORK REQUIRED TO PROCESS A STCK FORMAT TIMESTAMP TO
-* EXTRACT THE CCYY, MM, DD AND DDD VALUES FROM THE DATE.
-* 
-* CREATED AS I COULDN'T FIND ANYTHING THAT CORRECTLY DID THIS WORK
-* USING THE STCK VALUE.
-**********************************************************************
-FINDDATE EQU   *
-         STM   R0,R15,FINDDV00
-         LM    R0,R1,VALSTCK
-* -------------------------------------------------------------
-* Get the number of DAYS since EPOC, thats all we need here
-* D - even reg is remainder, odd reg is quotient
-* -------------------------------------------------------------
-***    Divide to get minutes only 
-***    Divide that result to get days 
-         SRDL  R0,12             SHIFT TO MICROSECS
-         D     0,=F'60000000'    Div by 60M (MINUTES AFT EPOC IN R1)
-         XR    R0,R0             r1 has minutes ?
-         D     0,=F'1440'        div r0,r1 by 60*24 to get days to r1
-         LR    R0,R1                   quotient to R0 (days?)
-         A     R0,=F'1'                from day 1 not day 0
-         ST    R0,FINDDV02             save days left
-*
-* -------------------------------------------------------------
-*   
-*   At this point R0 is the number of days since EPOC (starting
-*   with day 0).
-*   
-*   Need to find CCYY and DDD.
-*   Loop through each year decrementing days for each year
-*   (366 for leap, 365 for non-leap) until we are left with
-*   a DDD number of days into the year.
-*   We have correct year as we increment the year number 
-*   as we do each years days deletion.
-*   
-*   Leap year logic (source Wikipedia)
-*   if year is divisible by 400 then
-*      is_leap_year
-*   else if year is divisible by 100 then
-*      not_leap_year
-*   else if year is divisible by 4 then
-*      is_leap_year
-*   else
-*      not_leap_year
-*
-* -------------------------------------------------------------
-         L     R10,=F'1899'  starts at 1900, but we add 1 top of loop
-FINDDL00 A     R10,=F'1'               bump year
-         ST    R10,FINDDV01            save for tests and retrieval
-         L     R1,=F'365'              default is not a leap year
-         LA    R8,STCKVT               default is not a leap year
-* Check if divisable by 400, always a leap year
-         SLR   R6,R6   
-         LA    R3,400 
-         LR    R7,R10 
-         DR    R6,R3
-         LTR   R6,R6
-         BZ    SETLEAP                 evenly divisible
-* Check if divisable by 100, is so and not divisable
-* by 400 (checked above) then it is not a leap year.
-         SLR   R6,R6
-         LA    R3,100                 divisible by 100 ?
-         LR    R7,R10 
-         DR    R6,R3
-         LTR   R6,R6
-         BZ    FINDDL01            evenly divisible, not leap year
-* If a multiple of 4 after checks above, is a leap year
-         SLR   R6,R6
-         LA    R3,4                   divisible by 4 ?
-         LR    R7,R10 
-         DR    R6,R3
-         LTR   R6,R6
-         BNZ   FINDDL01           not evenly divisible, not leap year
-SETLEAP  L     R1,=F'366'              leap year, use leap year values
-         LA    R8,STCKVTL              leap year
-FINDDL01 ST    R0,FINDDV02             save days left
-         ST    R0,FINDDV04             save ddd, we need it later
-         SR    R0,R1                   subtract days in yr from R0
-         BP    FINDDL00                if positive go round again
-         L     R0,FINDDV04             get lastpositive ddd back
-* -------------------------------------------------------------
-* Similar to above
-* Decrement the number of days one month at a time, incrementing
-* the month each time we subtract a bunch of days. And we will
-* end up with the month number and day number.
-*
-* Have a year (R10) and days left (R0) in the year now (YYYYDDD)
-*
-* R8 still addresses the correct year/leapyear days table (I think)
-* R0 still has days
-* -------------------------------------------------------------
-         LA    R1,1
-         SLR   R14,R14                 month minus one
-         SLR   R15,R15
-         AR    R14,R1                  bump month, start at 1
-FINDDL02 IC    R15,0(R14,R8)           # days in month
-         CR    R0,R15                  too many?
-         BNH   FINDDL03                no, br; now know month
-         SR    R0,R15                  reduce ddd
-         AR    R14,R1                  bump month
-         B     FINDDL02
-FINDDL03 ST    R14,FINDDV03            save month
-         ST    R0,FINDDV02             save days left
-*
-* -------------------------------------------------------------
-* Make the results displayable in our output data area now.
-* -------------------------------------------------------------
-         L     R0,FINDDV02             dd
-         CVD   R0,FINDDV05
-         UNPK  D370MMDD+2(2),FINDDV05+6(2)  UNPACK DAY INTO OUTPUT
-         L     R1,FINDDV03             mm
-         CVD   R1,FINDDV05             
-         UNPK  D370MMDD(2),FINDDV05+6(2)  UNPACK MONTH INTO OUTPUT
-         L     R2,FINDDV01             yyyy
-         CVD   R2,FINDDV05 
-         UNPK  D370YEAR(4),FINDDV05+5(3)  UNPACK YEAR INTO OUTPUT
-         OI    D370MMDD+1,C'0'       INSURE NUMERICS
-         OI    D370MMDD+3,C'0'       INSURE NUMERICS
-         OI    D370YEAR+3,C'0'       INSURE NUMERICS
-         L     R3,FINDDV04             ddd
-         A     R3,=F'1'                make from 1 not from 0
-         CVD   R3,FINDDV05            
-         UNPK  D370JDAY(3),FINDDV05+6(2)  UNPACK DDD INTO OUTPUT
-         OI    D370JDAY+2,C'0'       INSURE NUMERICS
-*
-         LM    R0,R15,FINDDV00
-         BR    R3
-FINDDV00 DS    16F                    save all registers
-FINDDV01 DS    F                      hold the year we are testing
-FINDDV02 DS    F                      days left at the moment
-FINDDV03 DS    F                      current month
-FINDDV04 DS    F                      need to keep a copy of DDD
-FINDDV05 DS    D                      CVD work area
-         LTORG
-         EJECT
-SAVEAREA DS    18F
-VALSTCK  DS    2F 
-VALTTOD  DS    2F 
-STCKVT   DC    AL1(31,28,31,30,31,30,31,31,30,31,30,31) MONTH TABLE
-STCKVTL  DC    AL1(31,29,31,30,31,30,31,31,30,31,30,31) LEAP YEAR
-STCKDAYS DC    C'SUNMONTUEWEDTHUFRISAT'
-STCKV01  DS    F                  SAVE R01, RESTORE WHEN DONE
-STCKV13  DS    F                  SAVE R13, RESTORE WHEN DONE
-STCKVWA  DS    18F                R13 ADDRESSED WORKAREA
-DYDDDBIN DS    2F                 THE BINARY DDD PART OF THE DATE
-* NEW DSECT FOR THIS, MAPS ONTO PASSED DATA AREA USING R9
-         UDATEVAR DSECT=YES
-         YREGS
-         END
-/*
-//ASM.SYSTERM DD SYSOUT=*
-//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(UDATE002),DISP=SHR
-//
 ./ ADD NAME=$FORMATS
 This member just documents what the data formats look like in the
 time and date variables I have had to hunt down so far.
@@ -1592,9 +1179,6 @@ RMCTTOD FIELD     (OBTAINED FROM THE CVT)
   XR    R4,R4            Zeros in upper word, rmcttod in lower
   M     R4,=F'1024'      M R4,R5 pair by 1024 FOR MICROSECS
 
-Refer to the UDATE002 prgram on how to do arithmetic using
-RMCTTOD and STCK values. Lots of bit shifting and mucking
-about is required.
 -----------------------------------------------------------------------
 DATE FROM CVT AREA
   Don't know whats in here, it is packed data of some sort.
@@ -1640,8 +1224,9 @@ UDATE003 CSECT
 * I USE R9 FOR ADDRESSING THE UDATEVAR DSECT, DON'T USE IT FOR
 * ANYTHING ELSE.
 *
-* USE THE MSTCKTIM MACRO TO CALL THIS, USE THE UDATEVAR MACRO
-* TO CREATE THE DATA AREA TO BE PROVIDED TO MSTCKTIM.
+* USE THE UDATEMAC MACRO TO CALL THIS, USE THE UDATEVAR MACRO
+* TO CREATE THE DATA AREA TO BE PROVIDED TO UDATEMAC.
+* SEE EXAMPLES IN TESTALL MEMBER.
 *
 * FUNCTIONS: 
 *   Return the formatted text date values in UDATEVAR for
@@ -1656,7 +1241,9 @@ UDATE003 CSECT
 *     IN A +TIMEZONE. POSSIBLE NEEDS A CHECK TO SEE IF IT SHOULD
 *     BE SUBTRACTED OR MAYBE A NEGATIVE NUM IS ADDED SO ALL IS OK?.
 *     I WILL NEVER BE IN A -TIMEZONE SO OVER TO YOU TO TEST IF YOU
-*     WANT; I'M HAPPY AS IT IS.
+*     WANT; I'M HAPPY AS IT IS. PLUS TZ IS ALWAYS NEEDED TO BE USED
+*     TO CALCULATE THE CORRECT IPL TIME SO MAY NEED TO CHECK FOR A
+*     NEGATIVE THERE AS WELL ?.
 *
 * *********************************************************************
          STM   R14,R12,12(13)
@@ -1695,12 +1282,12 @@ VERSION1 L     R1,REGFLAG
          B     EXIT0000
          EJECT
 * ---------------------------------------------------------------------
-* We have been requested to use the current date.
+* We have been requested to use the current date. USe time deviation.
 * ---------------------------------------------------------------------
 V1USECUR STCK  VALSTCK            STORE THE TIME-OF-DAY CLOCK         
          LM    R0,R1,VALSTCK
-         L     15,16              GET CVT ADDRESS                  
-         A     0,304(15)          ADD LOCAL TIME DEVIATION...
+         L     R15,16             GET CVT ADDRESS                  
+         A     0,304(R15)         ADD LOCAL TIME DEVIATION...
          STM   R0,R1,VALSTCK
          B     PROCESSD
 * ---------------------------------------------------------------------
@@ -1733,7 +1320,7 @@ V1IPLDAT STCK  VALSTCK            STORE THE TIME-OF-DAY CLOCK
 * 1024 Micro Seconds since the system was IPLed
          L     R5,16            POINT TO THE CVT.
          L     R5,604(,R5)      POINT TO THE RMCT.
-         L     R5,124(,R5)      LOAD RMCTTOD (1024USEC SINCE IPL).
+         L     R5,124(,R5)      LOAD RMCTTOD.
          XR    R4,R4            Zeros in upper word, rmcttod in lower
          M     R4,=F'1024'      M R4,R5 pair by 1024
          STM   R4,R5,VALTTOD    Store result
@@ -1745,7 +1332,7 @@ V1IPLDAT STCK  VALSTCK            STORE THE TIME-OF-DAY CLOCK
          BCTR  R0,0             Perform borrow
          SL    R0,VALTTOD       Complete the substraction
 * ----- Roll the bits back up to the expected STCK format and save
-         SLDL  0,12             MOVE BACK UP, STCKCONV
+         SLDL  0,12             MOVE BACK UP TO STCK FORMAT
          STM   R0,R1,VALSTCK    Save it
          B     PROCESSD
          EJECT
@@ -1776,12 +1363,16 @@ NOPARM   WTO   'NO PARM PASSED TO MODULE UDATE003'
          B     EXIT
          EJECT
 * ---------------------- START STCKCONV ------------------------
+* The STCKCONC block will work out the correct HH:MM:SS plus
+* the weekday (0=sun thru 6=sat).
+* It then calls FINDDATE to workout the yyyy/mm/dd values.
+* --------------------------------------------------------------
 * CALL BAL R1,STCKCONV
 STCKCONV ST    R1,STCKV01         SAVE R1
-         ST    R1,STCKV13          SAVE R13
-         LA    R13,STCKVWA         R13 SET TO THE WORKAREA WE USE
-         LM    0,1,VALSTCK         GET PROVIDED
-         STM   0,1,8(13)           AND STORE WHERE EXPECTED
+         ST    R1,STCKV13         SAVE R13
+         LA    R13,STCKVWA        R13 SET TO THE WORKAREA WE USE
+         LM    0,1,VALSTCK        GET PROVIDED
+         STM   0,1,8(13)          AND STORE WHERE EXPECTED
          SRDL  0,12               ISOLATE NUMBER OF MICROSECONDS   
          D     0,=F'60000000'     DIVIDE BY 60M (R1=MINUTES AFT EPOCH) 
          LR    15,0               COPY REMAINDER OF MICS TO GET SECS  
@@ -1953,54 +1544,54 @@ FINDDL01 ST    R0,FINDDV02             save days left
 * the month each time we subtract a bunch of days. And we will
 * end up with the month number and day number.
 *
-* Have a year (R10) and days left (R0) in the year now (YYYYDDD)
+* Have a year (R10) and days left in year (R0) now (so:YYYYDDD)
 *
-* R8 still addresses the correct year/leapyear days table (I think)
+* R8 still addresses the correct year/leapyear days table 
 * R0 still has days
 * -------------------------------------------------------------
          LA    R1,1
-         SLR   R14,R14                 month minus one
-         SLR   R15,R15
-         AR    R14,R1                  bump month, start at 1
-FINDDL02 IC    R15,0(R14,R8)           # days in month
-         CR    R0,R15                  too many?
-         BNH   FINDDL03                no, br; now know month
-         SR    R0,R15                  reduce ddd
-         AR    R14,R1                  bump month
+         SLR   R14,R14      R14 as month counter, start at 1
+         SLR   R15,R15      R15 to contain days in month
+**Oops** AR    R14,R1  (2016/02/06 removed for bugfix)
+FINDDL02 IC    R15,0(R14,R8)       # days in month being tested
+         CR    R0,R15              too many?
+         BNH   FINDDL03            no, br; now know month
+         SR    R0,R15              reduce ddd
+         AR    R14,R1              bump month
          B     FINDDL02
-FINDDL03 ST    R14,FINDDV03            save month
-         A     R0,=F'1'                days start from 1, not 0
-         ST    R0,FINDDV02             save days left
+FINDDL03 ST    R14,FINDDV03        save month
+         A     R0,=F'1'            days start from 1, not 0
+         ST    R0,FINDDV02         save days left
 *
 * -------------------------------------------------------------
 * Make the results displayable in our output data area now.
 * -------------------------------------------------------------
-         L     R0,FINDDV02             dd
+         L     R0,FINDDV02         dd
          CVD   R0,FINDDV05
          UNPK  D370MMDD+2(2),FINDDV05+6(2)  UNPACK DAY INTO OUTPUT
-         L     R1,FINDDV03             mm
+         L     R1,FINDDV03         mm
          CVD   R1,FINDDV05             
          UNPK  D370MMDD(2),FINDDV05+6(2)  UNPACK MONTH INTO OUTPUT
-         L     R2,FINDDV01             yyyy
+         L     R2,FINDDV01         yyyy
          CVD   R2,FINDDV05 
          UNPK  D370YEAR(4),FINDDV05+5(3)  UNPACK YEAR INTO OUTPUT
-         OI    D370MMDD+1,C'0'       INSURE NUMERICS
-         OI    D370MMDD+3,C'0'       INSURE NUMERICS
-         OI    D370YEAR+3,C'0'       INSURE NUMERICS
-         L     R3,FINDDV04             ddd
-         A     R3,=F'1'                make from day 1, not from 0
+         OI    D370MMDD+1,C'0'     INSURE NUMERICS
+         OI    D370MMDD+3,C'0'     INSURE NUMERICS
+         OI    D370YEAR+3,C'0'     INSURE NUMERICS
+         L     R3,FINDDV04         ddd
+         A     R3,=F'1'            make from day 1, not from 0
          CVD   R3,FINDDV05            
          UNPK  D370JDAY(3),FINDDV05+6(2)  UNPACK DDD INTO OUTPUT
-         OI    D370JDAY+2,C'0'       INSURE NUMERICS
+         OI    D370JDAY+2,C'0'     INSURE NUMERICS
 *
          LM    R0,R15,FINDDV00
          BR    R3
-FINDDV00 DS    16F                    save all registers
-FINDDV01 DS    F                      hold the year we are testing
-FINDDV02 DS    F                      days left at the moment
-FINDDV03 DS    F                      current month
-FINDDV04 DS    F                      need to keep a copy of DDD
-FINDDV05 DS    D                      CVD work area
+FINDDV00 DS    16F                 save all registers
+FINDDV01 DS    F                   hold the year we are testing
+FINDDV02 DS    F                   days left at the moment
+FINDDV03 DS    F                   current month
+FINDDV04 DS    F                   need to keep a copy of DDD
+FINDDV05 DS    D                   CVD work area
          LTORG
          EJECT
 SAVEAREA DS    18F
@@ -2045,7 +1636,7 @@ Change History
 2013/11/21 - Added the DAYOWEEK macro to use an algorythm to calculate
              the day of the week as inline code, and the TESTDOW 
              example usage program.
-2013/12/12 - Added the SCHED001 program, new field in U370VAR for it, 
+2013/12/12 - Added the SCHED001 program, new field in UDATEVAR for it, 
              and merged into UDATEMAC macro. Also added SCHED002
              program, thats not called from the udatemac macro as it
              does not use the udatevar structure; it has a completely
@@ -2062,6 +1653,12 @@ Change History
              The SCHED002 program is non-standard, it is specific
              to scheduling and does not return the udatevar data
              structure but a binary result in R15. See test program.
+2016/02/05   Obsoleted (removed) UDATE002. Bugfix in UDATE003 as it
+             hiccupped in an actual leap year.
+             Also changed work DASD from 3330 to 3350, as while 3330
+             is fine for TK3 the TK4- system doesn't have any 3330
+             work packs to use for assembly, easy to change but you
+             want to compile code not reconfigure your system :-).
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&DATAREG=
@@ -2196,9 +1793,9 @@ DONE&SYSNDX CNOP 0,4
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *               
@@ -2529,9 +2126,9 @@ JME&SYSNDX L     2,&WORKA+16          restore R2
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -2556,7 +2153,7 @@ JME&SYSNDX L     2,&WORKA+16          restore R2
 *    U 2017 2013/12/15   ('U') Command is use exact date provided
 *                        (HHMM) time wraps at 20:17 in this example
 *
-* OUTPUT IS THE RESULTANT DATE CALCULATED IN THE U370VAR TEXT VALUES
+* OUTPUT IS THE RESULTANT DATE CALCULATED IN THE UDATEVAR TEXT VALUES
 *
 * --------------------------------------------------------------------
          MACRO
@@ -2968,9 +2565,9 @@ LT       EQU   4    * A LOW
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *               
@@ -3285,9 +2882,9 @@ LT       EQU   4    * A LOW
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -3494,9 +3091,9 @@ W 2200 5            EXPECT NEXT FRIDAY
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *               
@@ -3665,7 +3262,7 @@ LT       EQU   4    * A LOW
 //
 ./ ADD NAME=SCHEDTST
 //MARKTEST JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T,
-// TIME=1440                            
+// TIME=1440
 //*
 //* ===================================================================
 //*
@@ -3733,9 +3330,9 @@ LT       EQU   4    * A LOW
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *               
