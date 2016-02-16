@@ -1,5 +1,4 @@
-//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T,
-// USER=MARK,PASSWORD=MVS38J
+//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T
 //* *****************************************************************
 //*
 //* INSTALL DATE/TIME UTILITY PROGRAM
@@ -1479,6 +1478,7 @@ FINDDATE EQU   *
          XR    R0,R0             r1 has minutes ?
          D     0,=F'1440'        div r0,r1 by 60*24 to get days to r1
          LR    R0,R1                   quotient to R0 (days?)
+         A     R0,=F'1'          bump 1, use days from 1 not 0
          ST    R0,FINDDV02             save days left
 *
 * -------------------------------------------------------------
@@ -1550,17 +1550,16 @@ FINDDL01 ST    R0,FINDDV02             save days left
 * R0 still has days
 * -------------------------------------------------------------
          LA    R1,1
-         SLR   R14,R14      R14 as month counter, start at 1
+         SLR   R14,R14      R14 as days in month tbl ptr      
          SLR   R15,R15      R15 to contain days in month
-**Oops** AR    R14,R1  (2016/02/06 removed for bugfix)
 FINDDL02 IC    R15,0(R14,R8)       # days in month being tested
          CR    R0,R15              too many?
          BNH   FINDDL03            no, br; now know month
          SR    R0,R15              reduce ddd
          AR    R14,R1              bump month
          B     FINDDL02
-FINDDL03 ST    R14,FINDDV03        save month
-         A     R0,=F'1'            days start from 1, not 0
+FINDDL03 AR    R14,R1              bump month, start at 1 not 0
+         ST    R14,FINDDV03        save month
          ST    R0,FINDDV02         save days left
 *
 * -------------------------------------------------------------
@@ -1579,7 +1578,6 @@ FINDDL03 ST    R14,FINDDV03        save month
          OI    D370MMDD+3,C'0'     INSURE NUMERICS
          OI    D370YEAR+3,C'0'     INSURE NUMERICS
          L     R3,FINDDV04         ddd
-         A     R3,=F'1'            make from day 1, not from 0
          CVD   R3,FINDDV05            
          UNPK  D370JDAY(3),FINDDV05+6(2)  UNPACK DDD INTO OUTPUT
          OI    D370JDAY+2,C'0'     INSURE NUMERICS
@@ -1659,6 +1657,7 @@ Change History
              is fine for TK3 the TK4- system doesn't have any 3330
              work packs to use for assembly, easy to change but you
              want to compile code not reconfigure your system :-).
+2016/02/16   Bugfix to the above bug fix in udate003, looks ok now
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&DATAREG=
