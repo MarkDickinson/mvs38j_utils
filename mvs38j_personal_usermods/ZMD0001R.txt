@@ -1,0 +1,46 @@
+//ZMD0001R JOB  (SMP),
+//             'Remove UMOD ZMD0001',
+//             CLASS=A,
+//             MSGCLASS=A,
+//             MSGLEVEL=(1,1),
+//             REGION=4096K,USER=MARK,PASSWORD=MVS38J
+//*
+//*********************************************************************
+//*
+//* Name: SYS1.UMODCNTL(ZMD0001R)
+//*
+//* Desc: Remove installed usermod ZMD0001
+//*
+//*     Revert IEECVXIT WTO message automation exit:
+//*     CLPA is required to implement
+//*
+//* Messy as TK4- has two additional usermods on top of the TK3
+//* ZUM0003 and we have to get rid of them all.
+//*
+//* Can only restore back to the base level, not remove just a single
+//* usermod here, due the the PRE and SUP requirements used all the
+//* way through. Messy but I want to ensure the TK4- updates are
+//* back at the TK4- level so I have not done it the sensible way 
+//* of removing the TK3 and TK4- usermods and just applying my own
+//* as I wish my base OS to be TK4- for now
+//*
+//* We must... 
+//*   o  restore ALL the usermods applied to this module back to the
+//*      base level
+//*   o  MANUALLY re-apply all the others to get back to where Jurgen
+//*      had TK4- positioned.
+//*
+//*       M. Dickinson, 01/2016
+//*
+//*********************************************************************
+//REJECT  EXEC SMPAPP,COND=(0,NE)
+//SMPCNTL  DD  *
+ RESTORE S(ZMD0001,ZJW0006,ZUM0003,TMVS805).
+/*
+//AOSC5 DD DISP=SHR,DSN=SYS1.AOSC5
+//*
+//* YOU MUST NOW MANUALLY RUN SYS1.UMODCNTL MEMBERS
+//*     ZUM0003
+//*     TMVS805
+//*     ZJW0006
+//

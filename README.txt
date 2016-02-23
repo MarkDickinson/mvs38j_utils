@@ -25,4 +25,6 @@ The sections are currently
 linux     - scripts used to make running TK3 under hercules easier
 mvs38j    - various utilities I needed to make the system look 
             after itself
+mvs38j_personal_usermods - SMP usermods I need that I don't want to
+            accidentally misplace so backed up here
 

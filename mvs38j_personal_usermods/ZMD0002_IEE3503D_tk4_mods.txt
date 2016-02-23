@@ -1,0 +1,95 @@
+//ZMD0002 JOB  (SMP),
+//             'Usermod ZMD0002',
+//             CLASS=A,
+//             MSGCLASS=A,
+//             MSGLEVEL=(1,1),
+//             REGION=4096K,USER=MARK,PASSWORD=MVS38J
+//*
+//*********************************************************************
+//*
+//* Name: SYS1.UMODCNTL(ZMD0002)
+//*
+//* Desc: Install usermod ZMD0002
+//*
+//*     Update IEE3503D ; used for console display commands.
+//*     Requires a CLPA to implement.
+//*
+//*   o If a console DISPLAY command is entered that is invalid
+//*     for MVS3.8J attempt to link to MID3503D to see if the
+//*     command is handled there.
+//*     - if program MID3503D is not in the linklist the normal
+//*       invalid command is displayed (plus a missing module
+//*       error is system generated to the console whicg causes
+//*       no issues
+//*     - if the program is found but does not handle the display
+//*       command requested it returns to IEE3503D to display the
+//*       normal invalid command message
+//*     - if MID3503D handles the command the command response
+//*       is written to the requesting console by MID3503D which
+//*       then returns to IEE3503D for a normal sucessful display
+//*       exit
+//*
+//*   The source code for IEE3503D is copied to SYS1.UMODSRC. It
+//*   is modified there for use with SMP. The main reason for
+//*   that is a SMP RESTORE to revert the changes WILL DELETE 
+//*   the source; and we do not want the copy in MVSSRC.SYM101.F13
+//*   to be deleted so we work with the copy, and the copy in
+//*   SYS1.UMODSRC is deleted on a restore instead :-)
+//*
+//*       M. Dickinson, 01/2016
+//*
+//*********************************************************************
+//*
+//* Copy the source from MVSSRC.SYM101.F13 to SYS1.UMODSRC...
+//* we work on the copy as is we backout the usermod with a restore
+//* it will delete the source from the SYSLIB, oooops, we do not
+//* want to delete the master copy in the MVSSRC file.
+//*
+//COPYSRC  EXEC PGM=IEBCOPY
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DISP=SHR,DSN=MVSSRC.SYM101.F13
+//SYSUT2   DD DISP=SHR,DSN=SYS1.UMODSRC
+//SYSIN    DD *
+ COPY INDD=SYSUT1,OUTDD=SYSUT2
+ SELECT MEMBER=IEE3503D
+/*
+//*
+//* Now work on the copy. Make our changes to the source
+//* and recieve and apply it.
+//*
+//RECAPP  EXEC SMPAPP,COND=(0,NE)
+//SMPPTFIN DD  *
+++USERMOD(ZMD0002).
+++VER(Z038) FMID(EBB1102) PRE(UZ45157).
+++SRCUPD(IEE3503D) DISTLIB(AOSB3) SYSLIB(UMODSRC) .
+./ CHANGE NAME=IEE3503D
+* --------------------------------------------------------------ZMD0002 28510103
+*   SO COMPARE IS "CLC R1(R9,R6),R0(R5)" ????                   ZMD0002 28510104
+* MID - IF DISPLAY COMMAND IS NOT FOUND SEE IF                  ZMD0002 28510105
+*           DOES MY EXTENTION MODULE EXIST ?                    ZMD0002 28510106
+*               NO - JUMP TO ORIGIONAL ERROR HANDLER            ZMD0002 28510107
+*               YES - CALL IT TO SEE IF WE HANDLE THE COMMAND   ZMD0002 28510108
+*                     (I THINK R5 POINTS TO THE COMMAND)        ZMD0002 28510109
+         LR    R7,R14         SAVE R14 (CALLERS RETURN ADDRESS) ZMD0002 28510110
+         LOAD  EP=MID3503D,ERRET=DERR305  LOAD MY MODULE        ZMD0002 28510111
+         LR    R15,R0         GET EPA OF MODULE LOADED          ZMD0002 28510112
+         LR    R1,R5          PARMS NORMALLY ADDRESSED BY R1 :-)ZMD0002 28510113
+         BALR  R14,R15        AND RUN IT                        ZMD0002 28510114
+         LR    R0,R15         SAVE RETURN CODE                  ZMD0002 28510115
+         DELETE EP=MID3503D   DELETE THE PREVIOUSLY LOADED RTN  ZMD0002 28510116
+         LR    R14,R7         RESTORE RETURN ADDRESS            ZMD0002 28510117
+         LTR   R0,R0          CHECK RETURN CODE                 ZMD0002 28510118
+         BNZ   DERR305        ON NON-ZERO ORIGIONAL ERROR CODE  ZMD0002 28510119
+         BR    R14            RETURN TO SYSTEM                  ZMD0002 28510120
+* SHOULD NEVER GET TO THE ORIGIONAL LINE BELOW                  ZMD0002 28510121
+* --------------------------------------------------------------ZMD0002 28510122
+./ ENDUP
+//SMPCNTL  DD  *
+ REJECT SELECT(ZMD0002).
+ RESETRC.
+ RECEIVE SELECT(ZMD0002).
+ APPLY SELECT(ZMD0002) ASSEM.
+/*
+//AOSB3 DD DISP=SHR,DSN=SYS1.AOSB3
+//UMODSRC DD DISP=SHR,DSN=SYS1.UMODSRC     
+//

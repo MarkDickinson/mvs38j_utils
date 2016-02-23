@@ -1,0 +1,26 @@
+//ZMD0002R JOB  (SMP),
+//             'Usermod ZMD0002',
+//             CLASS=A,
+//             MSGCLASS=A,
+//             MSGLEVEL=(1,1),
+//             REGION=4096K,USER=MARK,PASSWORD=MVS38J
+//*
+//*********************************************************************
+//*
+//* Name: SYS1.UMODCNTL(ZMD0002R)
+//*
+//* Desc: Remove installed usermod ZMD0002
+//*
+//*     Revert update IEE3503D ; used for console display commands.
+//*     Requires a CLPA to implement.
+//*
+//*       M. Dickinson, 01/2016
+//*
+//*********************************************************************
+//RESTORE EXEC SMPAPP,COND=(0,NE)
+//SMPCNTL  DD  *
+ RESTORE G(ZMD0002).
+/*
+//AOSB3 DD DISP=SHR,DSN=SYS1.AOSB3
+//UMODSRC DD DISP=SHR,DSN=SYS1.UMODSRC
+//
