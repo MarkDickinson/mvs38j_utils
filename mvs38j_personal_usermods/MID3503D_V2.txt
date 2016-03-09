@@ -1,4 +1,4 @@
-//MARKA JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=T
+//MARKA JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=A
 //*
 //ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
 //             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
@@ -6,10 +6,12 @@
 //ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
 // DD DISP=SHR,DSN=SYS1.AMODGEN
 // DD DISP=SHR,DSN=MVSSRC.SYM101.F01
-// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME
 //ASM.SYSIN DD *
          TITLE 'MID3503D - DISPLAY COMMAND EXTENTIONS'
 *********************************************************************** 
+*                                                                     * 
+* *BUGGER* NOW INVALID COMMANDS JUST RETURN, THE RC=04 IS IGNORED     * 
+*          IN THE TEST WE OUT IN IEE2503D, CORRUPTED SOMETHING IN HERE*
 *                                                                     * 
 *  MODULE NAME  =  MID3503D                                           * 
 *                                                                     * 
@@ -18,6 +20,7 @@
 *                  WILL CALL THIS PROGRAM TO HANDLE ADDITIONAL        *
 *                  COMMANDS.                                          *
 *                  -----> SEE KNOWN BUGS BEFORE USING <-----          * 
+*                  -----> SEE REMOVED FEATURES BEFORE USING <-----    * 
 *                                                                     * 
 *  REQUIRES     =  MY USERMOD ZMD0002, TO MAKE IEE3503D TRY TO RESOLVE* 
 *                  UNKNOWN CONSOLE DISPLAY COMMANDS USING THIS PROGRAM* 
@@ -37,27 +40,10 @@
 *                               TIME                                  * 
 *                               SMF        SMF DATASET USE            * 
 *                               SMF,D      SMF DATASET USE            * 
-*                               SMF,O      SMF OPTIONS DISPLAY        * 
 *                                                                     * 
-*   OPERATION   =  MID3503D BRANCHES TO IEE7503D TO                   *
-*                  RESOLVE THE ROUTING OPERAND (L=CCA) OR             * 
-*                  DETERMINE THE DEFAULTS.                            * 
-*                                                                     * 
-         EJECT                                                        
-*                                                                     *
-*  NOTES                                                              * 
-*                                                                     * 
-*  CHARACTER/                                                         * 
-*  CODE                                                               * 
-*  DEPENDENCIES =  ANY CHARACTER CODE OTHER THAN EBCDIC WILL          * 
-*                  REQUIRE REASSEMBLY OF THIS MODULE.                 * 
-*                                                                     * 
-*  DEPENDENCIES =                                                     * 
-*                                                                     *
 *  RESTRICTIONS =  TIME SHARING TERMINALS SHOULD NOT BE PERMITTED     *
 *                  TO ISSUE THE ADDITIONAL COMMANDS HERE AT THIS      *
 *                  TIME (WTO IS USED, TPUT NOT YET IMPLEMENTED)       * 
-*                                                                     * 
 *                                                                     * 
 *  KNOWN BUGS   =  <------- READ THE SECTION BELOW ----------------   * 
 *    (Buggy 1)     The intent is that these additional commands       * 
@@ -69,14 +55,33 @@
 *                  error... after displaying command results, so      * 
 *                  there is obviously additional return handling      * 
 *                  needed for when commands are issued under tso      * 
+*    (Buggy 2)     The 'D SMF' command also takes a system dump after * 
+*                  displaying the correct results; so I definately    * 
+*                  have an issue with return handling in general.     * 
 *  KNOWN BUGS   =  <------- READ THE SECTION ABOVE ----------------   * 
 *                                                                     * 
+*  REMOVED FEATURES =  <------- READ THE SECTION BELOW ------------   * 
+*              (1) The 'D SMF,O' code has been comented out using     *
+*                  a comment flag of '*X*'... EXCEPT the WTO template *
+*                  definitions are still uncommented as I do not want *
+*                  to lose the continuation formatting that a global  *
+*                  uncomment change would cause. To uncomment the     *
+*                  'D SMF,O' code just globally change '*X*' to ''.   *
+*                  H O W E V E R  it has been commented out because   *
+*                  it exceeds the symbol table size and code block    *
+*                  size (and there are no spare REGs to setup a       *
+*                  second base register)... caused by the code added  *
+*                  to actually populate the SYS1.MAN? dataset usage,  *
+*                  which I think is of mode use than the options.     *
+*                  If you uncomment the options display code you will *
+*                  have to remove something else.                     *
+*  REMOVED FEATURES =  <------- READ THE SECTION ABOVE ------------   * 
 *                                                                     * 
 *   ATTRIBUTES  =  REENTRANT, SUPERVISOR MODE, KEY ZERO,              *
 *                  PAGED LPA                                          *
 *                                                                     * 
 *  ENTRY POINT  =  MID3503D FROM IEE3503D                             *
-*  LINKAGE      =  BRANCH                                             * 
+*  LINKAGE      =  LINK=EP                                            * 
 *  INPUT DATA   =  REGISTER 2 POINTS TO XSA                           *
 *                    XAL POINTS TO 1ST OPERAND IN BUFFER              * 
 *                    XAU IS 1-BYTE UCMI (X'00' COMMAND ISSUED         * 
@@ -90,45 +95,11 @@
 *                    XAP CONTAINS ADDRESS OF END OF BUFFER +1         * 
 *                                                                     * 
 *   REGISTERS                                                         *
-*    SAVED      =  NONE  (REGISTER 14 REMAINS UNTOUCHED)              * 
-*    R15        =  0 COMMAND WAS HANDLED, 4 COMMAND UNSUPPORTED       * 
+*       (as we can save nothing until we have a code base and storage)*
+*    TRASHED        =  R0,R1,R12(PGM BASE),R13(ADDRESS WORK AREA)     *
+*    SAVED/RESTORED =  R2-R11 PLUS R14                                * 
+*    R15 ON EXIT    =  0 COMMAND WAS HANDLED, 4 COMMAND UNSUPPORTED   * 
 *                                                                     * 
-      EJECT                                                             
-*  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  * 
-*  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  
-*  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  * 
-*  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  *  * 
-*                                                                     * 
-*   DATA AREAS   = PSEUDO-SACB TO BE USED THROUGHOUT SVC 34           * 
-*                    ORG   XAX                                        * 
-*                  XAXMASK  DS    C       REQUEST FLAGS               * 
-*                  XAXJOBS  EQU   X'80'   JOBS      (J)               *
-*                  XAXJOBSL EQU   X'40'   JOBS,LIST (J,L)             * 
-*                  XAXTS    EQU   X'08'   TS                          * 
-*                  XAXTSL   EQU   X'04'   TS,LIST   (TS,L)            * 
-*                  XAXA     EQU   X'88'   A                           * 
-*                  XAXAL    EQU   X'44'   A,LIST    (A,L)             * 
-*                  XAXFREE  DS    C       RESERVED                    * 
-*                  XAXUTME  DS    H       UTME=NNN VALUE              * 
-*                  XAXSACB  DS    F       ADDRESS OF SACB             * 
-*                                                                     * 
-*   CONTROL                                                           * 
-*    BLOCKS      = IEEXSA     R - INPUT - COMMAND BUFFER ADDR         * 
-*                             W - OUTPUT - BITS SET                   * 
-*                  IHASUBIT   R                                       *
-*                  CVT        R                                       * 
-*                                                                     * 
-         EJECT                                                      
-*                                                                     * 
-*   ENQUEUE                                                           * 
-*     RESOURCES  = NONE                                               *
-*                                                                     * 
-*   LOCKS HELD   = NONE                                               * 
-*                                                                     * 
-         EJECT                                                         
-*                                                                     * 
-*   SYSTEM                                                            * 
-*    LIBRARIES   = NONE                                               * 
 *********************************************************************** 
          EJECT                                                          
 MID3503D CSECT                                                          
@@ -136,36 +107,23 @@ MID3503D CSECT
 *                                                                     * 
 *                         REGISTER    EQUATES                         * 
 *                                                                     * 
-* NOTE: Apart from the comments below, pretty much all registers      * 
-*       other than the base register (R12) are used during date/time  * 
-*       calculations; but saved/restored over that block other than R1* 
 *********************************************************************** 
 R0       EQU   0                  WORK REGISTER                   
 R1       EQU   1                  WORK REGISTER                    
 R2       EQU   2    (RESERVED)    INPUT - BASE REG FOR XSA      
-R3       EQU   3    (RESERVED)    BASE REGISTER OF IEE3503D     
+R3       EQU   3    (SAVED/RESTORED) BASE REG OF IEE3503D, WORK REG
 R4       EQU   4    (RESERVED)    USED FOR UCMI                 
-R5       EQU   5    (RESERVED)    PTR TO OPERAND BUFFER AT CALL      
-*                                 TRASHED AT EXIT (TPUTLGIC CHANGE)
+R5       EQU   5                  WORK REGISTER
 R6       EQU   6    (RESERVED)    TABLE POINTER IN IEE3503D
-R7       EQU   7                  UNUSED             
-R8       EQU   8                  UNUSED                     
+R7       EQU   7                  WORK REGISTER
+R8       EQU   8                  WORK REGISTER
 R9       EQU   9                  WORK REGISTER             
-R10      EQU   10   (RESERVED)    SU NUMBER STORAGE AREA      
-R11      EQU   11   (RESERVED)    ADDRESSES END OF TABLE     
-R12      EQU   12   (RESERVED)    MODULE BASE REGISTER       
-R13      EQU   13   (RESERVED)    USED TO MAP GETMAINED WORK AREA
-R14      EQU   14   (RESERVED)    RETURN ADDRESS                  
-R15      EQU   15                 USED FOR BAL AND BRANCH EXIT     
-         SPACE                                                    
-*********************************************************************** 
-*                                                                     * 
-*                           MASKS                                     * 
-*                                                                     * 
-***********************************************************************
-FLAG     EQU   X'80'              FLAG - DENOTES TPUT RETRY       
-XF0      EQU   X'F0'              MASK FOR OI                    
-X0F      EQU   X'0F'              MASK TPUT
+R10      EQU   10                 WORK REGISTER                
+R11      EQU   11                 WORK REGISTER                
+R12      EQU   12   (RESERVED/TRASHED) MODULE BASE REGISTER       
+R13      EQU   13   (RESERVED/TRASHED) USED TO MAP GETMAINED WORK AREA
+R14      EQU   14   (SAVED/RESTORED)   RETURN ADDRESS, USED AS WORK REG
+R15      EQU   15                 WORK REGISTER                    
          EJECT                                                  
 *********************************************************************** 
 *                                                                     * 
@@ -180,26 +138,28 @@ X0F      EQU   X'0F'              MASK TPUT
          DC    CL1'-'                         
          DC    CL8'&SYSTIME'                
          DC    CL1'-'                   
-         DC    CL8'V1.R1.M0'        
+         DC    CL8'V1.R1.M3'        
          DC    CL1'-'          
 AROUNDID DS    0H            
          DROP  R15                                              
-         STM   R14,R12,12(R13)      SAVE CALLERS REGISTERS       
+*********************************************************************** 
+* NON-STANDARD ENTRY, BECAUSE R13 DOES NOT POINT TO A SAVEAREA        *
+* IN THE CALLER SO WE CANNOT SAVE REGISTERS WITH NORMAL ENTRY CODE    *
+*********************************************************************** 
          BALR  R12,0                COPY BASE REGISTER         
          USING *,R12                                       
-         LR    R10,R0               SAVE PARM                     
-         LR    R11,R1               SAVE REG1                     
-         LR    R9,R13               SAVE REG13 CALLER'S SAP       
          GETMAIN RU,LV=MIDSALEN     GET WORKING STORAGE          
          LR    R13,R1               SET SAP AND BASE FOR W.S. 
          USING SA,R13               MAP THE WORKING STORAGE AREA     
-         ST    R9,SAVEAREA+4        SAVE CALLERS SAP               
+         STM   R2,R11,SAVEAREA      SAVE ALL REGS 2-11
+         ST    R14,SAVEAREA+48      SAVE R14 (RETURN ADDRESS)
 * MID - Q? - expects R2 to be passed from caller unchanged ?
-         USING IEEXSA,R2            MAP THE WORKING STORAGE AREA      
+*            ok, reading the mvs doco yes, potentially unreliable
+         USING IEEXSA,R2            MAP THE PASSED XSA DATA AREA      
 *********************************************************************** 
 *                                                                     * 
 *           WE DO NOT ALLOW TSO USERS TO USE THESE COMMANDS           * 
-* (BECAUSE I AM NOT BOTHERING TO TEST FOR IF TSO TPUT/CONSOLE WTO )   * 
+* (BECAUSE I AM NOT BOTHERING TO TEST IF TSO-TPUT/CONSOLE-WTO REQD)   * 
 *                                                                     * 
 ***********************************************************************
          LH    R1,XAA                TEST ASID                  
@@ -210,37 +170,38 @@ AROUNDID DS    0H
 *                 WHAT IS THE COMMAND TO BE CHECKED ?                 * 
 *                                                                     * 
 ***********************************************************************
-         CLC   0(3,R5),=CL3'APF'         DISPLAY APF
+         CLC   0(3,R5),=C'APF'           DISPLAY APF
          BE    DDAPF
-         CLC   0(3,R5),=CL3'IPL'         DISPLAY IPL INFO
+         CLC   0(3,R5),=C'IPL'           DISPLAY IPL INFO
          BE    DDIPL
-         CLC   0(6,R5),=CL6'UPTIME'      DISPLAY IPL INFO (ALIAS)
+         CLC   0(6,R5),=C'UPTIME'        DISPLAY IPL INFO (ALIAS)
          BE    DDIPL
          CLC   0(5,R5),=C'SMF,D'    ASKING FOR DATASET INFORMATION?  
          BE    DDSMFD                YES, GO DISPLAY IT              
-         CLC   0(5,R5),=C'SMF,O'    ASKING FOR SMF OPTIONS?   
-         BE    DDSMFO                YES, GO DISPLAY IT                 
-         CLC   0(3,R5),=CL3'SMF'         DISPLAY SMF
+*X*         CLC   0(5,R5),=C'SMF,O'    ASKING FOR SMF OPTIONS?   
+*X*         BE    DDSMFO                YES, GO DISPLAY IT                 
+         CLC   0(3,R5),=C'SMF'           DISPLAY SMF
          BE    DDSMFD
-         CLC   0(3,R5),=CL4'TIME'     DISPLAY FORMATTED TIME
+         CLC   0(4,R5),=C'TIME'       DISPLAY FORMATTED TIME
          BE    DDTIME2
 * ELSE NOT A COMMAND WE HANDLE
          SPACE 2
+* WE RETURN RC=04 IF WE DO NOT HANDLE THE COMMAND
 EXIT04   DS    0H                                                  
-         L     R9,SAVEAREA+4        RELOAD CALLERS SAP              
+         LM    R2,R11,SAVEAREA      RESTORE R2-R11
+         L     R14,SAVEAREA+48      GET BACK R14
          FREEMAIN RU,LV=MIDSALEN,A=(R13) FREE GOTTEN STORAGE       
-         LR    R13,R9               RESTORE CALLERS SAP      
-         LM    R14,R12,12(R13)      RELOAD CALLERS REGISTERS    
          LA    R15,4               RC=0004
          BR    R14                RETURN TO IEE3503D 
          SPACE 2
+* WE RETURN RC=00 IF WE PROCESSED THE COMMAND
 EXIT00   DS    0H                                              
-         L     R9,SAVEAREA+4        RELOAD CALLERS SAP          
+         LM    R2,R11,SAVEAREA      RESTORE R2-R11
+         L     R14,SAVEAREA+48      GET BACK R14 
          FREEMAIN RU,LV=MIDSALEN,A=(R13) FREE GOTTEN STORAGE      
-         LR    R13,R9               RESTORE CALLERS SAP           
-         LM    R14,R12,12(R13)      RELOAD CALLERS REGISTERS     
          SLR   R15,R15             RC=0000
          BR    R14                RETURN TO IEE3503D 
+         LTORG
          EJECT
 *********************************************************************** 
 *                                                                       
@@ -373,165 +334,167 @@ MSGLNE1V DS    CL6
          DS    CL1                              
 MSGLNE1D DS    CL44                                  
 MSGLNE1L EQU   *-MSGLNE1                                    
+         LTORG
          EJECT 
 *******************************************************************     
 *                                                                     
 *                      DISPLAY SMF OPTIONS                           
 *                                                                    
 *******************************************************************  
-DDSMFO   DS    0H                                                   
-         STM   R0,R15,SA2           SAVE REGISTERS                  
-         SPACE 3                                                    
-         GETMAIN RU,LV=2048                                        
-         LR    R7,R1                                                
-         ST    R7,STRGAREA          AND SAVE THE POINTER TO IT     
-         MVC   469(2,R7),=2XL1'00'                                  
-         MVC   0(DSMRMSKX,R7),DSMRMSKD      MOVE BASE MSG TO W.S. 
-         MVC   83(20,R7),0(R5)                                  
-         MVC   79(2,R7),3(R5)                                    
-         LA    R6,79(R7)                                        
-         MVI   78(R7),C'*'                                    
-         MVI   81(R7),C'*'                                      
-         SR    R4,R4
-         IC    R4,XAU
-         LH    R5,XAA
-         LR    R0,R4                PUT UCMI INTO REG 0
-         WTO   MF=(E,(R7))          WRITE TO OPERATOR - SMF INFO  
-         SPACE 3                                              
-         L     R3,CVTPTR           POINT TO THE CVT     
-         USING CVTMAP,R3            MAP THE CVT    
-BYPX     DS    0H                                                  
-         L     R6,CVTSMCA           POINT TO THE SMF'S SMCA  
-         USING SMCABASE,R6          MAP THE SMCA         
-         DROP  R3                                     
-         SPACE 3                                  
-BYPZ     DS    0H                               
-         SR    R0,R0                        
-         LR    R8,R7                  POINT TO RECEIVING FIELD       
-         LH    R9,=H'424'             SET LENGTH FOR MESSAGE     
-         LA    R14,DSMRMSGD           POINT TO SENDING FIELD  
-         LH    R15,=H'424'            SET FILL CHAR          
-         MVCL  R8,R14                 MOVE MESSAGE TO BUFFER      
-         MVC   WTOML1P3(L'SMCASID,R7),SMCASID  SET SID          
-         TM    SMCAOPT,SMCAOPT1       JOB ACCOUNTING?       
-         BNO   BYP0                    NO - SKIP      
-         MVC   WTOML2P1(3,R7),=C'JOB'  YES - SET IT 
-         MVC   WTOML7P1(1,R7),=C'1'    YES - SET IT          
-BYP0     DS    0H                                       
-         TM    SMCAOPT,SMCAOPT2       STEP ACCOUNTING?     
-         BNO   BYP1                    NO - SKIP      
-         MVC   WTOML2P2(4,R7),=C'STEP' YES - SET IT  
-         MVC   WTOML7P1(1,R7),=C'2'    YES - SET IT    
-         B     BYP1                   GO CONTINUE   
-BYP1     DS    0H                              
-         SPACE 3                           
-BYP2     DS    0H                  
-         TM    SMCAOPT,SMCADSA        DATASET ACCOUNTING?         
-         BNO   BYP3                    NO - SKIP               
-         MVC   WTOML3P1(2,R7),=C'DS'   YES - SET IT       
-         MVC   WTOML7P3(1,R7),=C'2'    YES - SET IT   
-         B     BYP3                   GO CONTINUE                   
-BYP3     DS    0H                                             
-         TM    SMCAOPT,SMCAVOL        STEP ACCOUNTING?     
-         BNO   BYP4                    NO - SKIP          
-         MVC   WTOML3P2(3,R7),=C'VOL'  YES - SET IT             
-         MVC   WTOML7P3(1,R7),=C'1'    YES - SET IT          
-         B     BYP4                   GO CONTINUE           
-BYP4     DS    0H                                          
-         TM    SMCAOPT,SMCADSA+SMCAVOL DATASET AND VOLUME ACCOUNTING? 
-         BNO   BYP5                    NO - SKIP                    
-         MVC   WTOML7P3(1,R7),=C'3'    YES - SET IT                
-         B     BYP5                   GO CONTINUE                   
-BYP5     DS    0H                                                
-         SPACE 3                                                
-         TM    SMCAOPT,SMCAEXT        EXITS TAKEN?           
-         BNO   BYP6                    NO - SKIP                     
-         MVC   WTOML4P1(3,R7),=C'YES'  YES - SET IT              
-         MVC   WTOML7P2(3,R7),=C'YES'  SET EXT=             
-         B     BYP6                   GO CONTINUE       
-BYP6     DS    0H                                                    
-         SPACE 3                                                     
-         MVC   WTOML7P5(4,R7),=C'NONE' SET NO RECORDING BEING DONE MAN= 
-         MVC   WTOML1P2(5,R7),=C'INACT'  SAA - SET SMF               
-         MVC   WTOML1P1(5,R7),=C'INACT'  SAA - SET RECORDING      
-         MVC   WTOML6P2(6,R7),=C'INACT '  SAA - SET ACTIVE D.S. 
-         MVC   WTOML6P5(6,R7),=C'INACT '  SAA - SET ACTIVE D.S.   
-         TM    SMCAMISC,SMCAUSER+SMCAMAN ALL RECORDING REQUESTED?   
-         BNO   BYP8                    NO - SKIP               
-         MVC   WTOML1P1(6,R7),=C'ACTIVE'  SET SMF ACTIVE    
-         MVC   WTOML6P2(6,R7),=C'ACTIVE'  SET ACTIVE D.S.  
-         MVC   WTOML6P5(6,R7),=C'INACT '  SET ACTIVE D.S.       
-         MVC   WTOML7P5(4,R7),=C'ALL '       YES - SET IT      
-         MVC   WTOML1P2(6,R7),=C'ACTIVE'   YES - SET IT     
-         B     BYPE                   GO CONTINUE      
-BYP8     DS    0H                                           
-         TM    SMCAMISC,SMCAMAN       USER RECORDING REQUESTED?     
-         BNO   BYPE                    NO - SKIP                
-         MVC   WTOML1P1(6,R7),=C'ACTIVE'     SET SMF ACTIVE   
-         MVC   WTOML6P2(6,R7),=C'ACTIVE'     SET ACTIVE D.S. 
-         MVC   WTOML6P5(6,R7),=C'INACT ' SET ACTIVE D.S.    
-         MVC   WTOML7P5(4,R7),=C'USER'       YES - SET IT         
-         MVC   WTOML1P2(6,R7),=C'ACTIVE'     YES - SET IT     
-         B     BYPE                   GO CONTINUE         
-BYPE     DS    0H                                    
-         TM    SMCASWA,SMCADSTR       ERROR RECORDING?      
-         BNO   BYP9                    NO - SKIP       
-         MVC   WTOML1P2(6,R7),=C'(FULL)'  YES - SET IT            
-         MVC   WTOML6P2(6,R7),=C'*FULL '  SAA - SET ACTIVE D.S.
-         MVC   WTOML6P5(6,R7),=C'*FULL '  SAA - SET ACTIVE D.S.    
-         B     BYP9                   GO CONTINUE             
-BYP9     DS    0H                                                    
-         SPACE 3                                                    
-         MVC   WTOML7P6(3,R7),=C'NO '    OPERATOR NOT ALLOWED TO CHANGE
-         TM    SMCAMISC,SMCAOPI       OPERATOR ALLOWED TO CHANGE?    
-         BNO   BYPA                    NO - SKIP                  
-         MVC   WTOML7P6(3,R7),=C'YES'  YES - SET OPI=        
-         B     BYPA                   GO CONTINUE         
-BYPA     DS    0H                                     
-         SPACE 3                                    
-         MVC   WTOML6P1(1,R7),SMCAXORY   SET ACTIVE DATASET       
-         MVC   WTOML6P3(6,R7),SMCAPDEV   SET ACTIVE VOLSER      
-         MVC   WTOML6P4(1,R7),SMCAYORX   SET INACTIVE DATASET   
-         MVC   WTOML6P6(6,R7),SMCAADEV   SET INACTIVE VOLSER   
-         SPACE 3                                              
-         L     R1,SMCABSIZ              GET BUFFER SIZE       
-         CVD   R1,480(R7)               CONVERT SIZE TO PACKED FORM    
-         UNPK  WTOML5P2(8,R7),480(R7)   CONVERT TO READABLE AND DISPLAY 
-         OI    WTOML5P2+7(R7),X'F0'     CONVERT TO READABLE AND DISPLAY
-         SPACE 3                                                     
-         SR    R14,R14                                          
-         L     R15,SMCAJWT            GET JOB WAIT TIME       
-         M     R14,MSHIFT             CONVERT FROM          
-         D     R14,MICROSEC              MICROSECONDS TIMER UNITS     
-         CVD   R14,480(R7)            CONVERT TO READABLE SUB-MINUTES 
-         CVD   R15,490(R7)            CONVERT TO READABLE SUB-MINUTES
-         CLC   480+4(4),LTH      ARE WE TO ROUND UP?              
-         BL    BYPB                    NO - GO CONTINUE        
-         AP    490+4(4),PONE     ROUND UP BY ONE MINUTE      
-BYPB     DS    0H                                        
-         MVC   500(R7),EMASK                                     
-         ED    500(R7),490+6(R7)                            
-         MVC   WTOML5P1(4,R7),500(R7)                   
-BYPC     DS    0H                                  
-         MVC   WTOML7P4(1,R7),=C'0'      SET DEFAULT REC=     
-         TM    SMCAMISC,SMCATDS       TEMP DS?            
-         BNO   BYPD                    NO - SKIP      
-         MVC   WTOML3P3(4,R7),=C'TEMP' YES - SET IT            
-         MVC   WTOML7P4(1,R7),=C'2'          SET REC=        
-*        B     BYPD                   GO CONTINUE        
-BYPD     DS    0H                                     
-         SPACE 3                                                    
-         SR    R4,R4
-         IC    R4,XAU
-         LH    R5,XAA
-         LR    R0,R4                PUT UCMI INTO REG 0
-         WTO   MF=(E,(R7))            WRITE TO OPERATOR - SMF INFO
-         SPACE 3                                                 
-BYPF     DS    0H                                               
-         FREEMAIN RU,LV=2048,A=(R7)                       
-         LM    R0,R15,SA2           RESTORE REGISTERS             
-         B     EXIT00               GO EXIT THIS ROUTINE         
-         EJECT                                                         
+*X*DDSMFO   DS    0H                                                   
+*X*         STM   R0,R15,SA2           SAVE REGISTERS                  
+*X*         SPACE 3                                                    
+*X*         GETMAIN RU,LV=2048                                        
+*X*         LR    R7,R1                                                
+*X*         ST    R7,STRGAREA          AND SAVE THE POINTER TO IT     
+*X*         MVC   469(2,R7),=2XL1'00'                                  
+*X*         MVC   0(DSMRMSKX,R7),DSMRMSKD      MOVE BASE MSG TO W.S. 
+*X*         MVC   83(20,R7),0(R5)                                  
+*X*         MVC   79(2,R7),3(R5)                                    
+*X*         LA    R6,79(R7)                                        
+*X*         MVI   78(R7),C'*'                                    
+*X*         MVI   81(R7),C'*'                                      
+*X*         SR    R4,R4
+*X*         IC    R4,XAU
+*X*         LH    R5,XAA
+*X*         LR    R0,R4                PUT UCMI INTO REG 0
+*X*         WTO   MF=(E,(R7))          WRITE TO OPERATOR - SMF INFO  
+*X*         SPACE 3                                              
+*X*         L     R3,CVTPTR           POINT TO THE CVT     
+*X*         USING CVTMAP,R3            MAP THE CVT    
+*X*BYPX     DS    0H                                                  
+*X*         L     R6,CVTSMCA           POINT TO THE SMF'S SMCA  
+*X*         USING SMCABASE,R6          MAP THE SMCA         
+*X*         DROP  R3                                     
+*X*         SPACE 3                                  
+*X*BYPZ     DS    0H                               
+*X*         SR    R0,R0                        
+*X*         LR    R8,R7                  POINT TO RECEIVING FIELD       
+*X*         LH    R9,=H'424'             SET LENGTH FOR MESSAGE     
+*X*         LA    R14,DSMRMSGD           POINT TO SENDING FIELD  
+*X*         LH    R15,=H'424'            SET FILL CHAR          
+*X*         MVCL  R8,R14                 MOVE MESSAGE TO BUFFER      
+*X*         MVC   64+037(L'SMCASID,R7),SMCASID  SET SID          
+*X*         TM    SMCAOPT,SMCAOPT1       JOB ACCOUNTING?       
+*X*         BNO   BYP0                    NO - SKIP      
+*X*         MVC   116+012(3,R7),=C'JOB'  YES - SET IT 
+*X*         MVC   376+004(1,R7),=C'1'    YES - SET IT          
+*X*BYP0     DS    0H                                       
+*X*         TM    SMCAOPT,SMCAOPT2       STEP ACCOUNTING?     
+*X*         BNO   BYP1                    NO - SKIP      
+*X*         MVC   116+016(4,R7),=C'STEP' YES - SET IT  
+*X*         MVC   376+004(1,R7),=C'2'    YES - SET IT    
+*X*         B     BYP1                   GO CONTINUE   
+*X*BYP1     DS    0H                              
+*X*         SPACE 3                           
+*X*BYP2     DS    0H                  
+*X*         TM    SMCAOPT,SMCADSA        DATASET ACCOUNTING?         
+*X*         BNO   BYP3                    NO - SKIP               
+*X*         MVC   168+010(2,R7),=C'DS'   YES - SET IT       
+*X*         MVC   376+020(1,R7),=C'2'    YES - SET IT   
+*X*         B     BYP3                   GO CONTINUE                   
+*X*BYP3     DS    0H                                             
+*X*         TM    SMCAOPT,SMCAVOL        STEP ACCOUNTING?     
+*X*         BNO   BYP4                    NO - SKIP          
+*X*         MVC   168+013(3,R7),=C'VOL'  YES - SET IT             
+*X*         MVC   376+020(1,R7),=C'1'    YES - SET IT          
+*X*         B     BYP4                   GO CONTINUE           
+*X*BYP4     DS    0H                                          
+*X*         TM    SMCAOPT,SMCADSA+SMCAVOL DSET AND VOL ACCOUNTING? 
+*X*         BNO   BYP5                    NO - SKIP                    
+*X*         MVC   376+020(1,R7),=C'3'    YES - SET IT                
+*X*         B     BYP5                   GO CONTINUE                   
+*X*BYP5     DS    0H                                                
+*X*         SPACE 3                                                
+*X*         TM    SMCAOPT,SMCAEXT        EXITS TAKEN?           
+*X*         BNO   BYP6                    NO - SKIP                     
+*X*         MVC   220+007(3,R7),=C'YES'  YES - SET IT              
+*X*         MVC   376+011(3,R7),=C'YES'  SET EXT=             
+*X*         B     BYP6                   GO CONTINUE       
+*X*BYP6     DS    0H                                                    
+*X*         SPACE 3                                                     
+*X*         MVC   376+034(4,R7),=C'NONE' SET NO RECORDING MAN= 
+*X*         MVC   64+024(5,R7),=C'INACT'  SAA - SET SMF               
+*X*         MVC   64+005(5,R7),=C'INACT'  SAA - SET RECORDING      
+*X*         MVC   324+006(6,R7),=C'INACT '  SAA - SET ACTIVE D.S. 
+*X*         MVC   324+030(6,R7),=C'INACT '  SAA - SET ACTIVE D.S.   
+*X*         TM    SMCAMISC,SMCAUSER+SMCAMAN ALL RECORDING ?   
+*X*         BNO   BYP8                    NO - SKIP               
+*X*         MVC   64+005(6,R7),=C'ACTIVE'  SET SMF ACTIVE    
+*X*         MVC   324+006(6,R7),=C'ACTIVE'  SET ACTIVE D.S.  
+*X*         MVC   324+030(6,R7),=C'INACT '  SET ACTIVE D.S.       
+*X*         MVC   376+034(4,R7),=C'ALL '       YES - SET IT      
+*X*         MVC   64+024(6,R7),=C'ACTIVE'   YES - SET IT     
+*X*         B     BYPE                   GO CONTINUE      
+*X*BYP8     DS    0H                                           
+*X*         TM    SMCAMISC,SMCAMAN       USER RECORDING ?     
+*X*         BNO   BYPE                    NO - SKIP                
+*X*         MVC   64+005(6,R7),=C'ACTIVE'     SET SMF ACTIVE   
+*X*         MVC   324+006(6,R7),=C'ACTIVE'     SET ACTIVE D.S. 
+*X*         MVC   324+030(6,R7),=C'INACT ' SET ACTIVE D.S.    
+*X*         MVC   376+034(4,R7),=C'USER'       YES - SET IT         
+*X*         MVC   64+034(6,R7),=C'ACTIVE'     YES - SET IT     
+*X*         B     BYPE                   GO CONTINUE         
+*X*BYPE     DS    0H                                    
+*X*         TM    SMCASWA,SMCADSTR       ERROR RECORDING?      
+*X*         BNO   BYP9                    NO - SKIP       
+*X*         MVC   64+024(6,R7),=C'(FULL)'  YES - SET IT            
+*X*         MVC   324+006(6,R7),=C'*FULL '  SAA - SET ACTIVE D.S.
+*X*         MVC   324+030(6,R7),=C'*FULL '  SAA - SET ACTIVE D.S.    
+*X*         B     BYP9                   GO CONTINUE             
+*X*BYP9     DS    0H                                                    
+*X*         SPACE 3                                                    
+*X*         MVC   376+044(3,R7),=C'NO '  OPERATOR NOT ALLOWED TO CHANGE
+*X*         TM    SMCAMISC,SMCAOPI       OPERATOR ALLOWED TO CHANGE?    
+*X*         BNO   BYPA                    NO - SKIP                  
+*X*         MVC   376+044(3,R7),=C'YES'  YES - SET OPI=        
+*X*         B     BYPA                   GO CONTINUE         
+*X*BYPA     DS    0H                                     
+*X*         SPACE 3                                    
+*X*         MVC   324+004(1,R7),SMCAXORY   SET ACTIVE DATASET       
+*X*         MVC   324+014(6,R7),SMCAPDEV   SET ACTIVE VOLSER      
+*X*         MVC   324+028(1,R7),SMCAYORX   SET INACTIVE DATASET   
+*X*         MVC   324+037(6,R7),SMCAADEV   SET INACTIVE VOLSER   
+*X*         SPACE 3                                              
+*X*         L     R1,SMCABSIZ              GET BUFFER SIZE       
+*X*         CVD   R1,480(R7)               CONVERT SIZE TO PACKED FORM
+*X*         UNPK  272+016(8,R7),480(R7) CONVERT TO READABLE AND DISPLAY
+*X*         OI    272+016+7(R7),X'F0'   CONVERT TO READABLE AND DISPLAY
+*X*         SPACE 3  
+*X*         SR    R14,R14  
+*X*         L     R15,SMCAJWT            GET JOB WAIT TIME       
+*X*         M     R14,MSHIFT             CONVERT FROM          
+*X*         D     R14,MICROSEC              MICROSECONDS TIMER UNITS  
+*X*         CVD   R14,480(R7)          CONVERT TO READABLE SUB-MINUTES
+*X*         CVD   R15,490(R7)          CONVERT TO READABLE SUB-MINUTES
+*X*         CLC   480+4(4),LTH      ARE WE TO ROUND UP?              
+*X*         BL    BYPB                    NO - GO CONTINUE        
+*X*         AP    490+4(4),PONE     ROUND UP BY ONE MINUTE      
+*X*BYPB     DS    0H                                        
+*X*         MVC   500(R7),EMASK                                     
+*X*         ED    500(R7),490+6(R7)                            
+*X*         MVC   272+005(4,R7),500(R7)                   
+*X*BYPC     DS    0H                                  
+*X*         MVC   376+027(1,R7),=C'0'      SET DEFAULT REC=     
+*X*         TM    SMCAMISC,SMCATDS       TEMP DS?            
+*X*         BNO   BYPD                    NO - SKIP      
+*X*         MVC   168+025(4,R7),=C'TEMP' YES - SET IT            
+*X*         MVC   376+027(1,R7),=C'2'          SET REC=        
+*X**        B     BYPD                   GO CONTINUE        
+*X*BYPD     DS    0H                                     
+*X*         SPACE 3                                                    
+*X*         SR    R4,R4
+*X*         IC    R4,XAU
+*X*         LH    R5,XAA
+*X*         LR    R0,R4                PUT UCMI INTO REG 0
+*X*         WTO   MF=(E,(R7))          WRITE TO OPERATOR - SMF INFO
+*X*         SPACE 3                                                 
+*X*BYPF     DS    0H                                               
+*X*         FREEMAIN RU,LV=2048,A=(R7)                       
+*X*         LM    R0,R15,SA2           RESTORE REGISTERS             
+*X*         B     EXIT00               GO EXIT THIS ROUTINE         
+*X*         LTORG
+*X*         EJECT                                                         
 *****************************************************************
 *                                                                       
 *                      DISPLAY SMF DATASETS                       
@@ -542,6 +505,7 @@ DWSMFD1  WTO   'SKVD001I  SMF DATASETS STARTED       ',MF=L,           X
 DWSMFD1L EQU   *-DWSMFD1                                
 DDSMFD   DS    0H                                   
          STM   R0,R15,SA2           SAVE REGISTERS 
+         MVC   DSNAME,=CL44'SYS1.MAN?' INITIALISE DSNAME
          SPACE 3                            
          GETMAIN RU,LV=2048             
          LR    R7,R1                                            
@@ -558,13 +522,16 @@ DDSMFD   DS    0H
          MVC   115+009(1,R7),SMCAXORY     SET ACTIVE DATASET       
          MVC   115+012(6,R7),SMCAPDEV     SET ACTIVE VOLSER     
          MVC   115+019(5,R7),=C' YES '    SET AS IN USE        
-*MIDQ    TM    SMCAPSTA,SMCAPMTY          IS DATASET READY TO BE USED?  
-*MIDQ    BNO   BYPSD1                                              
-*MIDQ    MVC   115+018(6,R7),=C' AVAIL'   SET AS AVAILABLE  
 BYPSD1   DS    0H                                      
          TM    SMCAPSTA,SMCAPNAV          IS DATASET NOT AVAILABLE? 
-         BNO   BYPSD2                                          
+         BNO   BYPSD1M                      *MID* WAS BYPSD2
          MVC   115+021(6,R7),=C'NOT AVA'  SET AS NOT AVAILABLE    
+BYPSD1M  MVC   DSNAME+8(1),SMCAXORY         *MID* FOR SPACE USED
+         MVC   DSATSER(6),SMCAPDEV          *MID* FOR SPACE USED
+         BAL   R1,SMFUSED                   *MID* FOR SPACE USED
+         MVC   115+026(5,R7),TRKSTOTL       *MID* FOR SPACE USED
+         MVC   115+032(5,R7),TRKSUSED       *MID* FOR SPACE USED
+         MVC   115+041(2,R7),CPCTUSED       *MID* FOR SPACE USED
 BYPSD2   DS    0H                                              
          MVC   165+011(1,R7),SMCAYORX     SET INACTIVE DATASET   
          MVC   165+014(6,R7),SMCAADEV     SET INACTIVE VOLSER
@@ -578,9 +545,15 @@ BYPSD3   DS    0H
          MVC   165+021(6,R7),=C'NOT AVA'  SET AS NOT AVAILABLE    
 BYPSD4   DS    0H                                             
          TM    SMCASWA,SMCADSTR         DISASTER BIT SET?  
-         BNO   BYPSD5                    NO - BYPASS     
+         BNO   BYPSD4M                   NO - BYPASS     
          MVC   115+018(6,R7),=C'* FULL'    SET DS AS FULL           
          MVC   165+021(6,R7),=C'* FULL'    SET DS AS FULL       
+BYPSD4M  MVC   DSNAME+8(1),SMCAYORX         *MID* FOR SPACE USED
+         MVC   DSATSER(6),SMCAADEV          *MID* FOR SPACE USED
+         BAL   R1,SMFUSED                   *MID* FOR SPACE USED
+         MVC   165+028(5,R7),TRKSTOTL       *MID* FOR SPACE USED
+         MVC   165+034(5,R7),TRKSUSED       *MID* FOR SPACE USED
+         MVC   165+043(2,R7),CPCTUSED       *MID* FOR SPACE USED
 BYPSD5   DS    0H                                           
          WTO   MF=(E,(R7))            WRITE TO OPERATOR - SMF DS INFO  
 BYPY     DS    0H                                                 
@@ -619,29 +592,6 @@ DSMRMSGD WTO   ('SKV0001I SMF PARAMETER DETAIL                   ',C), X
                ('OPT=-  EXT=NO   DSV=0  REC=-  MAN=----  OPI=--- ',DE),X
                DESC=(5),MCSFLAG=(REG0,RESP),MF=L                     
 DSMRMSGX EQU   *-DSMRMSGD                                      
-WTOML1P1 EQU   064+005                                 
-WTOML1P2 EQU   064+024                                           
-WTOML1P3 EQU   064+037                                       
-WTOML2P1 EQU   116+012                                  
-WTOML2P2 EQU   116+016                          
-WTOML3P1 EQU   168+010                    
-WTOML3P2 EQU   168+013               
-WTOML3P3 EQU   168+025              
-WTOML4P1 EQU   220+007           
-WTOML5P1 EQU   272+005      
-WTOML5P2 EQU   272+016   
-WTOML6P1 EQU   324+004 MAN_                                  
-WTOML6P2 EQU   324+006 ACTIVE/INACT/*FULL*                 
-WTOML6P3 EQU   324+014 VOLSER                         
-WTOML6P4 EQU   324+028 MAN_                     
-WTOML6P5 EQU   324+030 ACTIVE/INACT/*FULL* 
-WTOML6P6 EQU   324+037 VOLSER          
-WTOML7P1 EQU   376+004               
-WTOML7P2 EQU   376+011          
-WTOML7P3 EQU   376+020    
-WTOML7P4 EQU   376+027  
-WTOML7P5 EQU   376+034          
-WTOML7P6 EQU   376+044     
 MICROSEC DC    F'60000000'       
 MSHIFT   DC    F'1048576'              
 LTH      DC    F'50000000'
@@ -650,10 +600,11 @@ EMASK    DC    X'40202020'
          SPACE   5                         
 DSMDMSGD WTO   ('SKV0001I SMF DATASET USAGE DETAIL               ',C), X
                (' DSNAME    VOLSER IN-USE ALLOC  USED   %FULL    ',D), X
-               ('SYS1.MAN-  111111         ---    ---    ----    ',D), X
-               ('SYS1.MAN+  222222         ---    ---    ----    ',DE),X
+               ('SYS1.MAN-  111111        ----- -----    --%     ',D), X
+               ('SYS1.MAN+  222222        ----- -----    --%     ',DE),X
                DESC=(5),MCSFLAG=(REG0,RESP),MF=L                   
 DSMDMSGL EQU   *-DSMDMSGD                                  
+         LTORG
          EJECT
          SPACE 2
          EJECT
@@ -757,6 +708,7 @@ DDTIME2  STM   R0,R15,SA2           SAVE REGISTERS
 DTIMMSGD WTO   'MID136I  TIME=hh:mm:dd  DATE=yyyy/mm/dd (yy.ddd) www', X
                DESC=(5),MCSFLAG=(REG0,RESP),MF=L
 DTIMMSGX EQU   *-DTIMMSGD
+         LTORG
          TITLE 'MID3503D - DISPLAY COMMAND EXTENTIONS - DATE ROUTINES'
          EJECT
 * =====================================================================
@@ -783,7 +735,7 @@ DTIMMSGX EQU   *-DTIMMSGD
 * ---------------------------------------------------------------------
 * We have been requested to use the current date. Use time deviation.
 * ---------------------------------------------------------------------
-V1USECUR STM   R0,R15,FINDDV00    SAVE ALL REGISTERS, WE USE THE LOT
+V1USECUR STM   R0,R15,MIDSAV00    SAVE ALL REGISTERS, WE USE THE LOT
          STCK  VALSTCK            STORE THE TIME-OF-DAY CLOCK         
          LM    R0,R1,VALSTCK
          L     R15,16             GET CVT ADDRESS                  
@@ -795,7 +747,7 @@ V1USECUR STM   R0,R15,FINDDV00    SAVE ALL REGISTERS, WE USE THE LOT
 * Calculating the IPL time from the current STCK plus local time
 * deviation, and subtracting the RMCTTOD (1024Usecs since IPL).
 * ---------------------------------------------------------------------
-V1IPLDAT STM   R0,R15,FINDDV00    SAVE ALL REGISTERS, WE USE THE LOT
+V1IPLDAT STM   R0,R15,MIDSAV00    SAVE ALL REGISTERS, WE USE THE LOT
          STCK  VALSTCK            STORE THE TIME-OF-DAY CLOCK         
          LM    R0,R1,VALSTCK
          L     R15,16             GET CVT ADDRESS                  
@@ -999,8 +951,138 @@ FINDDL03 AR    R6,R1                 inc, month from 1 not 0
          CVD   R3,FINDDV05            
          UNPK  D370JDAY(3),FINDDV05+6(2)  UNPACK DDD INTO OUTPUT
          OI    D370JDAY+2,C'0'     INSURE NUMERICS
-         LM    R0,R15,FINDDV00  RESTORE ALL REGISTERS TO PRIOR STATE
+         LM    R0,R15,MIDSAV00  RESTORE ALL REGISTERS TO PRIOR STATE
          BR    R1                  BACK TO WHERE WE WERE CALLED FROM
+         LTORG
+         EJECT   
+***********************************************************************
+* SMFUSED: *MID*                                                      *
+* GET SPACE USED BY SMF DATASETS                                      *
+* ENTRY : BAL R1,SMFUSED                                              *
+*                                                                     *
+* REGISTERS THAT CANNOT BE USED                                       *
+* CANNOT USE R2   -- addesses ieexsa storage area                     *
+* CANNOT USE R13  -- address getmained data dsect                     *
+* CANNOT USE R12  -- addresses program code                           *
+* R3.R6 to be safe, addressing fields in the routine that brached here*
+* Unfortunately I am using R6 as I have run out of registers, lets    *
+* hope this does not cause too much trouble; they have been dropped   *
+* before here but we branch back into the code that still uses them.  *
+***********************************************************************
+SMFUSED  STM   R0,R15,MIDSAV00    SAVE ALL REGISTERS
+* INITIALISE DEFAULTS
+         MVC   TRKSTOTL,=C'    0'
+         MVC   TRKSUSED,=C'    0'
+         MVC   CPCTUSED,=C' 0'
+* BUILD OBTAIN REQUEST BLOCK FOR LATER USE - SEARCH FOR DCB1 ENTRY
+         LM    R4,R7,SEARCH            OBTAIN, SEARCH                 
+         LA    R5,DSNAME               DSNAME
+         LA    R6,DSATSER              VOLSER
+         LA    R7,DSATFMT1             DCB1 DATA MAPPING AREA
+         STM   R4,R7,DSATDCB1          SAVE REQUEST BLOCK
+* BUILD OBTAIN REQUEST BLOCK FOR LATER USE - SEEK TO DCB3 ENTRY 
+         LM    R4,R7,SEEK              OBTAIN, SEEK      
+         LA    R5,DS1PTRDS             A FIELD FROM FMT1 DCB WHEN READ
+         LA    R6,DSATSER              VOLSER
+         LA    R7,DSATFMT3             DCB3 MAPPING AREA
+         STM   R4,R7,DSATDCB3          SAVE DCB3 REQUEST BLOCK
+* OBTAIN THE DCB1 ENTRY FOR THE FILE
+         OBTAIN DSATDCB1               GET FORMAT 1 DSCB             
+         LTR   R15,R15                 TEST RETURN CODE         
+         BNZ   DSNERR    
+* IF IT EXISTS, OBTAIN THE DCB3 ENTRY FOR THE FILE
+         NC    DS1PTRDS,DS1PTRDS       SEE IF THERE IS A FORMAT 3 DSCB 
+         BZ    HAVEDCBS                                               
+         OBTAIN DSATDCB3               GET THE FORMAT 3 DSCB      
+         LTR   R15,R15                 TEST RETURN CODE         
+         BNZ   DSNERR   
+HAVEDCBS CNOP  0,4
+*********************************************************************** 
+*        R5        - EXECUTE TABLE POINTER ??? SET BY OBTAIN ???      * 
+*        R6        - TRACKS ALLOCATED                                 * 
+*        R7        - EXTENT DESCRIPTION POINTER/TRACKS USED           * 
+*        R8 - R13  - RESERVED                                         * 
+***********************************************************************
+         SPACE 2                                                       
+*--------GET TRACK ALLOCATION                                           
+         SR    R4,R4                   CLEAR REGISTER 4                 
+         SR    R5,R5                   CLEAR REGISTER 5                
+         SR    R6,R6                   CLEAR REGISTER 6                
+         SR    R7,R7                   CLEAR REGISTER 7               
+         ST    R7,FTRKUSE              ZERO TRACKS USED
+         ST    R7,FTRKTOT              ZERO TRACKS TOTAL
+         IC    R4,DS1NOEPV             LOAD NUMBER OF EXTENTS        
+DSATTRKS EX    R0,DSATADDR(R5)         PROCESS EXTENT BLOCK      
+         CLI   0(R7),X'00'                                     
+         BE    DSATUTRK                                     
+         LA    R7,2(R7)                LOAD ADDRESS OF STARTING TRACK 
+         MVC   HALF(2),4(R7)           LOAD ENDING CYL NUMBER         
+         LH    R1,HALF                                                
+         MVC   HALF(2),0(R7)           LOAD STARTING CYL NUMBER       
+         SH    R1,HALF                 SUBTRACT STARTING FROM ENDING  
+*        MH    R1,TRKPRCYL             MULTIPLY BY TRACKS PER CYL    
+         MH    R1,=H'30'               HARD CODE FOR 3350            
+         MVC   HALF(2),6(R7)           LOAD ENDING TRACK            
+         AH    R1,HALF                 ADD TO TRACK COUNT          
+         MVC   HALF(2),2(R7)           LOAD STARTING TRACK           
+         SH    R1,HALF                 SUBTRACT FROM TRACK COUNT   
+         AR    R6,R1                   ACCUMULATE TOTAL        
+         LA    R6,R1(R6)               ADD 1 TRACK        
+         LA    R5,4(R5)                                  
+         BCT   R4,DSATTRKS             DECREMENT EXTENT COUNT        
+DSATUTRK ST    R6,FTRKTOT              SAVE TOTAL TRACKS
+         CVD   R6,DSATPDEC             CONVERT TRACKS TO DECIMAL     
+         MVC   DSATDEC,DECMASK                   MOVE MASK        
+         ED    DSATDEC,DSATPDEC+4      EDIT                   
+         MVC   TRKSTOTL(5),DSATDEC+3   SAVE FORMATTED TOTAL TRACKS
+*--------GET TRACKS USED                                        
+         LH    R7,DS1LSTAR             LOAD TRACKS USED     
+         NC    DS1LSTAR,DS1LSTAR       TEST FOR ZERO     
+         BZ    DSATPCTF                                           
+         LA    R7,1(R7)                ADD 1                     
+         ST    R7,FTRKUSE              SAVE TRACKS USED
+         CVD   R7,DSATPDEC             CONVERT TO DECIMAL     
+         MVC   DSATDEC,DECMASK               MOVE MASK      
+         ED    DSATDEC,DSATPDEC+4      EDIT              
+         MVC   TRKSUSED(5),DSATDEC+3   SAVE FORMATTED USED TRACKS
+*--------CALCULATE PERCENTAGE USED                             
+DSATPCTF XR    R6,R6                   CLEAR R6 OR R6,R7 PAIR
+         L     R7,FTRKUSE              R7 HAS TRACKS USED
+         M     R6,=F'100'              TRKS USED * 100
+         D     R6,FTRKTOT               THEN / TRKS TOT TO GET %
+*                            Remainder in R6, %pct is in R7
+         CVD   R7,DSATPDEC             CONVERT TO DECIMAL        
+         MVC   DSATDEC,DECMASK               MOVE MASK         
+         ED    DSATDEC,DSATPDEC+4      EDIT                 
+         MVC   CPCTUSED(2),DSATDEC+6   MOVE %USED INTO FIELD
+         B     SMFUSEDX                BRANCH OVER TABLE
+*--------LOAD EXTENT DESCRIPTIONS LOOKUP TABLE
+DSATADDR LA    R7,DS1EXT1              << EXECUTED INSTRUCTION >>   
+         LA    R7,DS1EXT2              << EXECUTED INSTRUCTION >>  
+         LA    R7,DS1EXT3              << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT01             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT02             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT03             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT04             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT05             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT06             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT07             << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT08             << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT09             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT10             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT11             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT12             << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT13             << EXECUTED INSTRUCTION >>
+SMFUSEDX LM    R0,R15,MIDSAV00  RESTORE ALL REGISTERS TO PRIOR STATE
+         BR    R1
+DSNERR   CVD   R15,DSATPDEC       CONVERT RTNCODE TO DECIMAL
+         MVC   DSATDEC,DECMASK                   MOVE MASK
+         ED    DSATDEC,DSATPDEC+4      EDIT
+         MVC   DSNERRW+38(5),DSATDEC+3   MOVE INTO MESSAGE
+         MVC   DSNERRW+44(9),DSNAME      SYS1.MAN? + any garbage byte
+         MVC   DSNERRW+54(6),DSATSER     VOLSER                         
+DSNERRW  WTO   'MID3503D DATASET OBTAIN ERROR nnnnn SYS1.MAN? vvvvvv'
+         B     SMFUSEDX
          LTORG
 * =====================================================================
 * END OF DATE TIME COMMON ROUTINES
@@ -1014,31 +1096,30 @@ TRTAB    DC    C'0123456789ABCDEF'
 * -------------------------------------------------------
 * These must be initialised, so must be in code space
 * -------------------------------------------------------
+* MID: FOR STCK DATE CALCULATIONS
 STCKVT   DC    AL1(31,28,31,30,31,30,31,31,30,31,30,31) MONTH TABLE
 STCKVTL  DC    AL1(31,29,31,30,31,30,31,31,30,31,30,31) LEAP YEAR
 STCKDAYS DC    C'SUNMONTUEWEDTHUFRISAT'
+DECMASK  DC    X'4020202020202120' 
+* MID: CONSTANTS ADDED FOR SMF DATASET USAGE
+SEARCH   CAMLST SEARCH,0,0,0
+SEEK     CAMLST SEEK,0,0,0
+         LTORG
          EJECT
 IEEXSA   DSECT                                                         
          IEEXSA                                                        
-XTM      EQU   XAT-2                               
-XDATE    EQU   XAS                            
-         EJECT                           
-         IHASUBIT                                                  
 SA       DSECT                                              
 SAVEAREA DS    18F                                                    
 SA2      DS    18F                  ROUTINE'S REGISTER SAVE AREAS 
 STRGAREA DS    F                    GOTTEN STORAGE FOR GETMAINS  
-DBLAREA1 DS    D                                               
-DBLAREA2 DS    D                                        
+MIDSAV00 DS   16F    SAVE/RESTORE ALL REGISTERS ACROSS MY CODING
 WTOAREA  DS    0C                                
          DS    CL255                       
          DS    CL255                    
          DS    CL255                   
          DS    CL255             
-         TITLE 'MID3503D - DISPLAY COMMAND EXTENTIONS - DATE ROUTINES'
          EJECT
-* Additional for date manipluations
-FINDDV00 DS   16F    SAVE/RESTORE ALL REGISTERS ACROSS DATE CODING
+* MID: Additional for date manipluations
 FINDDV01 DS    F                   hold the year we are testing
 FINDDV02 DS    F                   days left at the moment
 FINDDV03 DS    F                   current month
@@ -1056,6 +1137,49 @@ D370MMDD  DS   CL4    MMDD
 D370WKDY  DS   CL1    0-6
 D370TIME  DS   CL8    HHMMSSth
 D370DNAM  DS   CL3    SUN-SAT
+* MID: Additional for SMF dataset extent calculations
+DSATDCB1 CAMLST SEARCH,0,0,0
+DSATDCB3 CAMLST SEEK,0,0,0
+DSNAME   DC    CL44'SYS1.MANX'         SMF DATASET NAME (X OR Y)
+DSATSER  DC    CL6'PUB002'             SMF DATASET VOLSER
+HALF     DS    H                       HALFWORD ALIGNED WORK AREA
+DSATDEC  DS    D                       WORK AREA FOR DECIMAL CONVERSION
+DSATPDEC DS    D                       WORK AREA FOR DECIMAL CONVERSION
+FTRKTOT  DS    F                       SAVE TRACK ALLOCATION TOTAL
+FTRKUSE  DS    F                       SAVE TRACK USED AMOUNT
+TRKSTOTL DS    CL5      total tracks allocated
+TRKSUSED DS    CL5      total tracks used
+CPCTUSED DS    CL2      percent trksused/trkstotal
+DSATFMT1 DS    0D,148C                 FORMAT 1 DSCB (DS DESCRIPTION)
+DSATFMT3 DS    0D,148C                 FORMAT 3 DSCB (ADD EXTENTS)
+         TITLE 'FORMAT 1 DSCB MAP'   
+         PRINT GEN
+         ORG   DSATFMT1-44
+         IECSDSL1 1
+         PRINT NOGEN
+         TITLE 'FORMAT 3 DSCB MAP'   
+* DO NOT USE 'IECSDSL1 3' TO BUILD THE DSCB ENTRY
+* USE THE REMAPPING FROM CBT249.FILE048(#VTCFMT3)
+         ORG   DSATFMT3
+*        FORMAT 3 DSCB DESCRIPTION                                    * #VTCFMT3
+*        DESCRIPTION OF FOURTH THROUGH SIXTEENTH EXTENTS OF A         * #VTCFMT3
+*        DATA SET                                                     * #VTCFMT3
+DS3KEY   DS    XL4                      KEY - 03030303                  #VTCFMT3
+DS3EXT01 DS    XL10                     EXTENT  4 DESCRIPTION           #VTCFMT3
+DS3EXT02 DS    XL10                             5                       #VTCFMT3
+DS3EXT03 DS    XL10                             6                       #VTCFMT3
+DS3EXT04 DS    XL10                             7                       #VTCFMT3
+DS3FMTID DS    X                        DSCB FORMAT 3 IDENTIFIER, X'F3' #VTCFMT3
+DS3EXT05 DS    XL10                     EXTENT  8 DESCRIPTION           #VTCFMT3
+DS3EXT06 DS    XL10                             9                       #VTCFMT3
+DS3EXT07 DS    XL10                            10                       #VTCFMT3
+DS3EXT08 DS    XL10                            11                       #VTCFMT3
+DS3EXT09 DS    XL10                            12                       #VTCFMT3
+DS3EXT10 DS    XL10                            13                       #VTCFMT3
+DS3EXT11 DS    XL10                            14                       #VTCFMT3
+DS3EXT12 DS    XL10                            15                       #VTCFMT3
+DS3EXT13 DS    XL10                            16                       #VTCFMT3
+         ORG
 MIDSALEN EQU   *-SAVEAREA    LENGTH OF WORK DSECT
          TITLE 'MID3503D - DISPLAY COMMAND EXTENTIONS'
          EJECT                 

@@ -3,7 +3,7 @@
 //             CLASS=A,
 //             MSGCLASS=A,
 //             MSGLEVEL=(1,1),
-//             REGION=4096K,USER=MARK,PASSWORD=MVS38J
+//             REGION=4096K
 //*
 //*********************************************************************
 //*

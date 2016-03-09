@@ -34,22 +34,6 @@ ZMD0002 - Usable with TK3 and TK4-
           (if MID3503D does not exist in the linklist the only impact
           is a 806 warning when you issue an invalid command).
 
-          FILES:
-              ZMD0002_IEE3503D_tk4_mods.txt  ... apply changes
-              ZMD0002R.txt             ... backout (restore) changes
-            plus
-              MID3503D.txt       ... example MID3503D module
-
-          The example MID3503D provides the additional commands
-            * 'D SMF' and 'D SMF,O' extracted from CBT tape 486 file 887,
-              the 'D SMF is incomplete (as per the CBT source)
-            * 'D APF[LIST]' extracted from CBT tape 486 file 887
-           and ones I have started adding
-            * 'D TIME' to include the day name and yyyy/mm/dd in the
-              response display, rather than the pointless 'D T' command
-            * 'D IPL[INFO]' to display the last IPL time plus
-              stuff like ipl volser, ipl type warm/cvio/clpa etc
-              (ok, unix geek, I needed a 'uptime' equivalent)
           Benefits: once the usermod is in no more SMP work
             * new commands can be added simply by assembling a new
               version of MID3503D (in TK4- instantly available
@@ -60,3 +44,35 @@ ZMD0002 - Usable with TK3 and TK4-
             * the worst impact of a coding error in MID3503D is a
               system dump dataset is populated
 
+          FILES:
+              ZMD0002_IEE3503D_tk4_mods.txt  ... apply changes
+              ZMD0002R.txt             ... backout (restore) changes
+            plus
+              MID3503D.txt       ... example MID3503D module (buggy on entry/exit handling)
+              MID3503D_V2.txt    ... example MID3503D module (no bugs, that I know of))
+
+          The example MID3503D provides the additional commands
+            * 'D SMF' and 'D SMF,O' extracted from CBT tape 486 file 887,
+              the 'D SMF is incomplete (as per the CBT source) as it just
+              has placeholders for dataset allocation used
+            * 'D APF[LIST]' extracted from CBT tape 486 file 887
+            * 'D TIME' to include the day name and yyyy/mm/dd in the
+              response display, rather than the pointless 'D T' command
+            * 'D IPL[INFO]' to display the last IPL time plus
+              stuff like ipl volser, ipl type warm/cvio/clpa etc
+              (ok, unix geek, I needed a 'uptime' equivalent)
+            *** BUGGY due to invalid entry/exit code handling (fixed in V2)
+                Random command invalid responses (if used from imon or spy
+                consoles) after the display and the
+                occasional system dump dataset filling
+
+          The example MID3503D_V2 has the following differences from the first
+            * the 'D SMF,O' option has been removed (insufficient symbol table 
+              space for both it and my changes, I chose to keep my changes)
+            * the 'D SMF' option has been completed, it now shows the space
+              used by the SMF datasets
+            * the entry/exit code has been adjusted for the environment the
+              program runs in (R13 does not address a savearea, register
+              saving therefore needs more work). 
+            *** No bugs, it works properly
+              

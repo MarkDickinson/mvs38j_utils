@@ -3,7 +3,7 @@
 //             CLASS=A,
 //             MSGCLASS=A,
 //             MSGLEVEL=(1,1),
-//             REGION=4096K,USER=MARK,PASSWORD=MVS38J
+//             REGION=4096K
 //*
 //*********************************************************************
 //*
@@ -75,18 +75,16 @@
          LR    R15,R0         GET EPA OF MODULE LOADED          ZMD0002 28510112
          LR    R1,R5          PARMS NORMALLY ADDRESSED BY R1 :-)ZMD0002 28510113
          BALR  R14,R15        AND RUN IT                        ZMD0002 28510114
-         LR    R0,R15         SAVE RETURN CODE                  ZMD0002 28510115
+         LR    R8,R15         SAVE RETURN CODE                  ZMD0002 28510115
          DELETE EP=MID3503D   DELETE THE PREVIOUSLY LOADED RTN  ZMD0002 28510116
          LR    R14,R7         RESTORE RETURN ADDRESS            ZMD0002 28510117
-         LTR   R0,R0          CHECK RETURN CODE                 ZMD0002 28510118
+         LTR   R8,R8          CHECK RETURN CODE                 ZMD0002 28510118
          BNZ   DERR305        ON NON-ZERO ORIGIONAL ERROR CODE  ZMD0002 28510119
          BR    R14            RETURN TO SYSTEM                  ZMD0002 28510120
 * SHOULD NEVER GET TO THE ORIGIONAL LINE BELOW                  ZMD0002 28510121
 * --------------------------------------------------------------ZMD0002 28510122
 ./ ENDUP
 //SMPCNTL  DD  *
- REJECT SELECT(ZMD0002).
- RESETRC.
  RECEIVE SELECT(ZMD0002).
  APPLY SELECT(ZMD0002) ASSEM.
 /*

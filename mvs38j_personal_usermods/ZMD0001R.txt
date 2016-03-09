@@ -3,7 +3,7 @@
 //             CLASS=A,
 //             MSGCLASS=A,
 //             MSGLEVEL=(1,1),
-//             REGION=4096K,USER=MARK,PASSWORD=MVS38J
+//             REGION=4096K
 //*
 //*********************************************************************
 //*
@@ -14,15 +14,11 @@
 //*     Revert IEECVXIT WTO message automation exit:
 //*     CLPA is required to implement
 //*
-//* Messy as TK4- has two additional usermods on top of the TK3
-//* ZUM0003 and we have to get rid of them all.
-//*
 //* Can only restore back to the base level, not remove just a single
 //* usermod here, due the the PRE and SUP requirements used all the
 //* way through. Messy but I want to ensure the TK4- updates are
 //* back at the TK4- level so I have not done it the sensible way 
 //* of removing the TK3 and TK4- usermods and just applying my own
-//* as I wish my base OS to be TK4- for now
 //*
 //* We must... 
 //*   o  restore ALL the usermods applied to this module back to the
