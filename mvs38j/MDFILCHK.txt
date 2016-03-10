@@ -55,7 +55,7 @@
 //ASM.SYSIN DD *
          PRINT NOGEN
          LCLB  &DEBUGON
-&DEBUGON SETB  1
+&DEBUGON SETB  0
          LCLB  &DATELIB
 &DATELIB SETB  1
 *                                        MVS  (OS/VS2 RELEASE 3)        
@@ -96,10 +96,14 @@ MDFILCHK CSECT
 *  -- NN IS THE NUMBER OF EXTENTS USED THAT TRIGGERS THRESHOLD EVENT  *
 *     BUT THAT HAS NOT BEEN IMPLEMENTED YET, HARD CODED AS 13         *
 *                                                                     *
+*  ANY CARD WITH * IN COLUMN 1 IS TREATED AS A COMMENT CARD           *
+*                                                                     *
 ***********************************************************************
          OPEN  (SYSIN,(INPUT))
 NEXTCARD GET   SYSIN                 GET THE SYSIN CARD     
          MVC   DSNAME,0(R1)          SAVE DATASET NAME
+         CLI   0(R1),C'*'            IS IT A COMMENT CARD ? 
+         BE    NEXTCARD              YES, JUST GET THE NEXT CARD
          CLI   45(R1),C' '           MUST HAVE A MEMBER NAME
          BE    BADCARD               IF MISSING A BAD SYSIN CARD
          MVC   MEMBNAME(8),45(R1)    SAVE MEMBER NAME
@@ -322,6 +326,8 @@ CATBLOCK DS    0D,265C                 CATALOG BLOCK
 //TEST0001 EXEC PGM=MDFILCHK,COND=(0,NE)
 //REPORT   DD   SYSOUT=*
 //SYSIN    DD   *
+*...+....1....+....2....+....3....+....4....+....5....+....6     
+*DATASET-NAME-44-BYTES-XXXXXXXXXXXXXXXXXXXXX PDSMEMBR NN(EXTS)
 MARK.LIB.LOAD                                COMPLOAD 16
 MARK.LIB.JCL                                 COMPJCL  14
 DELIBERATE.BAD.CARD 
