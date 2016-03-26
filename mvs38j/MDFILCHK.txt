@@ -3,47 +3,30 @@
 //*
 //* MDFILCHK : 
 //*
-//* Purpose:
-//*   Keep an eye on some of the files I have that grow over time,
-//*   log files, test load libraries that get used a lot etc.
-//*   It checks how many extents have been allocated to the files,
-//*   and will trigger a maintenance batch job if the number of
-//*   extents used passes a threshold.
-//*   As only 16 extents are allowed under mvs38j this allows log
-//*   files to be rolled and load libraries compressed/recreated
-//*   as needed automatically by a daily job.
-//*
-//* Functional notes:
-//*   The maintenance job in this code is triggered by a mvc34 
-//*   request to issue a console command to start a task to run
-//*   a job from one of my job submission libraries; I need to do
-//*   it that way as my job submission code has lots of fiddles to
-//*   allow them to work under rakf. There are many other ways of
-//*   submitting jobs so adjust the 'action required' block to 
-//*   fit in with the way you have customised your system.
-//*   MUST BE ASSEMBLED AC=1 INTO AN APF AUTHORISED LIBRARY TO
-//*   ALLOW IT TO SWITCH TO KEY ZERO TO ISSUE CONSOLE COMMANDS.
-//*
 //* TO ASSEMBLE - LIBRARIES
 //*    Requires - supplied with a TK3 system: 
 //*      SYS1.MACLIB      - standard system maclib
 //*      SYS2.MACLIB      - yregs
 //*      CBT249.FILE058   - catalog/vtoc mapping 
-//*    Requires - non-standard
-//*      My date library wherever you installed it to, if you have
-//*      not installed it change &DATELIB to 0 to skip the code
-//*      that requires it. The only impact is the report lines
-//*      will not include timestamps. If you use my datelib you
-//*      are expected to have the required program modules in your
-//*      systems linklist.
-//* TO ASSEMBLE - TOGGLES   
-//*    &DEBUGON   set to 1 (debug wtos) or 0 (no debug wtos)
-//*    &DATELIB   set to 1 to use my date library, 0 to not use it
-//*
-//* SYSIN CARD FORMAT: see notes in the program
 //*
 //* JCL REQUIRED: See the test steps at the end of this jobdeck
 //*
+//* CURRENT STATUS
+//*    As supplied the debugging flag is turned on, an assembler
+//*    global you can change.
+//*    Theoretically for the percentage checks are only valid on
+//*    dasd up to 3350 should be supported, but works ok on 3390.
+//*    I have not tested all the other device types in between.
+//*
+//* CREDITS
+//*      CBT249.FILE058   - catalog/vtoc mapping ... while I would
+//*                         normally use the IBM mapping macro for
+//*                         the format1 dscb I have been getting 
+//*                         sick of the spelling mistake in F058
+//*                         that breaks assembly when I do; and the
+//*                         format3 re-mapping in that file makes so
+//*                         much more sense than the IBM macro.
+//*                         So at this point in time you need that file
 //* ===================================================================
 //ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
 //             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
@@ -54,18 +37,92 @@
 // DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME    MY DATE LIBRARY
 //ASM.SYSIN DD *
          PRINT NOGEN
-         LCLB  &DEBUGON
-&DEBUGON SETB  0
-         LCLB  &DATELIB
-&DATELIB SETB  1
 *                                        MVS  (OS/VS2 RELEASE 3)        
 *********************************************************************** 
-* KNOWN ISSUES
-* Just a TODO to fix one day, the "dataset not found" WTO when a
-* dataset is provided in sysin that is not cataloged it would be
-* helpfull if I included the dataset name that was not found in the
-* message.
+*                                                                     *
+* MDFILCHK : Mark Dickinson, 2016                                     *
+*                                                                     *
+* Purpose:                                                            *
+*   Keep an eye on some of the files I have that grow over time,      *
+*   log files, test load libraries that get used a lot etc.           *
+*   As only 16 extents are allowed under mvs38j when datasets get     *
+*   close to that action is needed. This program will issue a NRD WTO *
+*   (which can be automated if you have message automation) or run a  *
+*   command to submit a recovery job for each of the datasets being   *
+*   checked by the program.                                           *
+*                                                                     *
+* Functional notes:                                                   *
+*   If the number of extents exceeds the max allowed before an alert  *
+*   is raised one of two things will happen..                         *
+*   (A) if the keyword =WTONRD1 or =WTONRD2 is used...                *
+*       a NRD message will be written indicating manual recovery      *
+*       action is required, MDFC001A or MDFC002A based on keyword     *
+*   MDFC001A EXT=nn, DSORG=xx, DS=...THE DATASET NAME BEING CHECKED...*
+*   MDFC001A PCT=nn, DSORG=xx, DS=...THE DATASET NAME BEING CHECKED...*
+*   MDFC002A EXT=nn, DSORG=xx, DS=...THE DATASET NAME BEING CHECKED...*
+*   MDFC002A PCT=nn, DSORG=xx, DS=...THE DATASET NAME BEING CHECKED...*
+*       the two different message numbers are so I can use message    *
+*       automation to take different actions; the first field just    *
+*       identifies whether the trigger was too many extents being     *
+*       used or whther a percentage used threshold was exceeded.      *
+*       The DSORG value xx will be PS or PO so message automation     *
+*       rules have a decent chance at deciding if a dataset compress  *
+*       or resize is required.                                        *
+*   (B) anything else in that field is assumed to be a membername in  *
+*       a job library that will be submitted via a console command    *
+*       'S AOMTASK,J=MMMMMMMM'. You are responsible for creating the  *
+*       AOMTASK procedure and job library it needs as that will be    *
+*       site independant.                                             *
+*   Details on the actual SYSIN card format required is covered in    *
+*   the section of the code that validates the sysin card input.      *
+*                                                                     *
+*   The program must be AC=1 and run from an APF authorised library   *
+*   (A) to avoid the issue of a NRD being deleted as soon as the batch*
+*       job ends which happens with non authorised programs, it needs *
+*       to stay on the console :-).                *                  *
+*   (B) to allow the switch to key 0 to issue the 'S AOMTASK' command *
+*       using SVC34.                                                  *
+*                                                                     *
+* I can use the NRD messages produced to take action using my MMPF app*
+* which can intelligently (well as intelligently as the nut writing   *
+* the rules) automate a response based on the dataset name and usage. *
+* Two message numbers are used for that, the second is for datasets   *
+* that cannot be automated (ie: system datasets in use that need a IPL*
+* to complete reorganisation).                                        *
+* The 'S AOMTASK' is a less intellegent way of automating things as   *
+* it requires a jobdeck per datset being checked, but I have retained *
+* it as there will alway special cases that need one response so it   *
+* still has a place.                                                  *
+*                                                                     *
+* Change History                                                      *
+* V1 : March 2016                                                     *
+*      issued a console command to submit a job to recover from the   *
+*      condition. Required a PDS member 'job' for each dataset check  *
+*      and required the program to be authorised in order to issue    *
+*      the commands to submit the 'job'.                              *
+* V2 : March 2016                                                     *
+*      Added the two NRD messages so I can handle the events using    *
+*      my console message automation task instead of needing a jobdeck*
+*      per dataset. Also added the percentage used checks.            *
+* V3 : March 2016                                                     *
+*      Removed the debugging conditional assembler toggles, and added *
+*      a test for a REPORT DD in the JCL instead. If a REPORT DD is   *
+*      in the JCL details of every dataset being checked will be      *
+*      logged there even if they are not in an action required state  *
+*      (which replaces the WTO debugging) plus log actions triggered. *
+*      There are still WTOs issued for actions taken so they can be   *
+*      audited from the syslog, and for dataset errors, but not for   *
+*      debugging anymore. Also removed some explicit error WTOs and   *
+*      replaced them with more generic shared error messages as the   *
+*      symbol table space became exhausted one all the report lines   *
+*      were added.                                                    *
+*                                                                     *
 *********************************************************************** 
+         MACRO
+&NAME    SPACEOUT &A
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEND
 MDFILCHK CSECT
          STM   R14,R12,12(13)
          BALR  R12,R0
@@ -75,38 +132,94 @@ MDFILCHK CSECT
          ST    R13,4(R15)
          LR    R13,R15
          SPACE 3
-*********************************************************************** 
-*        OPEN REPORT EARLY SO WE CAN WRITE ERROR MESSAGES             *
-* (ALTHOUGH AT THE MOMENT I AM LAZILY USING WTOS FOR ERRORS)          *
 ***********************************************************************
-         OPEN  (REPORT,(OUTPUT))
-***********************************************************************
-* IF MY DATELIB IS BEING USED GET DATE AND TIME NOW                   *
-***********************************************************************
-         AIF   (&DATELIB EQ 0).SKIPD01 IF DATELIB NOT USED SKIP
-         UDATEMAC DATA=UDATEVAR,REQ=CURR,INFMT=DEC,ERROR=NOLNKLST
-.SKIPD01 ANOP
-***********************************************************************
-*  SYSIN CARD FORMAT                                                  *
-*  ....+....1....+....2....+....3....+....4....+....5....+....6       *
-*  DATASET-NAME-44-BYTES....................... PDSMEMBR NN           *
 *                                                                     *
-*  DATASET NAME IS THE DATASET TO CHECK                               *
-*  PDSMEMBR IS THE AOM MEMBER TO RUN IF THRESHOLD EXCEEDED            *
-*  -- NN IS THE NUMBER OF EXTENTS USED THAT TRIGGERS THRESHOLD EVENT  *
-*     BUT THAT HAS NOT BEEN IMPLEMENTED YET, HARD CODED AS 13         *
+* READ EACH SYSIN CARD, VALIDATE THE CARD CONTENTS, AND IF THEY ARE   *
+* CORRECT PERFORM THE CHECK REQUESTED.                                *
+*                                                                     *
+*  --------------------- SYSIN CARD FORMAT ------------------------   *
+*                                                                     *
+*  ....+....1....+....2....+....3....+....4....+....5....+....6       *
+*  DATASET-NAME-44-BYTES....................... xxx=NN MMMMMMMM       *
+*  DATASET-NAME-44-BYTES....................... xxx=NN =WTONRD1       *
+*  DATASET-NAME-44-BYTES....................... xxx=NN =WTONRD2       *
+*                                                                     *
+*  DATASET-NAME-44-BYTES  IS THE DATASET TO CHECK (44 BYTES GRIN)     *
+*  xxx= MUST BE ONE OF EXT= OR PCT= TO SELECT THE DATASET USAGE CHECK *
+*     TO BE USED                                                      *
+*  NN WILL BE THE NUMBER OF EXTENTS USED THAT TRIGGERS THRESHOLD EVENT*
+*     OR THE PERCENTAGE FULL OF THE DATASET THAT TRIGERS THE EVENT.   *
+*  FIELDS 53 TO 60 WILL CONTAIN ONE OF                                *
+*     MMMMMMMM IS A EIGHT BYTE MEMBER NAME OF A JOB THAT WILL BE      *
+*        SUBMITTED VIA A 'S AOMTASK,J=MMMMMMM' COMMAND                *
+*     =WTONRD1 WILL ISSUE A NRD WITH MESSAGE NUMBER MDFCHK1A          *
+*     =WTONRD2 WILL ISSUE A NRD WITH MESSAGE NUMBER MDFCHK1A          *
 *                                                                     *
 *  ANY CARD WITH * IN COLUMN 1 IS TREATED AS A COMMENT CARD           *
 *                                                                     *
 ***********************************************************************
          OPEN  (SYSIN,(INPUT))
-NEXTCARD GET   SYSIN                 GET THE SYSIN CARD     
-         MVC   DSNAME,0(R1)          SAVE DATASET NAME
+***********************************************************************
+* NOTE: WE ONLY USE THE REPORTING IF A REPORT DD CARD IS IN THE JCL   *
+***********************************************************************
+         MVI   USERPT,C'N'             DEFAULT IS USE NO REPORT
+         RDJFCB REPORT                 SEE IF WE HAVE A REPORT DD CARD
+         LTR   R15,R15
+         BNZ   NEXTCARD                NO, CARRY ON
+         OPEN  (REPORT,(OUTPUT))       OPEN THE REPORT FILE
+         LTR   R15,R15                 WAS OPEN OK ?
+         BNZ   NEXTCARD                NO, DO NOT USE REPORT
+         MVI   USERPT,C'Y'             WE WILL USE THE REPORT
+         SPACEOUT RPTLINE              WRITE THE BANNERS
+         MVC   RPTLINE(L'RPTITLE1),RPTITLE1
+         PUT   REPORT,RPTLINE
+         MVC   RPTLINE(L'RPTITLE2),RPTITLE2
+         PUT   REPORT,RPTLINE
+         MVC   RPTLINE(L'RPTITLE3),RPTITLE3
+         PUT   REPORT,RPTLINE
+         SPACEOUT RPTLINE              CLEAR THE REPORT LINE
+         B     NEXTCARD
+NEXTCARD MVC   WTONRDG2+17(3),=CL3'EXT' DEFAULT IS EXT CHECKS SO RESET
+         MVC   RPTLINE2+4(3),=CL3'EXT'  DEFAULT REPORT MSG STRING 
+         MVC   RPTLINE3+4(3),=CL3'EXT'  DEFAULT REPORT STRING 
+         GET   SYSIN                 GET THE SYSIN CARD     
          CLI   0(R1),C'*'            IS IT A COMMENT CARD ? 
          BE    NEXTCARD              YES, JUST GET THE NEXT CARD
-         CLI   45(R1),C' '           MUST HAVE A MEMBER NAME
-         BE    BADCARD               IF MISSING A BAD SYSIN CARD
-         MVC   MEMBNAME(8),45(R1)    SAVE MEMBER NAME
+*
+* TEST/SAVE TEST TYPE VALUE, NEEDED TO DECIDE IF NUMBERS ARE VALID
+         CLC   45(4,R1),=CL4'PCT='   PCT= IS A VALID OPTION
+         BE    NEXTCRD2 
+         CLC   45(4,R1),=CL4'EXT='   EXT= IS A VALID OPTION
+         BNE   BADCARD               IF NOT PCT= OR EXT= THEN BAD
+NEXTCRD2 MVC   CHEKTYPE(3),45(R1)    SAVE TEST TYPE REQUESTED
+*
+* MAKE SURE THE NN FIELD IS NUMERIC
+         CLI   49(R1),C'0'           MUST HAVE A NUMBERS AT COL 50-51
+         BL    BADCARD             
+         CLI   49(R1),C'9'       
+         BH    BADCARD             
+         CLI   50(R1),C'0' 
+         BL    BADCARD          
+         CLI   50(R1),C'9'       
+         BH    BADCARD             
+         PACK  DSATDEC,49(2,R1)  TO BINARY
+         CVB   R3,DSATDEC
+         C     R3,=F'0'      IF ZERO, BAD PARM
+         BE    BADCARD
+         ST    R3,VALMAX     SAVE WHAT VALUE WE ARE CHECKING AGAINST
+*
+* MAKE SURE NN IS VALID FOR TEST TYPE
+* PCT CAN BE UP TO 99 BUT EXT ONLY UP TO 15
+         CLC   CHEKTYPE(3),=CL3'PCT'
+         BE    SYSINOK1
+         C     R3,=F'15'     EXTS ALERT VAL IS MAX 15, 16 IS TOO LATE
+         BH    BADCARD
+*
+* SAVE STATIC DSNAME AND MEMBER/KEYWORD FIELDS NOW
+SYSINOK1 MVC   DSNAME,0(R1)          SAVE DATASET NAME
+         MVC   RPTLINE1(44),0(R1)    AND PUT IN REPORT LINE
+         MVC   MEMBNAME(8),52(R1)    SAVE MEMBER NAME OR KEYWORD
+*
 *********************************************************************** 
 *        SET UP CATALOG AND VTOC SEARCH CONTROL BLOCKS                * 
 *********************************************************************** 
@@ -125,13 +238,20 @@ NEXTCARD GET   SYSIN                 GET THE SYSIN CARD
          LA    R2,DSNAME                        
          LA    R4,CATBLOCK                
          STM   R1,R4,LOCLIST           
-         MVC   OUTLINE,BLANKS        
 *********************************************************************** 
          LOCATE LOCLIST                LOCATE BY NAME                
          LTR   R15,R15                 TEST RETURN CODE           
          BZ    OBTAIN1                 ALL OK
-         WTO   'LOCATE ERROR, DATASET NOT FOUND'
-         B     EXIT
+         MVC   WTOMISSN+36(44),DSNAME
+WTOMISSN WTO   'MDFC009W DATASET NOT FOUND, ....+....1....+....2....+..X
+               ..3....+....4....'
+         CLI   USERPT,C'Y'
+         BNE   NEXTCARD
+         MVC   RPTLINE4(44),DSNAME
+         SPACEOUT RPTLINE
+         MVC   RPTLINE(L'RPTLINE4),RPTLINE4
+         PUT   REPORT,RPTLINE
+         B     NEXTCARD
 *********************************************************************** 
 *        OBTAIN DSCB'S                                                * 
 *********************************************************************** 
@@ -142,20 +262,22 @@ LDVOLCNT MVC   HALF,0(R8)              VOLUME COUNT TO ALIGNED AREA
          CH    R1,=H'20'               TEST AGAINST MAX COUNT       
          BNH   GETSER                                            
          LA    R1,20                   SET MAX COUNT           
-GETSER   C     R1,FULLONE              TEST VOLUME COUNT   
-         BL    BADVOLCT                BAD VOLUME COUNT           
+GETSER   C     R1,=F'1'                TEST VOLUME COUNT   
+         BL    DSNERR                  BAD VOLUME COUNT           
          BE    STOREVCT                                        
          OI    FLAGS,$MULTVOL          INDICATE MULTIVOLUME         
-* --------- SHOULD PROBABLY DO SOMETHING SPECIAL IF MULTIVOL ------
-         WTO   'WARNING: MULTI VOLUME DATASET, ONLY FIRST PART TESTED'
 STOREVCT STH   R1,VOLCNT               STORE REMAINING VOLUME COUNT     
          MVC   DSATSER,4(R8)           COPY SERIAL                   
          CLI   2(R8),X'20'             TEST FOR DIRECT ACCESS      
-         BNE   NOTDASD                                            
+         BNE   NOTDASDS                                           
          SR    R1,R1                   CLEAR REG 1              
          IC    R1,3(R8)                LOAD LAST BYTE OF DEVTYPE FIELD  
 TESTTYPE CH    R1,=H'15'               TEST AGAINST MAX             
-         BH    NOTDASD                                             
+         BH    NOTDASDS                NOT A SUPPORTED DASD TYPE
+         SLA   R1,3                    MULTIPLY BY 8    
+         SR    R0,R0                                   
+         IC    R0,TRKSCYL(R1)          INSERT TRACKS PER CYL    
+         STH   R0,TRKPRCYL             SAVE IT FOR CALCULATIONS
 GETFMT1  CNOP  0,4
          OBTAIN DSATDCB1               GET FORMAT 1 DSCB                
          LTR   R15,R15                 TEST RETURN CODE              
@@ -166,144 +288,376 @@ GETFMT1  CNOP  0,4
          LTR   R15,R15                 TEST RETURN CODE           
          BNZ   DSNERR                                                  
 *********************************************************************** 
-*        PROCESS THE DSCB, WE ONLY CARE ABOUT EXTENTS                 * 
+*        PROCESS THE DSCB, WE ONLY CARE ABOUT EITHER                  * 
+*          EXTENTS USED OR DATASET PERCENTAGE USED                    * 
+* BUT AS THE REPORT LINE (IF USED) NEEDS BOTH DO BOTH NOW             * 
 *********************************************************************** 
 PROCESS  CNOP  0,4
          SR    R3,R3                                        
-         IC    R3,DS1NOPEV             LOAD EXTENTS           
+         IC    R3,DS1NOPEV                   LOAD EXTENTS           
+         ST    R3,EXTSUSED                   SAVE IT FOR TESTS
+         BAL   R1,CALCTRKP  USE THE DSCB ENTRIES WE READ TO
+*                           WORK OUT THE PERCENTAGE USED
+*  ----------- POPULATE THE REPORT LINE ----------
+* EVEN IF WE ARE NOT WRITING TO THE REPORT DD HAVING LOTS OF
+* ELSE/IF CHECKS THROUGHOUT THE CODE WAS MAKING IT UNMANAGEABLE,
+* SO WE ALWAYS POPULATE HERE,WHICH MAKES THE CODE A LOT MORE
+* READABLE (AND EVEN MAKES THE CODE A LOT SMALLER).
+* TYPE OF CHECK BEING USED INTO MESSAGE
+         MVC   RPTLINE1+73(3),CHEKTYPE  MOVE EXT/PCT INTO MESSAGE
+* VALUE BEING CHECKED 
+         L     R3,VALMAX               LOAD MAX VAL ALLOWED
          CVD   R3,DSATPDEC             CONVERT TO DECIMAL  
          MVC   DSATDEC,=X'4020202020202120'  MOVE MASK 
          ED    DSATDEC,DSATPDEC+4      EDIT FOR LOG MSG
-         AIF   (&DEBUGON NE 1).SKIP01
+         MVC   TEXTVMAX(2),DSATDEC+6   SAVE IT
+* DATASET EXTENTS USED
+         L     R3,EXTSUSED             LOAD EXTENTS USED     
+         CVD   R3,DSATPDEC             CONVERT TO DECIMAL  
+         MVC   DSATDEC,=X'4020202020202120'  MOVE MASK 
+         ED    DSATDEC,DSATPDEC+4      EDIT FOR LOG MSG
+         MVC   TEXTEXTS(2),DSATDEC+6  MOVE INTO MESSAGE
+* TRACKS USED
+         L     R3,TRKSUSED             LOAD TRACKS USED     
+         CVD   R3,DSATPDEC             CONVERT TO DECIMAL  
+         MVC   DSATDEC,=X'4020202020202120'  MOVE MASK 
+         ED    DSATDEC,DSATPDEC+4      EDIT FOR LOG MSG
+         MVC   RPTLINE1+50(5),DSATDEC+3  MOVE INTO MESSAGE
+* TOTAL TRACKS ALLOCATED                
+         L     R3,TRKSTOT              LOAD TRACKS USED     
+         CVD   R3,DSATPDEC             CONVERT TO DECIMAL  
+         MVC   DSATDEC,=X'4020202020202120'  MOVE MASK 
+         ED    DSATDEC,DSATPDEC+4      EDIT FOR LOG MSG
+         MVC   RPTLINE1+56(5),DSATDEC+3  MOVE INTO MESSAGE
+* PERCENTAGE OF AVAILABLE SPACE USED
+         L     R3,TRKSPCT              LOAD TRACKS USED     
+         CVD   R3,DSATPDEC             CONVERT TO DECIMAL  
+         MVC   DSATDEC,=X'4020202020202120'  MOVE MASK 
+         ED    DSATDEC,DSATPDEC+4      EDIT FOR LOG MSG
+         MVC   TEXTPCTU(2),DSATDEC+6   MOVE INTO MESSAGE
+* DATASET TYPE INTO REPORT LINE, WE ONLY HANDLE PS AND PO FOR NOW
+* NOTE: WE NEED TO SET DSORGVAL FOR POSSIBLE WTO MESSAGES SO SET
+*       THE DSORGVAL HERE, THEN MOVE THAT INTO THE REPORT LINE
+*       AT MSGWRITE.
+         MVC   DSORGVAL(2),=CL2'??' DEFAULT UNKNOWN DSORG
+         CLI   DS1DSORG,DS1DSGPS             SEQUENTIAL PS ?
+         BE    MSGSETPS
+         CLI   DS1DSORG,DS1DSGPO             PDS DATASET ?
+         BNE   MSGWRITE                      NO, USE DEFAULT OF ??
+         MVC   DSORGVAL(2),=CL2'PO' 
+         B     MSGWRITE
+MSGSETPS MVC   DSORGVAL(2),=CL2'PS' 
+MSGWRITE MVC   RPTLINE1+79(2),DSORGVAL DEFAULT UNKNOWN DSORG
+         CLI   USERPT,C'Y'            ARE WE USING THE REPORT DD ?
+         BNE   RPTSKIP1                   NO, SKIP IT
+         SPACEOUT RPTLINE     
+         MVC   RPTLINE(L'RPTLINE1),RPTLINE1
+         PUT   REPORT,RPTLINE   
 *********************************************************************** 
-* IF WE HAVE DEBUGGING TURNED ON SHOW EXTENTS FOUND FOR EVERY DATASET *
+* DETERMINE WHAT CHECK TYPE WE ARE DOING, AND DO THE CHECK            *
+* WE HAVE ALL THE SPACE USED VALUES ALREADY AS WE USED THEM TO        *
+* POPULATE THE REPORT LINE TEXT                                       *
 *********************************************************************** 
-         MVC   DBGWTO01+12(2),DSATDEC+6  MOVE INTO MESSAGE
-         MVC   DBGWTO01+17(44),DSNAME    MOVE INTO MESSAGE
-DBGWTO01 WTO   'EXT=nn D=....+....1....+....2....+....3....+....4....'
-.SKIP01  ANOP
-         SPACE 2
-         C     R3,=F'13'               ABOVE 13 EXTENTS ?
+RPTSKIP1 CLC   CHEKTYPE(3),=CL3'EXT'    ARE WE DOING EXTENT CHECKS
+         BE    PROCEXTS                 YES, GO DO THEM
+* ELSE  ------ WE ARE DOING PERCENTAGE USED CHECKS ------
+         L     R3,TRKSPCT   RETRIEVE DATASET %USED
+         C     R3,VALMAX    ABOVE ACTION LIMIT ?
+         BNH   NEXTCARD     NOT ABOVE LIMIT, GET NEXT DATASET
+         MVC   RPTLINE2+4(3),=CL3'PCT' 
+         MVC   RPTLINE2+10(2),TEXTVMAX     MAX PERMITTED BY TEST
+         MVC   RPTLINE3+4(3),=CL3'PCT' 
+         MVC   RPTLINE3+10(2),TEXTVMAX     MAX PERMITTED BY TEST
+         CLI   MEMBNAME,C'='           KEYWORD FLAG ?
+         BNE   EXSVC34                 NO, MUST BE MEMBER NAME
+* ELSE ONE OF THE WTOS IS TO BE USED
+         MVC   WTONRDG2+17(3),=CL3'PCT'
+         MVC   WTONRDG2+21(2),TEXTPCTU      PERCENTAGE USED
+         CLC   MEMBNAME(8),=CL8'=WTONRD1'
+         BE    EXWTOND1
+         CLC   MEMBNAME(8),=CL8'=WTONRD2'
+         BE    EXWTOND2
+* THE BELOW TWO LINES ARE A CATCHALL, SHOULD NEVER REACH THEM
+* AS THE =KEYWORDS ON THE SYSIN DD CARD WERE VALIDATED WHEN IT WAS
+* READ IN, BUT WE WANT TO KNOW IF ANY NEW KEYWORDS ADDED SLIP THRU
+         B     BADKEYWD
+         LTORG
+* -------- EXTENT CHECKS BEING USED -------
+PROCEXTS L     R3,EXTSUSED             RETRIEVE EXTENTS USED
+         C     R3,VALMAX               ABOVE MAX TEST EXTENTS ?
          BNH   NEXTCARD                NO, GET THE NEXT CARD    
+* Put the value that was exceeded into the report lines
+         MVC   RPTLINE2+10(2),TEXTVMAX      MAX PERMITTED BY TEST
+         MVC   RPTLINE3+10(2),TEXTVMAX      MAX PERMITTED BY TEST
+*
+         CLI   MEMBNAME,C'='           KEYWORD FLAG ?
+         BNE   EXSVC34                 NO, MUST BE MEMBER NAME
+* Update WTO messages with dataset extents used
+         MVC   WTONRDG2+21(2),TEXTEXTS       EXTENTS USED
+         MVC   WTONRDG2+21(2),TEXTEXTS   
+*
+         CLC   MEMBNAME(8),=CL8'=WTONRD1'
+         BE    EXWTOND1
+         CLC   MEMBNAME(8),=CL8'=WTONRD2'
+         BE    EXWTOND2
+* THE BELOW TWO LINES ARE A CATCHALL, SHOULD NEVER REACH THEM
+* AS THE =KEYWORDS ON THE SYSIN DD CARD WERE VALIDATED WHEN IT WAS
+* READ IN, BUT WE WANT TO KNOW IF ANY NEW KEYWORDS ADDED SLIP THRU
+         B     BADKEYWD
+         LTORG
          SPACE 2
-         MVC   OUTLINE,BLANKS
-* IF MY DATE LIBRARY IS NOT BEING USED DO NOT POPULATE TIMESTAMP
-         AIF   (&DATELIB EQ 0).SKIPD02 IF DATELIB NOT USED SKIP
-         MVC   OUTLINE,=CL16'YYYY/MM/DD HH:MM'  ACTION TIME
-         MVC   OUTLINE(4),D370YEAR                   YYYY
-         MVC   OUTLINE+5(2),D370MMDD                 MM
-         MVC   OUTLINE+8(2),D370MMDD+2               DD
-         MVC   OUTLINE+11(2),D370TIME                HH
-         MVC   OUTLINE+14(2),D370TIME+2              MM
-.SKIPD02 ANOP
-         MVC   OUTLINE+17(44),DSNAME            DATASET NAME
-         MVC   OUTLINE+62(5),=CL5'EXTS='
-         MVC   OUTLINE+67(2),DSATDEC+6          CURRENT EXTENTS
-         MVC   OUTLINE+70(12),=CL12'S AOMTASK,J=' COMMAND...
-         MVC   OUTLINE+82(8),MEMBNAME             ...TO RUN
-         PUT   REPORT,OUTLINE                   LOG ACTIVITY
-         SPACE 2
-*********************************************************************** 
+***********************************************************************
+* ISSUE THE SVC34 COMMAND (AND LOG ACTIVITY OF COURSE)                *
 * SWITCH TO KEY ZERO, ISSUE COMMAND, SWITCH BACK TO NON-ZERO          *
-*********************************************************************** 
-         MVC   CMDBUF+12(8),MEMBNAME
+***********************************************************************
+EXSVC34  MVC   LOGWTO+37(8),MEMBNAME
+LOGWTO   WTO   'MDFC010I ISSUING S AMOTASK,J=nnnnnnnn'
+         CLI   USERPT,C'Y'       USING REPORT DD CARD ?
+         BNE   GOSVC34            NO, SKIP THE REPORT CARD
+         MVC   RPTLINE2+43(8),MEMBNAME  
+         SPACEOUT RPTLINE
+         MVC   RPTLINE(L'RPTLINE2),RPTLINE2
+         PUT   REPORT,RPTLINE
+GOSVC34  MVC   CMDBUF+12(8),MEMBNAME
          MODESET KEY=ZERO              GO SUPERVISOR MODE
          LA    R1,CMDLIST              COMMAND BUFFER ADDRESS
          LA    R0,1                    CONSOLE ID, JUST USE FIRST
          SVC   34
          MODESET KEY=NZERO             END SUPERVISOR MODE
-         SPACE 2    
+         SPACE 2
          B     NEXTCARD                READ NEXT SYSIN CARD
 CMDLIST  DC    H'24'                   HALFWORD LENGTH INDICATOR
          DC    H'0'                    REQUIRED PAD HALFWORD
 CMDBUF   DC    CL20'S AOMTASK,J=xxxxxxxx'    COMMAND BUFFER
 CMDEND   DC    CL2' '                  END OF COMMAND BUFFER
 *********************************************************************** 
+* ISSUE A NRD WTO IDENTIFYING EXTENTS/PERCENTAGE USED AND DATSET NAME *
+* THE +21 OFFSET IS POPULATED PRIOR TO THE CALL AS IT MAY BE EXTS/PCT *
+*********************************************************************** 
+EXWTOND1 MVI   WTONRDG2+14,C'1'            MDFC001A    
+         MVC   RPTLINE3+32(8),=CL8'MDFC001A'
+         B     EXWNRDG1
+EXWTOND2 MVI   WTONRDG2+14,C'2'            MDFC002A    
+         MVC   RPTLINE3+32(8),=CL8'MDFC002A'
+         B     EXWNRDG1
+EXWNRDG1 MVC   WTONRDG2+34(44),DSNAME             DATASET NAME    
+         MVC   WTONRDG2+28(2),DSORGVAL
+WTONRDG2 WTO   'MDFC002A EXT=nn ORG=?? DS=....+....1....+....2....+....X
+               3....+....4....',DESC=(2)
+         CLI   USERPT,C'Y'     USING REPORT DD ?
+         BNE   NEXTCARD         NO, NO REPORT LINE NEEDED
+         SPACEOUT RPTLINE
+         MVC   RPTLINE(L'RPTLINE3),RPTLINE3
+         PUT   REPORT,RPTLINE
+         B     NEXTCARD
+         LTORG
+         SPACE 2
+*********************************************************************** 
+* THE JOLLY OLD STANDARD EXIT CODE WE WILL BE NEEDING                 *
 *********************************************************************** 
 EXIT     CLOSE (SYSIN)
-         CLOSE (REPORT)
-         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         CLI   USERPT,C'N'       USING REPORT ?
+         BNE   EXITNOW            NO, SKIP THE CLOSE
+         CLOSE (REPORT)           YES, CLOSE IT
+EXITNOW  L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
          LM    R14,R12,12(R13)    RESTORE REGISTERS
          SLR   R15,R15            EXIT CODE 0
          BR    R14                RETURN TO SYSTEM
          EJECT
+         LTORG
 *********************************************************************** 
-*        ERROR MESSAGE BLOCKS                                         *
+*        ERROR MESSAGES USED WHEN NEEDED                              *
 *********************************************************************** 
-NOLNKLST WTO   'MARKS DATE PROGRAMS ARE NOT IN YOUR LINKLIST !'
-         WTO   'FIX LINKLIST OR RE-ASSEMBLE WITHOUT IT'
-         B     EXIT
-DSNERR   WTO   'UNABLE TO READ DATASET VTOC DSCB'
+DSNERR   WTO   'MDFC004E UNABLE TO READ DATASET VTOC DSCB'
          B     NEXTCARD
-NOTDASD  WTO   'DATASET IS NOT ON A DASD VOLUME'  
+NOTDASDS WTO   'MDFC006E DS NOT ON SUPPORTED DASD VOLUME, MAX IS 3350'
          B     NEXTCARD
-BADVOLCT WTO   'DATASET VOLUME COUNT INVALID'
+BADCARD  MVC   BADCARD1+25(35),0(R1)
+BADCARD1 WTO   'MDFC007W IGNORED:....+....1....+....2....+....3....+ '
+         CLI   USERPT,C'Y'
+         BNE   NEXTCARD
+         SPACEOUT RPTLINE
+         MVC   RPTLINE5(44),DSNAME
+         MVC   RPTLINE(L'RPTLINE5),RPTLINE5
+         PUT   REPORT,RPTLINE
          B     NEXTCARD
-BADCARD  MVC   BADCARD1+24(35),0(R1)
-BADCARD1 WTO   'BADCARD IGNORED:....+....1....+....2....+....3....+ '
-         B     NEXTCARD
+BADKEYWD WTO   'MDFC005W PROGRAM LOGIC ERROR, =KEYWORD SLIPPED THRU'
+         B     NEXTCARD 
+         EJECT
+*********************************************************************** 
+*        REPORT MESSAGES USED                                         *
+*********************************************************************** 
+         LTORG
+RPTLINE  DC    CL132' '
+RPTITLE1 DC    C'                                             EXTS  TRKX
+               S  TRKS  PCT TEST TEST DSET'
+RPTITLE2 DC    C'DATASET NAME                                 USED  USEX
+               D ALLOC USED  VAL TYPE  ORG'
+RPTITLE3 DC    C'============================================ ==== ====X
+               = ===== ==== ==== ==== ===='
+RPTLINE1 DC    C'....+....1....+....2....+....3....+....4....   NN NNNNX
+               N NNNNN   NN   NN  EXT   XX'
+RPTLINE2 DC    C'==> EXT > nn : COMMAND ISSUED: S AOMTASK,J=xxxxxxxx'
+RPTLINE3 DC    C'==> EXT > nn : ALERT WTO ISSUED xxxxxxxx'
+RPTLINE4 DC    C'....+....1....+....2....+....3....+....4.... **** DATAX
+               SET NOT CATALOGUED ****'
+RPTLINE5 DC    C'....+....1....+....2....+....3....+....4.... **** INVAX
+               LID DATA CARD ****'
+TEXTEXTS EQU   RPTLINE1+47
+TEXTPCTU EQU   RPTLINE1+64
+TEXTVMAX EQU   RPTLINE1+69
+         LTORG
+         EJECT
+***********************************************************************
+* CALCTRKP : CALCULATE PERCENTAGE OF TRACKS USED                      *
+* ENTRY    : BAL R1,SMFUSED                                           *
+* REQUIRES : FMT1 AND FMT3 DSBS ALREADY OBTAINED BY MAINLINE          *
+* RETURNS  : UPDATES TRKSPCT, TRKSUSED, TRKSTOT                       *
+***********************************************************************
+CALCTRKP STM   R0,R15,CALCSAVA    SAVE ALL REGISTERS
+*********************************************************************** 
+*        R5        - EXECUTE TABLE POINTER                            * 
+*        R6        - TRACKS ALLOCATED                                 * 
+*        R7        - EXTENT DESCRIPTION POINTER/TRACKS USED           * 
+***********************************************************************
+         SPACE 2                                                       
+*--------GET TRACK ALLOCATION                                           
+         SR    R4,R4                   CLEAR REGISTER 4                 
+         SR    R5,R5                   CLEAR REGISTER 5                
+         SR    R6,R6                   CLEAR REGISTER 6                
+         SR    R7,R7                   CLEAR REGISTER 7               
+         ST    R7,TRKSUSED             ZERO TRACKS USED
+         ST    R7,TRKSTOT              ZERO TRACKS TOTAL
+         ST    R7,TRKSPCT              ZERO TRACKS PERCENT
+         IC    R4,DS1NOPEV             LOAD NUMBER OF EXTENTS        
+*        IC    R4,DS1NOEPV  <== IBM MACRO DEF, TYPO IN FILE058       
+*                               MEANS WE USE THE ABOVE
+DSATTRKS EX    R0,DSATADDR(R5)         PROCESS EXTENT BLOCK      
+         CLI   0(R7),X'00'                                     
+         BE    DSATUTRK                                     
+         LA    R7,2(R7)                LOAD ADDRESS OF STARTING TRACK 
+         MVC   HALF(2),4(R7)           LOAD ENDING CYL NUMBER         
+         LH    R1,HALF                                                
+         MVC   HALF(2),0(R7)           LOAD STARTING CYL NUMBER       
+         SH    R1,HALF                 SUBTRACT STARTING FROM ENDING  
+         MH    R1,TRKPRCYL             MULTIPLY BY TRACKS PER CYL    
+         MVC   HALF(2),6(R7)           LOAD ENDING TRACK            
+         AH    R1,HALF                 ADD TO TRACK COUNT          
+         MVC   HALF(2),2(R7)           LOAD STARTING TRACK           
+         SH    R1,HALF                 SUBTRACT FROM TRACK COUNT   
+         AR    R6,R1                   ACCUMULATE TOTAL        
+         LA    R6,R1(R6)               ADD 1 TRACK        
+         LA    R5,4(R5)                                  
+         BCT   R4,DSATTRKS             DECREMENT EXTENT COUNT        
+DSATUTRK ST    R6,TRKSTOT              SAVE TOTAL TRACKS
+*--------GET TRACKS USED                                        
+         LH    R7,DS1LSTAR             LOAD TRACKS USED     
+         NC    DS1LSTAR,DS1LSTAR       TEST FOR ZERO     
+         BZ    DSATPCTF                                           
+         LA    R7,1(R7)                ADD 1                     
+         ST    R7,TRKSUSED              SAVE TRACKS USED
+*--------CALCULATE PERCENTAGE USED                             
+DSATPCTF XR    R6,R6                   CLEAR R6 OR R6,R7 PAIR
+         L     R7,TRKSUSED             R7 HAS TRACKS USED
+         M     R6,F100                 TRKS USED * 100
+         D     R6,TRKSTOT               THEN / TRKS TOT TO GET %
+*                            Remainder in R6, %pct is in R7
+         ST    R7,TRKSPCT              SAVE PERCENT USED
+SMFUSEDX LM    R0,R15,CALCSAVA  RESTORE ALL REGISTERS TO PRIOR STATE
+         BR    R1
+*--------LOAD EXTENT DESCRIPTIONS LOOKUP TABLE
+DSATADDR LA    R7,DS1EXT1              << EXECUTED INSTRUCTION >>   
+         LA    R7,DS1EXT2              << EXECUTED INSTRUCTION >>  
+         LA    R7,DS1EXT3              << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT01             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT02             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT03             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT04             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT05             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT06             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT07             << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT08             << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT09             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT10             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT11             << EXECUTED INSTRUCTION >>  
+         LA    R7,DS3EXT12             << EXECUTED INSTRUCTION >> 
+         LA    R7,DS3EXT13             << EXECUTED INSTRUCTION >>
+TRKSCYL  DC    AL1(000),CL7'       '   00 (00) - UNASSIGNED      
+         DC    AL1(010),CL7'2311   '   01 (01) - 2311 DISK    
+         DC    AL1(200),CL7'2301   '   02 (02) - 2301 DRUM      
+         DC    AL1(010),CL7'2303   '   03 (03) - 2303 DRUM       
+         DC    AL1(046),CL7'2302   '   04 (04) - 2302 DISK FILE   
+         DC    AL1(000),CL7'       '   05 (05) - 2321 DATA CELL    
+         DC    AL1(008),CL7'2305-1 '   06 (06) - 2305-1  
+         DC    AL1(008),CL7'2305-2 '   07 (07) - 2305-2   
+         DC    AL1(020),CL7'2314   '   08 (08) - 2314 DISK 
+         DC    AL1(019),CL7'3330   '   09 (09) - 3330 DISK  
+         DC    AL1(000),CL7'       '   10 (0A) - UNASSIGNED 
+         DC    AL1(030),CL7'3350   '   11 (0B) - 3350      
+         DC    AL1(000),CL7'       '   12 (0C) - UNASSIGNED    
+         DC    AL1(019),CL7'3330-1 '   13 (0D) - 3330-11 DISK     
+         DC    AL1(000),CL7'       '   14 (0E) - UNASSIGNED
+         DC    AL1(000),CL7'       '   15 (0F) - UNASSIGNED  
+CALCSAVA DS    16F      REGISTER SAVE AREA FOR PCT CALC ROUTINE
+EXTSUSED DS    F        EXTENTS USED
+TRKSUSED DS    F        TRACKS USED
+TRKSTOT  DS    F        ZERO TRACKS TOTAL
+TRKSPCT  DS    F        ZERO TRACKS PERCENT
+TRKPRCYL DS    H        TRACKS PER CYL FOR DASD TYPE
+         EJECT
          TITLE 'DATA AREA'                        
 *********************************************************************** 
 *        DATA AREA                                                    * 
 *********************************************************************** 
-SAVEAREA DS    18F
-FULLONE  DC    F'1'
+SAVEAREA DS    18F      PROGRAM REGISTER SAVEAREA
+USERPT   DS    C        FLAG INDICATING WE ARE PRODUCING THE REPORT
+F100     DC    F'100'   USED IN PCT CALCULATIONS
+*
+* Data cards are read from the SYSIN DD card
 SYSIN    DCB   DDNAME=SYSIN,DSORG=PS,MACRF=(GL),EODAD=EXIT      
-REPORT   DCB   DDNAME=REPORT,MACRF=PM,DSORG=PS,RECFM=FB,               X
-               LRECL=132,BLKSIZE=132
-         SPACE 2                                                       
-         LTORG                                                          
+* Produce a report if A REPORT DD card is porvided in the job JCL
+REPORT   DCB   DDNAME=REPORT,DSORG=PS,MACRF=(PM),                      X
+               BLKSIZE=132,RECFM=FB,LRECL=132,EXLST=EXLST   
+         DS    0F
+EXLST    DC    0F'0',X'87',AL3(JFCB)
+JFCB     DS    CL176
+*
+* CATALOG AND VTOC SEARCH TEMPLATES
 NAME     CAMLST NAME,0,,0                                             
 SEARCH   CAMLST SEARCH,0,0,0                                         
 SEEK     CAMLST SEEK,0,0,0                                            
-         SPACE 2                                                     
-         TITLE 'CONSTANT DATA - MESSAGES'                      
-MODLINE  DC    H'124,0'                                     
-BLANKS   DC    CL132' '                               
-         SPACE
-         TITLE 'WORK AREA'
+         EJECT                                                       
 *********************************************************************** 
 *                  WORK AREA                                          *
 *********************************************************************** 
-         SPACE 4                                                    
-DSATSAVE DS    18A                     SAVE AREA                
 DSATDCB1 CAMLST SEARCH,0,0,0                                   
 DSATDCB3 CAMLST SEEK,0,0,0                                         
 LOCLIST  CAMLST NAME,0,,0              LOCATE BY NAME            
 VOLCNT   DS    H                       VOLUME COUNT                 
          SPACE 2
 FLAGS    DS    X                       INDICATORS                 
-NOTEMPTY EQU   X'80'  1... ....          INDEX IS NOT EMPTY         
-GDG      EQU   X'40'  .1.. ....          GDG BEING PROCESSED         
-COUNT    EQU   X'20'  ..1. ....          COUNT THIS DATA SET          
-DSATGRP  EQU   X'10'  ...1 ....          GROUP PROCESSING IN PROGRESS  
 $MULTVOL EQU   X'08'  .... 1...          MULTI-VOLUME DATA SET         
-$NOTPOPS EQU   X'04'  .... .1..          DATA SET NOT PS OR PO       
-$DSPO    EQU   X'02'  .... ..1.          DATA SET IS PARTITIONED     
-$DSPS    EQU   X'01'  .... ...1          DATA SET IS SEQUENTIAL   
-RESET    EQU   $NOTPOPS+$DSPO+$DSPS+$MULTVOL   RESET MASK            
-FLAGS2   DS    X                       MORE INDICATORS                
-$VSAMLOC EQU   X'80'  1... ....          VSAM LOCATE IN PROGRESS    
-$INCMPLT EQU   X'40'  .1.. ....          TOO MANY DSNAMES           
-$FOUND   EQU   X'20'  ..1. ....          DATA SET FOUND             
-$HARDCPY EQU   X'10'  ...1 ....          HARDCOPY OPTION REQUESTED   
-*                     .... XXXX          NOT USED
          SPACE 2
 DSATSER  DS    CL6
-         DS    0F                                                     
 DSNAME   DS    CL44                    DSNAME                           
          DS    CL8                     OVERFLOW BLANKS FOR LONG NAMES  
-MEMBNAME DS    CL8                     MEMBER NAME
-OUTLINE  DS    CL132                   OUTPUT LINE                     
+MEMBNAME DS    CL8                     MEMBERNAME OR KEYWORD
+CHEKTYPE DS    CL3                     WILL BE EXT OR PCT CHECK TYPE
+DSORGVAL DS    CL2                     WILL BE SET IF =WTO IS USED
+VALMAX   DS    F                       MAX EXTENTS ALLOWED BEFORE ALERT
 HALF     DS    H                       HALFWORD ALIGNED WORK AREA      
 DSATDEC  DS    D                       WORK AREA FOR DECIMAL CONVERSION 
 DSATPDEC DS    D                       WORK AREA FOR DECIMAL CONVERSION 
+*
+* The below two are constants from the IECSDSL1 macro
+* which the #VTCFMT1 macro neglected to define.
+DS1DSGPS EQU   X'40'                   DSORG=PS VALUE 
+DS1DSGPO EQU   X'02'                   DSORG=PO VALUE
+*
 DSATFMT1 DS    0D,148C                 FORMAT 1 DSCB (DS DESCRIPTION)  
 DSATFMT3 DS    0D,148C                 FORMAT 3 DSCB (ADD EXTENTS)    
 CATBLOCK DS    0D,265C                 CATALOG BLOCK                 
-         AIF   (&DATELIB EQ 0).SKIPD03 IF DATELIB NOT USED SKIP
-         UDATEVAR DSECT=NO
-.SKIPD03 ANOP
+         LTORG
          #CTGPL                                                    
          SPACE                                                 
          ORG   DSATFMT1-44                               
@@ -318,19 +672,67 @@ CATBLOCK DS    0D,265C                 CATALOG BLOCK
 //ASM.SYSTERM DD SYSOUT=*
 //LKED.SYSLMOD DD DSN=SYS9.LINKLIB.APFAUTH(MDFILCHK),DISP=SHR
 //*
+//* ====================================================
+//*
 //* TEST IT. 
-//* REPORT DD WOULD NORMALLY BE A LOG FILE WE MOD ENTRIES
-//* TO THE END OF SO WE KEEP A LOG OF HOW MANY TIMES THE
-//* RECOVERY JOBS RUN. BUT FOR TESTING USE SYSOUT.
 //* --- REPLACE MY FILENAMES WITH ONES YOU CAN CHECK ---
+//* ... REPORT DD IS OPTIONAL, BUT PROVIDES LOTS OF INFO 
+//*     ON WHAT IS BEING CHECKED. RECOMENDED IT BE USED
+//*     AS IF SOMETHING DOES NOT WORK THE WAY YOU EXPECTED
+//*     YOU CAN SEE WHY.
+//*
 //TEST0001 EXEC PGM=MDFILCHK,COND=(0,NE)
 //REPORT   DD   SYSOUT=*
 //SYSIN    DD   *
+*------------------------------------------------------------
+*
+* REFER TO THE PROGRAM CODE ON SYSIN CARD FORMAT
+* THIS SAMPLE SYSIN DECK WILL TRY TO TEST EVERY FUNCTION
+* USING FILES ON MY SYSTEM. YOU WILL HAVE TO ADJUST IT
+* FOR YOUR OWN SYSTEM OR YOU WILL JUST BE TESTING THE
+* INVALID CARD AND MISSING DATASET FUNCTIONS.
+*
 *...+....1....+....2....+....3....+....4....+....5....+....6     
-*DATASET-NAME-44-BYTES-XXXXXXXXXXXXXXXXXXXXX PDSMEMBR NN(EXTS)
-MARK.LIB.LOAD                                COMPLOAD 16
-MARK.LIB.JCL                                 COMPJCL  14
+*DATASET-NAME-44-BYTES-XXXXXXXXXXXXXXXXXXXXX EXT=NN MMMMMMMM
+*                                         or PCT=NN =WTONRD1
+*                                                   =WTONRD2
+*
+*------------------------------------------------------------
+*
+* MAKE SURE BOTH %USED AND EXT USED WORK
+MARK.LIB.JCL                                 PCT=90 =WTONRD1
+MARK.LIB.LOAD                                EXT=10 =WTONRD1
+*
+* THE BELOW IS AT 4 EXTENTS, I USE IT FOR TESTING
+MARK.LOG.BKPHIST                             EXT=02 =WTONRD1
+MARK.LOG.BKPHIST                             PCT=20 =WTONRD1
+*
+* AND WE MUST TEST BAD SYSIN CARDS
+*    NO REQUIRED FIELDS
+*    NOT A EXT= OR PCT=
 DELIBERATE.BAD.CARD 
-MARK.IPLS.LOG                                ROLLLOG  14
+DELIBERATE.BAD.NOT.EXTORPCT                  BAD=10 =WTONRD1
+*
+* AND WE MUST TEST FOR DATASETS THAT DO NOT EXIST
+MARK.MISSING.DATASET                         EXT=10 =WTONRD1
+*
+* MY SYSTEM DATASETS, NEED AN IPL IF COMPRESSED SO I USE THE
+* SECOND WTO MESSAGE THAT WILL NOT BE AUTOMATED BUT STAY ON
+* THE CONSOLE UNTIL SOMEBODY DOES SOMETHING ABOUT IT.
+SYS9.LINKLIB                                 EXT=01 =WTONRD2
+SYS9.LINKLIB.APFAUTH                         EXT=01 =WTONRD2
+*
+* TEST VOLUMES > 3350 IN SIZE,
+* THIS DATASET IN TK4- IS ON A 3390, IF WORKS SO SHOULD OTHERS >3350 (MAYBE)
+PL360.SOURCE                                 PCT=10 =WTONRD1
+*
+* THE BELOW SHOULD TRY TO SUBMIT A JOB, IF > 2 EXTENTS USED
+* L A S T  IN THE TEST STREAM AS IF TESTING FROM A NON
+* APF AUTHORISED LIBRARY IT WILL ABEND S047 (NOT AUTHORISED)
+MARK.LOG.BKPHIST                             EXT=02 TESTJOB 
+*
+*------------------------------------------------------------
+*                      END OF TESTS
+*------------------------------------------------------------
 /*
 //

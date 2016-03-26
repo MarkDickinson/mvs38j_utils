@@ -111,10 +111,11 @@ MDJOBREL.txt    - A work in progress, but what is here works.
                   some point.
 
 MDFILCHK.txt    - Check dataset names provided via sysin to see if
-                  they are using more than 13 extents (mvs38j has
-                  a max of 16 extents) and if the dataset does
-                  exceed that kick off a batch job to resolve
-                  the issue.
+                  they are using more than NN extents (mvs38j has
+                  a max of 16 extents) or are above NN% full. Can
+                  kick off a batch job per file being tested to
+                  resolve an issue, or issue a NRD WTO for message
+                  automation to do something more intelligent with.
 
 MMPF.txt        - Marks Message Processing Facility
 MMPF_user_manual.odt - User manual for MMPF.
