@@ -117,6 +117,10 @@ MDFILCHK.txt    - Check dataset names provided via sysin to see if
                   resolve an issue, or issue a NRD WTO for message
                   automation to do something more intelligent with.
 
+MDMOVEDS.txt    - Move datasets selected via wildcard prefix from 
+                  mutiple volsers to the dasd volser they should
+                  be on (a work in progress, bit working with limitations)
+
 MMPF.txt        - Marks Message Processing Facility
 MMPF_user_manual.odt - User manual for MMPF.
                   Marks message processing facility; I got sick of

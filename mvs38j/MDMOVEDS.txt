@@ -1,0 +1,569 @@
+//MARKASMJ JOB  (0),'ASSEMBLE MDMOVEDS',CLASS=A,MSGCLASS=T
+//*
+//* To assemble the program
+//*   Change MARK.LIB.LOAD to your load library
+//*   Customise the TESTIT1 step as below
+//*   Run this job
+//*
+//* To test (step TESTIT1 will run unless you delete it)
+//*    Change the AUTHCARD DD data to an admin user on your system
+//*    Change the PARM to select a dasd volume you want to move onto
+//*    Change the DDnnn cards to volsers you want to scan
+//*    Select a prefix to use (create a few test dsets on a volser)
+//*    And let step testit1 run to move them
+//*
+//* Use at your own risk, recomend creating a new hercules
+//* shadowfile version until you are happy with it :-)
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB    STANDARD MACROS
+// DD DISP=SHR,DSN=SYS1.AMODGEN             FOR IECSDSL1
+// DD DISP=SHR,DSN=SYS2.MACLIB              FOR YREGS
+//ASM.SYSIN DD *
+* *********************************************************************
+*
+* MDMOVEDS
+*
+* PURPOSE
+*    To stop GUEST (and other) TSO users polluting DASD packs they
+*    should not be using with their datasets.
+*    This program will submit batch jobs to move any datasets that
+*    should NOT be on the packs being scanned to a DASD pack they
+*    should be on.
+*
+* LOGIC
+*    Submits jobs via INTRDR to do the dataset move, and only
+*    supports DSORG=PO or DSORG=PS at present. Using backgrounded JCL
+*    as the effort of embedding IEBGENER or IEBCOPY and dynamically
+*    allocating datasets ... for moving datasets off a volume 
+*    they should not have been on in the first place is overkill.
+*    So use the IBM provided programs and if a user dataset is
+*    accidentally deleted who cares, it should not have been
+*    there in the first place.
+*
+* DD CARDS REQUIRED
+*    SYSPRINT - OUTPUT REPORT
+*               A report of what it was doing and what datasets it
+*               attempted to move (submitted jobs for)
+*    AUTHCARD - a JCL card used as a continuation of the JOB 
+*               statement that contains the user and password the 
+*               jobs submitted via intrdr will run under
+*               // USER=xxx,PASSWORD=xxx
+*               The details should be for a admin user as noted
+*               in comments below
+*    INTRDR   - JOB SUBMITION IE:'SYSOUT=(A,INTRDR)'
+*               If you do not want to submit jobs you can just assign
+*               this DD card to SYSOUT=* so you can see what jobs
+*               it would have submitted
+*    DDnnn    - LOTS OF DDnnn CARDS SELECTING VOLSERS TO CHECK
+*               Be carefull not to have the program PARM value 
+*               refering to a volser you are checking.
+*
+* PROGRAM PARM VALUE REQUIRED
+*    PARM='PREFIX=GUEST1,VOL=PUB012,UNIT=3380'
+*    - Prefix is the dataset prefix (or partial prefix) to search
+*      on when looking for datasets
+*    - Vol is the volser to move any found datasets across to
+*    - Unit is the appropriate unit for the Volser (3380/SYSDA etc)
+*
+* RETURN CODES
+*    00 - NO PROBLEMS
+*    08 - BAD BARM DATA... OR NO DDn CARDS... OR NO AUTHDD CARD
+*
+* LIMITATIONS
+* -- When a dataset is moved THE DESTINATION SPACE ALLOCATION IS HARD
+*    CODED. I have not bothered with all the code required to work
+*    out what has been allocated as the datasets being moved should
+*    all be small tso user datasets. I may add it one day but do not
+*    need it at the moment
+* -- As this moves datasets from packs they should not be on there
+*    is no error checking in the JCL, if a dataset in the wrong place
+*    gets deleted that is acceptable, it should not have been there
+*    in the first place.
+* -- SECURITY, I use RAKF as I am sure you all do since it was
+*    made freely available on the CBT tapes. It is also active in
+*    the TK4- distribution.
+*    This means jobs submitted via intrdr must have userid/password,
+*    so to avoid hard coding in the program the JCL card containing 
+*    the user/password combination must be provided via the
+*    AUTHCARD DD, that should be a RAKF secured PDS containing
+*    user/password pairs that only your 'special' (not the default)
+*    batch job user (and maybe rakfadm group) can access.
+*
+* KNOWN ISSUES (in TK4- with RAKF, possibly TK3 with RAKF).
+*    ...Security...
+*    In TK4- unless a user is defined to RAKF as an ADMIN user the
+*    user can only create datasets with their userid own prefix 
+*    (ie: GUEST1 userid cannot move (or create) datasets for GUEST3
+*     [can uncatalog, but cannot create] for other prefixes.
+*    !!! TK3 users without RAKF can delete the code that defines
+*        and reads the AUTHCARD DD as they do not need the jcl
+*        card for userid/password.
+*    !!! If RAKF is being used ensure the user/password provided
+*        is that of an ADMIN authority user, or you will end up
+*        with a lot of uncataoged and unmoved datasets.
+*    !*!*!*! not an issue, design :-). But I would recomend NOT
+*            using partial prefixes like prefix=S 
+*            or there will be a major mess as non-enqueued
+*            SYS1 (and SYSn) datasets are moved about to prevent
+*            future IPLs. I should code a minimum prefix length 
+*            but as prefixes are site dependent thats pointless.
+*
+* *********************************************************************
+         MACRO
+&NAME    SPACEOUT &A
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEND
+MDMOVEDS CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* ---------------------------------------------------------------------
+* CHECK THE PARM FIELD TO ENSURE ALL DATA IS PROVIDED.           
+* PARM='PREFIX=xxxxxxxx,VOL=vvvvvv,UNIT=uuuu' 
+* ---------------------------------------------------------------------
+         LTR   R1,R1         ANY PARM DATA ?
+         BZ    NOPARM        NO PARM, ERROR OUT          
+         L     R2,0(,R1)     R2 TO ADDRESS PARM STRING
+         L     R1,0(R2)      SET R1 TO PARM LEN
+         C     R1,=F'0'      PARM LEN 0 ?
+         BE    NOPARM        YES, NO PARM PROVIDED          
+*
+         LA    R3,2(R2)      ADDRESS PARM DATA START
+         LR    R4,R3         INDEXING INTO PARM DATA
+         LR    R5,R3         R5 IS MAX PARM ADDRESS
+         AR    R5,R1         WHICH IS ADDR PLUS PARM LEN
+         S     R5,=F'2'      LESS THE 2BYTE LEN WE SKIPPED
+         SR    R6,R6         USED TO RECORD POS OF =
+*
+PRM00001 CR    R4,R5         AT END OF PARM STRING ?
+         BNL   NOPARM        YES, NO VALUE
+         CLI   0(R4),C'='    AT EQUALS SEPERATOR ?
+         BE    PRM00002
+         A     R4,=F'1'
+         B     PRM00001
+PRM00002 LR    R6,R4         SAVE POSITION OF EQUALS
+PRM00003 CR    R4,R5         AT END OF PARM STRING ?
+         BNL   PRM00004      YES, LAST VALUE
+         CLI   0(R4),C','    AT THE COMMA SEPERATOR
+         BE    PRM00004
+         CLI   0(R4),B'00000000' ZEROS ?, END OF BUFFER
+         BE    PRM00004
+         A     R4,=F'1'
+         B     PRM00003
+PRM00004 EQU   *
+         A     R6,=F'1'      MOVE PAST = TO FIRST BYTE
+         LR    R7,R4         END OF VALUE
+         SR    R7,R6         LESS START OF VALUE IS LEN
+         S     R7,=F'1'      IS REQD. DUNNO WHY THOUGH
+         CLI   0(R3),C'P'    PREFIX ?
+         BE    PRMEXECP
+         CLI   0(R3),C'V'    VOL ?
+         BE    PRMEXECV
+         CLI   0(R3),C'U'    UNIT ?
+         BE    PRMEXECU
+         B     NOPARM        ELSE A BAD PARM
+PRMEXECP C     R7,=F'8'      MAX PREFIX LEN IS 8
+         BH    NOPARM        IF > 8 A BAD PARM
+         LA    R8,DSPREFIX   SAVE IN PREFIX FIELD
+         ST    R7,DSPREFIL   SAVE LENGTH OF PREFIX
+         B     PRM00005
+PRMEXECV C     R7,=F'6'      VOLSER LEN MUST BE 6
+         BH    NOPARM        IF > 6 A BAD PARM
+         LA    R8,DSDESTV    SAVE IN DEST VOSLER FIELD
+         ST    R7,DSDESTVL   SAVE LENGTH OF VOLSER
+         B     PRM00005
+PRMEXECU C     R7,=F'20'     ONLY ALLOW 20 BYTES (ESOTERIC)
+         BH    PARMSCNE      IF > 20 A BAD PARM
+         LA    R8,DSDESTU    SAVE IN DEST VOSLER FIELD
+         ST    R7,DSDESTUL   SAVE LENGTH OF VOLSER
+PRM00005 EX    R7,PRMMOVE    SAVE VALUE
+         CLI   0(R4),B'00000000' ZEROS ?, END OF BUFFER
+         BE    PRMEXIT       YES, ABORT OUT
+         LA    R3,1(R4)      ADDRESS NEXT PARM DATA START
+         LR    R4,R3         INDEXING INTO PARM DATA
+         SR    R6,R6         USED TO RECORD POS OF =
+         CR    R4,R5         AT END OF PARM STRING ?
+         BL    PRM00001      NO, LOOP BACK FOR NEXT PARM
+         B     PRMDONE       SKIP DEBUG LINE
+* ---------------------------------------------------------------------
+* DEBUGGING
+* ---------------------------------------------------------------------
+PRMEXIT  WTO   'DEBUG:EXIT ON ZEROS INSTEAD OF OFFSET CALS, LOGIC-ERR'
+* ---------------------------------------------------------------------
+* READ THE USER/PASSWORD CARD WE MUST BE PROVIDED WITH
+* ---------------------------------------------------------------------
+PRMDONE  EQU   *
+         OPEN  (AUTHCARD,(INPUT))
+         LTR   R14,R15
+         BNZ   NOAUTHDD
+         GET   AUTHCARD
+         MVC   AUTHDATA(L'AUTHDATA),0(R1)
+         B     AUTHOK
+EOFAUTH  WTO   'NO DATA PROVIDED TO AUTHCARD'
+         CLOSE (AUTHCARD)
+         B     EXIT08
+AUTHOK   CLOSE (AUTHCARD)
+* ---------------------------------------------------------------------
+* OPEN THE REPORT FILE, SHOW PARMS WE ARE USING
+* ---------------------------------------------------------------------
+         OPEN  (SYSPRINT,(OUTPUT))
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(22),=CL22'PARM: VOL=vvvvvv UNIT='
+         MVC   SYSPLINE+10(6),DSDESTV
+         MVC   SYSPLINE+22(20),DSDESTU
+         MVC   SYSPLINE+43(7),=CL7'PREFIX='
+         MVC   SYSPLINE+50(8),DSPREFIX
+         PUT   SYSPRINT,SYSPLINE 
+* ---------------------------------------------------------------------
+* SCAN THE TIOT FOR ALL DD CARDS, WE WANT TO LOCATE AND PROCESS ALL
+* //DDanything DD CARDS PROVIDED TO THE JOBSTEP.
+* ---------------------------------------------------------------------
+         L     R3,16                 CVT ADDR
+         L     R3,0(R3)              TCB HEAD ADDR
+         L     R3,4(R3)              TCB ACTIVE ADDR
+         L     R3,12(R3)             TIOT ADDR
+         LA    R3,24(R3)             TIOELNGH DD ENTRY LENGTH FIELD
+         B     TESTDD1               CHECK WHICH DD THIS IS
+TESTDD0  SR    R0,R0                 ZERO REG 0
+         IC    R0,0(R3)              MOVE TIOLENGH TO REG 0
+         AR    R3,R0                 ADD TIOLENGH TO REG 3
+TESTDD1  CLI   0(R3),X'00'           IS LENGTH FIELD ZERO?
+         BE    NODDCARD       <----- LAST DD, AND NO DDnnn STATEMENTS
+         CLC   =C'DD',4(R3)          IS THIS A "DD" DD STMNT?
+         BNE   TESTDD0               NO, GET ANOTHER
+         SPACE 2
+*    IF HERE, FOUND A DDnnnn CARD, USE JCL DD CARDS
+         B     CONTDD                START PROCESING THIS DD
+         EJECT
+*
+* PROCESS ALL THE DD DDn CARDS IN THE JOB
+*
+NEXTDD   L     R3,SAVETIOT           GET ORIGIONAL R3 BACK
+         SR    R0,R0                 ZERO REG 0
+         IC    R0,0(R3)              MOVE TIOELNGH TO REG 0
+         AR    R3,R0                 ADD TIOELNGH TO REG 3
+CHECKDD  CLI   0(R3),X'00'           IS LENGTH FIELD ZERO?
+         BE    EXIT00                GET OUT IF LAST DD
+         CLC   =C'DD',4(R3)          IS THIS A "DD" DD STMNT?
+         BNE   NEXTDD                NO, GET ANOTHER
+CONTDD   MVC   DD0001+40(8),4(R3)    USE DDNAME FROM TIOT
+         ST    R3,SAVETIOT           SAVE IT, R3 IS USED IN MAIN CODE
+*
+* MODIFY THE JFCB SO WE CAN OPEN THE VTOC
+*
+         RDJFCB DD0001
+         MVC   DVOLSER(6),JFCB+X'76'      SAVE VOLSER FROM JFCB
+* Write report line saying scanning or ignoring it
+*   If the volser on the DDnnn is the same as the volser we are to
+*   move the datasets to, we obviously don't have to do anything and
+*   it would cause problems if we tried.
+         SPACEOUT SYSPLINE
+         CLC   DVOLSER(6),DSDESTV    TARGET CANNOT BE SAME AS SOURCE
+         BNE   CONTDD2               THEY ARE NOT, CONTINUE
+         MVC   SYSPLINE(38),=CL38'IGNORING VOLSER vvvvvv, SAME AS PARM'
+         MVC   SYSPLINE+16(6),DVOLSER   
+         PUT   SYSPRINT,SYSPLINE
+         B     NEXTDD
+CONTDD2  MVC   SYSPLINE(22),=CL22'SCANNING VOLSER vvvvvv'
+         MVC   SYSPLINE+16(6),DVOLSER   
+         PUT   SYSPRINT,SYSPLINE
+*
+         MVI   JFCB,X'04'            SET JFCB BYTE-1 TO X'04'
+         MVC   JFCB+1(43),JFCB       PERPETUATE THROUGH DSN FIELD
+         MVC   JFCB+44(8),=8X'40'    SET MEMBER NAME TO BLANKS
+         XC    JFCB+52(27),JFCB+52   ZERO OUT MISC DATA-MNGMT FIELDS
+         XC    JFCB+86(31),JFCB+86
+         XC    JFCB+148(26),JFCB+148
+         OI    JFCB+52,8             SET MISC DATA-MNGMT FIELDS
+         OI    JFCB+66,2
+         OI    JFCB+87,X'48'
+* OPEN WITH MODIFIED JFCB
+         OPEN  DD0001,TYPE=J         OPEN WITH MODIFIED JFCB
+         LTR   15,15
+         BZ    READDSC1 
+         MVC   OPENFAIL+39(6),DVOLSER
+OPENFAIL WTO   'UNABLE TO READ VTOC FOR VOLSER=vvvvvv, SKIPPED'
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(46),OPENFAIL+8
+         PUT   SYSPRINT,SYSPLINE
+         B     NEXTDD                BACK AND GET NEXT DD
+*
+* LOOP CHECKING INFO FOR FILES WE WANT TO MOVE.
+*
+READDSC1 READ  DECB1,SF,DD0001,DSCB1,'S'   START READ FOR VTOC
+         CHECK DECB1                 WAIT FOR READ TO COMPLETE
+         CLI   DSCB1+44,C'1'         FORMAT 1 DSCB?
+         BNE   READDSC1              NO, SO LOOP
+* COMPARE START OF DATASET NAME AGAINST PREFIX WE ARE CHECKING
+* FOR THE VARIABLE LENGTH OF THE PREFIX WE WERE PROVIDED.
+         L     R7,DSPREFIL           LENGTH OF PREFIX PROVIDED
+         EX    R7,COMPARDS           COMPARE WITH DSNAME FOUND
+*
+         BNE   READDSC1              NO, IS OK, GET NEXT
+         MVC   DSNAME(44),DSCB1      SAVE DATASET NAME
+* DETERMINE DSORG, USED TO DETERMINE SPACE ALLOCATION REQD.
+         CLI   DS1DSORG,DS1DSGPS          DSORG=PS ?
+         BE    DSORGPS
+         CLI   DS1DSORG,DS1DSGPO          DSORG=PO ?
+         BE    DSORGPO
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(32),=CL32'UNSUPPORTED DSORG, FILE IGNORED:'
+         MVC   SYSPLINE+33(44),DSNAME
+         PUT   SYSPRINT,SYSPLINE
+         B     READDSC1
+DSORGPO  MVC   DSORG(2),=CL2'PO'
+         B     DSORG@OK
+DSORGPS  MVC   DSORG(2),=CL2'PS'
+DSORG@OK BAL   R2,MOVEDSET           ELSE MOVE THE DATASET
+         B     READDSC1              GO GET ANOTHER DSNAME
+*
+* EOFDISK IS REACHED WHEN NO MORE FILES ON DISK
+*
+EOFDISK  CLOSE DD0001                CLOSE DOWN THIS PACK
+         B     NEXTDD                BACK AND GET NEXT DD
+         EJECT
+* ---------------------------------------------------------------------
+* EXIT HANDLING: EXIT ROUTINES AND ERROR MESSAGES
+* ---------------------------------------------------------------------
+EXIT00   CLOSE (SYSPRINT)         CLOSE SYSPRINT
+         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+NOPARM   WTO   'INVALID PARM DATA PROVIDED'
+         B     EXIT08
+NODDCARD WTO   'NO DDnnn JCL CARDS PROVIDED, NOTHING TO DO'
+         B     EXIT08
+NOAUTHDD WTO   'NO AUTHCARD DD STATEMENT, UNABLE TO PROCEED'
+         B     EXIT08
+PARMSCNE WTO   'LAST PARM > 20 SCAN OVERRUN'
+EXIT08   L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         LA    R15,8              EXIT CODE 8
+         BR    R14                RETURN TO SYSTEM
+         EJECT
+* ---------------------------------------------------------------------
+* MOVEDSET : CALLED WITH BAL R2,MOVEDSET
+* GENERATE THE JCL NEEDED TO MOVE THE FOUND DATASET TO A DIFFERENT
+* DASD VOLSER.
+* ---------------------------------------------------------------------
+MOVEDSET EQU   *
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(L'MOVEMSG),MOVEMSG
+         MVC   SYSPLINE+2(6),DVOLSER       DS IN ON VOLSER
+         MVC   SYSPLINE+12(6),DSDESTV      DS WILL MOVE TO VOLSER
+         MVC   SYSPLINE+24(2),DSORG        DSORG OF DS
+         MVC   SYSPLINE+31(44),DSNAME      DSNAME BEING MOVED
+         PUT   SYSPRINT,SYSPLINE
+         OPEN  (INTRDR,(OUTPUT))
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD01),CARD01      JOBCARD LINE
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARDLINE),AUTHDATA  USER/PASSWORD LINE
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD03),CARD03
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD04),CARD04
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD05),CARD05
+         MVC   CARDLINE+7(44),DSNAME
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         CLC   DSORG(2),=CL2'PO'
+         BNE   JCL01
+         MVC   CARDLINE(L'CARD06PO),CARD06PO
+         B     JCL02
+JCL01    MVC   CARDLINE(L'CARD06PS),CARD06PS
+JCL02    PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD07),CARD07
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD08),CARD08
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD09),CARD09
+         PUT   INTRDR,CARDLINE
+         MVC   CARDLINE(L'CARD05),CARD05
+         MVC   CARDLINE+7(44),DSNAME
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD10),CARD10
+         MVC   CARDLINE+20(6),DSDESTV   VOLSER IN
+         MVC   CARDLINE+32(20),DSDESTU  UNIT IN
+         LA    R1,CARDLINE+32           COMMA AFTER UNIT ENDS
+JCL03    CLI   0(R1),C' '
+         BE    JCL04
+         A     R1,=F'1'
+         B     JCL03
+JCL04    MVI   0(R1),C','
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD11),CARD11
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         CLC   DSORG(2),=CL2'PO'
+         BNE   JCL05
+         MVC   CARDLINE(L'CARD12PO),CARD12PO
+         B     JCL06
+JCL05    MVC   CARDLINE(L'CARD12PS),CARD12PS
+JCL06    EQU   *
+* ---- TODO: populate primary and secondary space fields
+*            one day instead of hard coding
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD12A),CARD12A
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD05),CARD05
+         MVC   CARDLINE+7(44),DSNAME
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         CLC   DSORG(2),=CL2'PO'
+         BNE   JCL07
+         MVC   CARDLINE(L'CARD13PO),CARD13PO
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD15),CARD15
+         PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD16),CARD16
+         B     JCL08
+JCL07    MVC   CARDLINE(L'CARD13PS),CARD13PS
+JCL08    PUT   INTRDR,CARDLINE
+         SPACEOUT CARDLINE
+         MVC   CARDLINE(L'CARD14),CARD14
+         PUT   INTRDR,CARDLINE
+         CLOSE (INTRDR)
+         BR    R2                           RETURN VIA R2
+* ---------------------------------------------------------------------
+* THE JOLLY OLD DATA AREA
+* ---------------------------------------------------------------------
+         LTORG
+SAVEAREA DS    18F                ENVIRONMENT SAVE AREA
+* NO DEFAULTS FOR PREFIX, DEFAULT THE OTHER TWO VALUES
+DSPREFIX DC    CL8' '             SEARCH PREFIX
+DSDESTV  DC    CL6'PUB012'        DESTINATION VOLSER
+DSDESTU  DC    CL20'TSO'          DESTINATION UNIT
+DSPREFIL DC    F'0'               SEARCH PREFIX LENGTH
+DSDESTVL DC    F'6'               DEST VOLSER LENGTH
+DSDESTUL DC    F'3'               DEST UNIT LENGTH
+PRMMOVE  MVC   0(0,R8),0(R6)      SAVE VALUE
+CARDLINE DS    CL80               DATA CARD LINE
+AUTHDATA DS    CL80               THE JOB USER/PASSWORD CARD
+SYSPLINE DS    CL132              SYSPRINT REPORT LINE
+MOVEMSG  DC    CL75'V=vvvvvv -> vvvvvv, ORG=nn, DS=....+....1....+....2X
+               ...+....3....+....4....'
+         DS    0F
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=PM,DSORG=PS,RECFM=F,              X
+               LRECL=132,BLKSIZE=132
+INTRDR   DCB   DDNAME=INTRDR,MACRF=PM,DSORG=PS,RECFM=F,                X
+               LRECL=80,BLKSIZE=80
+AUTHCARD DCB   DDNAME=AUTHCARD,MACRF=(GL),DSORG=PS,EODAD=EOFAUTH
+* ---------------------------------------------------------------------
+* ---------------------------------------------------------------------
+CARD01   DC    C'//MOVEDSET JOB  (0),''MOVE DSET'',CLASS=A,MSGCLASS=T,'
+* CARD02 WAS HARDCODED, REPLACED BY AUTHCARD DD INPUT
+* STEP 1, UNCATALOG OLD DATASET
+CARD03   DC    C'//MOVE0001 EXEC PGM=IEFBR14'  
+CARD04   DC    C'//DD1 DD DISP=(OLD,UNCATLG,DELETE),'
+CARD05   DC    C'// DSN=d'
+* STEP 2, COPY TO NEW DATASET ON NEW VOLSER,
+*         PLUS DELETE ORIGIONAL
+CARD06PO DC    C'//MOVE0002 EXEC PGM=IEBCOPY'  
+CARD06PS DC    C'//MOVE0002 EXEC PGM=IEBGENER'  
+CARD07   DC    C'//SYSPRINT DD   SYSOUT=*'  --- DO NOT REDEFINE
+CARD08   DC    C'//SYSUT1   DD   VOL=REF=*.MOVE0001.DD1,'
+CARD09   DC    C'// DISP=(OLD,DELETE,DELETE),'
+*CARD05  DC    C'// DSN=d'                 --- DO NOT REDEFINE
+CARD10   DC    C'//SYSUT2 DD VOL=SER=??????,UNIT=????,'
+CARD11   DC    C'// DCB=*.SYSUT1,'
+CARD12PO DC    C'// SPACE=(TRK,(010,005,015)),'  HARD CODE
+CARD12PS DC    C'// SPACE=(TRK,(010,005)),'      HARD CODE
+CARD12A  DC    C'// DISP=(NEW,CATLG,DELETE),'
+*CARD05  DC    C'// DSN=d'                 --- DO NOT REDEFINE
+CARD13PO DC    C'//SYSIN DD *'
+CARD13PS DC    C'//SYSIN DD DUMMY'
+CARD14   DC    C'//'
+CARD15   DC    C' COPY INDD=SYSUT1,OUTDD=SYSUT2'
+CARD16   DC    C'/*'
+* 
+* ---------------------------------------------------------------------
+* THESE VARIABLES ARE USED IN THE DDnnn VTOC SCANNING CODE.
+* ---------------------------------------------------------------------
+SAVETIOT DS    F             SAVES R3 OVER CODE THAT CHANGES IT
+DVOLSER  DS    CL6           VOLSER DSET FOUND ON      
+DSORG    DS    CL2           FOUND DSET ORG (PO OR PS)
+DSNAME   DC    44XL1'04'     FOUND DSET NAME
+COMPARDS CLC   DSCB1(0),DSPREFIX  COMPARE VARLEN PREFIX
+*
+* FIDDLING WITH JFCB FOR READING VTOC STUFF NEEDED
+         DS    0D
+DSCB1    DS    CL144
+         ORG   DSCB1
+         IECSDSL1 1             MAP THE DSCB FORMAT 1 LAYOUT
+DD0001   DCB   DDNAME=DD0001,DSORG=PS,MACRF=R,RECFM=F,BLKSIZE=96,      X
+               EXLST=EXLST,KEYLEN=44,EODAD=EOFDISK
+EXLST    DC    0F'0',X'87',AL3(JFCB)
+JFCB     DS    CL176
+         DS    0F
+EXLSTBKL DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DC    176X'00'                 JFCB AREA
+         ORG   JFCBAREA
+         IEFJFCBN LIST=NO      MAP THE JFCB AREA
+* ---------------------------------------------------------------------
+* ---------------------------------------------------------------------
+         YREGS
+         END
+ZZ
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(MDMOVEDS),DISP=SHR
+//*
+//* ===================================================================
+//* TEST THE PROGRAM
+//* You should create some test datasets on a volser you want them
+//* to me moved off.
+//* ===================================================================
+//*
+//* PARM DATA IS
+//*    PREFIX=   DATASET PREFIX (OR PARTIAL PREFIX)
+//*    COMMA
+//*    VOL=      VOLSER TO MOVE FOUND DATASETS ONTO
+//*    COMMA
+//*    UNIT=     THE CORRECT UNIT FOR THE VOLSER
+//TESTIT1  EXEC PGM=MDMOVEDS,COND=(0,NE),
+// PARM='PREFIX=GUEST3,VOL=PUB012,UNIT=3380'
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSPRINT DD   SYSOUT=*
+//*
+//* AUTHCARD CONTAINS THE USERID/PASSWORD JCL CARD
+//* APPENDED AFTER THE JOBCARD
+//* ---- YOU SHOULD HAVE THIS IN A SECURED PDS ----
+//AUTHCARD DD   DATA,DLM=ZZ
+// USER=adminusr,PASSWORD=somepass
+ZZ
+//*
+//* INTRDR, BELOW SUBMITS JOB TO INTRDR CLASS A
+//INTRDR   DD   SYSOUT=(A,INTRDR)
+//*
+//* AND A LIST OF VOLSERS TO BE VTOC SCANNED
+//DD0001   DD   DISP=SHR,UNIT=3350,VOL=SER=MVSRES
+//DD0002   DD   DISP=SHR,UNIT=3350,VOL=SER=SRCMD1
+//DD0003   DD   DISP=SHR,UNIT=3375,VOL=SER=PUB001
+//* MOVE GUEST3 FROM PUB001 TO PUB012, ONLY THE LAST
+//* CARD ABOVE WILL CAUSE A DATASET MOVE
+//* ..AND THE BELOW SHOULD BE SKIPPED AS IT IS TARGET
+//DD0004   DD   DISP=SHR,UNIT=3380,VOL=SER=PUB012
+//
