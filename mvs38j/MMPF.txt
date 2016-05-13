@@ -116,6 +116,8 @@
 //*                included it in this file, so anyone using this
 //*                does not have to run about trying to install
 //*                programs from additional sources.
+//*   2016/05/14 - Adjust so STATS command can be called BAL R1 
+//*                so the stats can be logged when MMPF exits
 //*
 //CREATE   EXEC PGM=IEFBR14
 //SYSPRINT DD   SYSOUT=*
@@ -344,9 +346,9 @@ GWX7&SYSNDX CNOP 0,4
 //   REGION=4096K,COND=(0,NE)
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -926,9 +928,9 @@ LE       EQU   13 -                A NOT HIGH
 //   REGION=4096K,COND=(0,NE)
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=INSTALL.MID.MMPF.SRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
@@ -1333,13 +1335,16 @@ ENDDECK
 *                nothing but is legal.                                *
 *   2009/10/13 - Non-APF program attention messages use @ instead of  *
 *                the * character so uodated to allow for those also.  *
-*   2014/11/24 - added the F XXX,STATS option because I was bored     *
+*   2014/11/21 - added the F XXX,STATS option because I was bored     *
 *                CRITICAL NOTE: I have pretty much maxed out the two  *
 *                base register addressing limit (I had to delete the  *
 *                initialisation OK message to make room for the stats *
 *                message to avoid addressing errors). The next        *
 *                version release will have code moved to seperate     *
 *                csects or possibly seperate modules; we will see.    *
+*   2016/05/14 - changed STATS command section so it is called BAL    *
+*                so it can be called at program exit to show the stats*
+*                Had to truncate a few more WTOs                      *
 *                                                                     *
 * I M P O R T A N T                                                   *
 *   This has been setup for my system which may be at a different     *
@@ -1453,43 +1458,7 @@ SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
          BZ    NOPARM             NO PARM, USE THE DEFAULT
          LR    R2,R1              ADDR LIST NOW IN R2      
 *
-* WELL THE BELOW WHILE NICE DOESNT WORK
-* AS WE USE A PARM='xxxx,yyy' FROM JCL WE ONLY GET THE ONE PARM
-*
-**         LA    R4,4               LOOP FOR A MAX OF 4 PARMS
-**PARMLOOP L     R5,0(,R2)          USE REG5 TO ADDRESS THE PARM
-**         WTO   MF=(E,(R5))        WTO PARM RECIEVED
-**         CLC   2(5,R5),=CL5'DEBUG'  DEBUGGING ONLY ?
-**         BNE   PARML01
-**         MVC   DEBUGON(1),CHARY
-**         B     NEXTPRM
-**PARML01  CLC   2(5,R5),=CL4'TEST'   DEBUGGING ONLY ?
-**         BNE   PARML02
-**         MVC   DEBUGON(1),CHARY
-**         B     NEXTPRM
-**PARML02  CLC   2(5,R5),=CL4'LIVE'   THE PERMITTED LIVE DUMMP PARM
-**         BNE   PARML03
-**         B     NEXTPRM
-**PARML03  CLC   2(5,R5),=CL5'MMPF='  IS IT THE MMPF PARM NN
-**         BNE   PARMERR            NO, WTO ITS A BAD PARM
-**         MVC   MEMBER+4(2),7(R5)  SAVE NN PART IN MEMBER NAME
-*** THE BELOW TM DOESN'T WORK, SO FIDDLE WITH IT
-***        TM    0(,R2),X'80'       IS IT THE LAST PARM
-**NEXTPRM  MVC   ONECHAR(1),0(R2)
-**         TM    ONECHAR,HEX80
-**         BO    BLDUCMS            YES, WE ARE DONE
-**         LA    R2,4(,R2)          NO, INCREMENT TO NEXT ADDR IN LIST
-**         BCT   R4,PARMLOOP        LOOP FOR NEXT PARM MAX R4 TIMES
-**         B     BLDUCMS
-**ONECHAR  DC    CL1' '
-**HEX80    EQU   X'80'
-**PARMERR  WTO2  'MID010E xxxxxxxx:BAD PARM IGNORED'
-**         MVC   PARMER2+12(40),2(R5)
-**PARMER2  WTO   'GOT ....+....1....+....2....+....3....+....4'
-**         B     NEXTPRM
-*
-*
-* So just expect either
+* We only expect either
 * MMPF=nn
 * MMPF=nn,DEBUG
 * MMPF=nn,LIVE
@@ -1506,9 +1475,9 @@ SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
          MVC   DEBUGON(1),CHARY
          B     BLDUCMS
 *
-PARMERR  WTO2  'MID010E xxxxxxxx:BAD PARM, ABENDING'
-         MVC   PARMER2+12(40),2(R5)
-PARMER2  WTO   'GOT ....+....1....+....2....+....3....+....4'
+PARMERR  WTO2  'MID010E xxxxxxxx:BAD PARM, ABEND'
+         MVC   PARMER2+12(35),2(R5)
+PARMER2  WTO   'GOT ....+....1....+....2....+....3....+'
          ABEND 100
 *
 NOPARM   DS    0F        JUST USE DEFAULT OF MMPF00, NO NOTIFY NEEDED
@@ -1631,7 +1600,7 @@ AUTHDONE EQU   *
                BLOCK=(R3)            *
          LTR     R15,R15             * OK ?
          BZ      SETCOUNT            * YES - CONTINUE
-         WTO2    'MID016E xxxxxxxx:UNABLE TO ALLOCATE COMM AREA,ABEND'
+         WTO2    'MID016E xxxxxxxx:UNABLE TO ALLOCATE COMM AREA'
          ABEND   1
 SETCOUNT EQU     *
          QEDIT   ORIGIN=COMCIBPT,    * SET LIMIT ON MODIFY             X
@@ -1714,19 +1683,25 @@ MODIFY   EQU     *
          LA      R1,CIBDATA          * OK, R1 ADRESSES CMD
          BAL     R5,NEWRULES         *   AND GO LOAD THEM
          B       OPCMDRET
-         DS      0D                  ALIGN
-STATWRK  DS      PL8                 STATMSG WORK AREA
-SHOWSTAT EQU     *
-         MVC   STATMSG+16(8),MYJOBNAM
+         DS    0D                  ALIGN
+STATWRK  DS    PL8                 STATMSG WORK AREA
+SHOWSTR1 DS    F                   SAVE R1 ACROSS BAL   2016/05/14
+SHOWSTAT EQU   *
+         BAL   R1,SHOWSBAL                              2016/05/14
+         B     OPCMDRET                                 2016/05/14
+SHOWSBAL ST    R1,SHOWSTR1                              2016/05/14
+         MVC   STATMSG+16(8),MYJOBNAM  
          L     R1,AUTOCNT            GET BINARY NUMBER
          CVD   R1,STATWRK            CONVERT TO DECIMAL
          LA    R1,STATMSG+25         FORMATTED OUTPUT ADDR
          UNPK  0(8,R1),STATWRK       UNPK FOR LENGTH 8
          OI    7(R1),X'F0'           ZERO ZONE BIT
-STATMSG  WTO   'MID029I jjjjjjjj:nnnnnnnn MESSAGES HAVE BEEN AUTOMATED' 
-         B     OPCMDRET
+STATMSG  WTO   'MID029I jjjjjjjj:nnnnnnnn MESSAGES WERE AUTOMATED' 
+         L     R1,SHOWSTR1                              2016/05/14
+         BR    R1                                       2016/05/14
+*        B     OPCMDRET               (REMOVED)         2016/05/14
 OPERROR  EQU     *
-         WTO2    'MID003W         :ONLY MMPF=nn OR STATS IS PERMITTED'
+         WTO2    'MID003W         :ONLY MMPF=nn OR STATS ALLOWED'
 NEWTIMER EQU     *
 OPCMDRET EQU     *
          QEDIT   ORIGIN=COMCIBPT,    * FREE IT                         X
@@ -1788,6 +1763,7 @@ NOT3270  L     R0,=F'78'          LOAD LENGTH OF LINE
 *                                                                     *
 ***********************************************************************
 ALLDONE  CNOP  0,4                                                  
+         BAL   R1,SHOWSBAL      LOG AUTOMATION STATS         2016/05/14
 * TWO GETMAINED AREAS TO RELEASE, DO THAT FIRST
          L     R1,ADDRRULS     FREE THE STORAGE USED BY RULE TABLE
          FREEMAIN R,A=(1),LV=RULETLEN,SP=126
@@ -1821,7 +1797,7 @@ PARSLOOP CLI   0(R3),C' '         BLANK CHARACTER?
          BNE   STORELEN           NO, FOUND LAST CHARACTER OF COMMAND
          BCTR  R3,0               YES, POINT TO PREVIOUS CHARACTER
          BCT   R2,PARSLOOP        IF R2 IS 0 ONLY NO CMD WAS ENTERED
-         WTO2  'MID004E         :DEBUG NULL COMMAND TO SVC34 IGNORED'
+         WTO2  'MID004E         :NULL COMMAND TO SVC34 IGNORED'
          B     MGCREX             EXIT COMMAND OP  
 STORELEN LA    R2,4(0,R2)         MAKE THE LAST CHARACTER A BLANK
          STH   R2,CMDLEN
