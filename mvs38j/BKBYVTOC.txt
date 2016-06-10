@@ -580,10 +580,9 @@ FILE001B CNOP 0,4
          MVI   FILEDETL+16,C'F'
          MVC   FILEDETL+26(2),=CL2'80'
          MVC   FILEDETL+32(2),=CL2'80'
-         MVC   FILEDETL+35(L'DS1DSNAM),DS1DSNAM  
          MVC   FILEDETL+12(2),=CL2'PS'         LISTING
-         L     6,SYSPNLEN
-         EX    6,EXFILE1
+         L     6,SYSPNLEN                      FNAME LEN OF LISTING
+         EX    6,EXFILE1                       MOVE FNAME OF LISTING
          PUT   BKPLIST,FILEDETL
          MVC   JCLLINE1+6(3),TEXT001
          MVC   JCLLINE1+33(3),TEXT001
