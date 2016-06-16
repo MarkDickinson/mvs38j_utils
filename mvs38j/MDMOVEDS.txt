@@ -2,8 +2,8 @@
 //*
 //* To assemble the program
 //*   Change MARK.LIB.LOAD to your load library
-//*   Customise the TESTIT1 step as below
-//*   Run this job
+//*   Customise the TESTIT1 step as below   <===important
+//*   Run this job 
 //*
 //* To test (step TESTIT1 will run unless you delete it)
 //*    Change the AUTHCARD DD data to an admin user on your system
@@ -21,6 +21,7 @@
 //ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB    STANDARD MACROS
 // DD DISP=SHR,DSN=SYS1.AMODGEN             FOR IECSDSL1
 // DD DISP=SHR,DSN=SYS2.MACLIB              FOR YREGS
+// DD DISP=SHR,DSN=CBT249.FILE058           #VTCFMT3
 //ASM.SYSIN DD *
 * *********************************************************************
 *
@@ -28,20 +29,30 @@
 *
 * PURPOSE
 *    To stop GUEST (and other) TSO users polluting DASD packs they
-*    should not be using with their datasets.
+*    should not be using for their datasets, intended to run as a
+*    periodic batch job.
 *    This program will submit batch jobs to move any datasets that
 *    should NOT be on the packs being scanned to a DASD pack they
 *    should be on.
+*    This replaces my prior solution of just deleting any datasets
+*    created on teh wrong packs.
+*    This is currently working OK, but see the limitations and
+*    warnings sections.
 *
 * LOGIC
+*    Searches packs defined by //DDnn cards for the dataset prefix.
 *    Submits jobs via INTRDR to do the dataset move, and only
 *    supports DSORG=PO or DSORG=PS at present. Using backgrounded JCL
 *    as the effort of embedding IEBGENER or IEBCOPY and dynamically
 *    allocating datasets ... for moving datasets off a volume 
 *    they should not have been on in the first place is overkill.
-*    So use the IBM provided programs and if a user dataset is
-*    accidentally deleted who cares, it should not have been
-*    there in the first place.
+*    New files ARE NOT IDENTICAL to the origional, will be created as
+*       -- primary extent exactly the number of tracks used (not
+*          used+free, the number used) in total by the origional file
+*       -- secondary extent hard coded as 1 track
+*       -- for PDS files the same number of directory blocks are used
+*    Batch jobs submitted use jobname MOVEDSET, change the JOB card
+*    created by the program code to your site standards.
 *
 * DD CARDS REQUIRED
 *    SYSPRINT - OUTPUT REPORT
@@ -61,70 +72,111 @@
 *               Be carefull not to have the program PARM value 
 *               refering to a volser you are checking.
 *
-* PROGRAM PARM VALUE REQUIRED
+* PROGRAM PARM VALUE REQUIRED (Example)
 *    PARM='PREFIX=GUEST1,VOL=PUB012,UNIT=3380'
-*    - Prefix is the dataset prefix (or partial prefix) to search
-*      on when looking for datasets
-*    - Vol is the volser to move any found datasets across to
+*    - Prefix is the dataset prefix (or partial prefix, ie:
+*      guest will find datasets for users guest1/guest2/guest3 etc)
+*      to search on when looking for datasets. May be up to 16 bytes
+*      to allow for things like USER.LIB etc rather than just USER
+*    - Vol is the volser to move any found datasets across to,
+*      expected to be 6 bytes
 *    - Unit is the appropriate unit for the Volser (3380/SYSDA etc)
 *
 * RETURN CODES
 *    00 - NO PROBLEMS
 *    08 - BAD BARM DATA... OR NO DDn CARDS... OR NO AUTHDD CARD
 *
-* LIMITATIONS
-* -- When a dataset is moved THE DESTINATION SPACE ALLOCATION IS HARD
-*    CODED. I have not bothered with all the code required to work
-*    out what has been allocated as the datasets being moved should
-*    all be small tso user datasets. I may add it one day but do not
-*    need it at the moment
-* -- As this moves datasets from packs they should not be on there
+* CURRENT LIMITATIONS
+* -- startup errors are only WTOed
+*    Any startup errors (parm value errors, no authcard dd etc) are
+*    just WTOed (design decision rather than limitation) to avoid
+*    unneeded overhead of opening the sysprint file just to log 
+*    user errors.
+* -- space notes
+*    When a dataset is moved the number of tracks actually used by the
+*    dataset is used as the primary extent size (so all data should
+*    be moved ok) but the secondary extent size is hard coded as
+*    1 track, so a dataset with 100trks free in primary extent will
+*    suddenly shrink if it is moved by this program... as we are moving
+*    datasets that should not have been on the source pack in the first
+*    place let the the idiot that created it to sort it out
+* -- no checking the move was successfull
+*    As this moves datasets from packs they should not be on there
 *    is no error checking in the JCL, if a dataset in the wrong place
 *    gets deleted that is acceptable, it should not have been there
 *    in the first place.
-* -- SECURITY, I use RAKF as I am sure you all do since it was
+* -- SECURITY notes, AUTHCARD DD
+*    I use RAKF in TK3 as I am sure you all do since it was
 *    made freely available on the CBT tapes. It is also active in
-*    the TK4- distribution.
+*    the TK4- distribution by default.
 *    This means jobs submitted via intrdr must have userid/password,
+*    (unless you have not locked down the default 'batch' class)
 *    so to avoid hard coding in the program the JCL card containing 
 *    the user/password combination must be provided via the
 *    AUTHCARD DD, that should be a RAKF secured PDS containing
 *    user/password pairs that only your 'special' (not the default)
 *    batch job user (and maybe rakfadm group) can access.
 *
-* KNOWN ISSUES (in TK4- with RAKF, possibly TK3 with RAKF).
-*    ...Security...
+* WARNINGS
+* ...Security... If you use RAKF read this
 *    In TK4- unless a user is defined to RAKF as an ADMIN user the
-*    user can only create datasets with their userid own prefix 
+*    user can only create datasets with their own userid prefix 
 *    (ie: GUEST1 userid cannot move (or create) datasets for GUEST3
-*     [can uncatalog, but cannot create] for other prefixes.
+*     [can uncatalog, but cannot create] or any other prefixes.
 *    !!! TK3 users without RAKF can delete the code that defines
 *        and reads the AUTHCARD DD as they do not need the jcl
 *        card for userid/password.
 *    !!! If RAKF is being used ensure the user/password provided
 *        is that of an ADMIN authority user, or you will end up
 *        with a lot of uncataoged and unmoved datasets.
-*    !*!*!*! not an issue, design :-). But I would recomend NOT
-*            using partial prefixes like prefix=S 
-*            or there will be a major mess as non-enqueued
-*            SYS1 (and SYSn) datasets are moved about to prevent
-*            future IPLs. I should code a minimum prefix length 
-*            but as prefixes are site dependent thats pointless.
+* ...User Stupidity...
+*    I would recomend NOT using partial prefixes like prefix=SYS
+*    or there will be a major mess as non-enqueued SYS1 (and SYSn)
+*    datasets are moved about to prevent future IPLs.
+*
+* Change History
+* ==============
+* 2016/05/10 Initial version, scan for matching datasets and move
+*            them to the target pack with hard coded extent values,
+*            running live on my system ok
+* 2016/06/15 Changed to check vtoc for tracks needed, and changed
+*            code to use two base registers (needed to address all
+*            the additional code). Changed prefix being checked length
+*            from 8 to 16 bytes to allow tests against more than just
+*            the base 8 byte user level in a dset name. Added test
+*            that prefix len must be > 2 to stop 0 len values being
+*            accepted if the user was dumb enough to try. Also added
+*            code to count directory blocks for PDS dsets and removed
+*            the hard coded value.
 *
 * *********************************************************************
+         EJECT
          MACRO
 &NAME    SPACEOUT &A
          MVI   &A,C' '
          MVC   &A+1(L'&A-1),&A
          MEND
+* ----------- DYNAMIC MISC (MAPS/CONSTANTS) NEEDED ----------
+* These need to be at the start of the file for the assembler
+* to locate them.
+         IEFZB4D0    DSECT FOR REQ BLK, TEXT UNIT, ETC
+         IEFZB4D2    TABLE OF EQUATES FOR TEXT UNIT KEYS
+         EJECT
 MDMOVEDS CSECT
+         B     100(R15)            BRANCH AROUND SAVE AREA
+         DC    CL9'MDMOVEDS'
+         DC    CL9'&SYSDATE'
+         DC    CL6'&SYSTIME'
+SAVEAREA DC    18F'0'
          STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
+         LR    R12,R15             R12 TO ADDR OF ENTRY POINT 
+         USING MDMOVEDS,R12,R11    NEED TWO BASE REGISTERS 
+         LA    R11,SAVEAREA        ADDR OF OUR SAVE AREA
+         ST    R13,SAVEAREA+4      SAVE PTR TO CALLERS SA
+         ST    R11,8(R13)          SAVE PTR TO OUR SA IN CALLERS
+         LR    R13,R11             R13 NOW ADDR OF OUR SA
+         LA    R11,4095(R12)       SET 2ND BASE REGISTER...
+         LA    R11,1(R11)          ...ADDRESSING          
 * ---------------------------------------------------------------------
 * CHECK THE PARM FIELD TO ENSURE ALL DATA IS PROVIDED.           
 * PARM='PREFIX=xxxxxxxx,VOL=vvvvvv,UNIT=uuuu' 
@@ -170,12 +222,14 @@ PRM00004 EQU   *
          CLI   0(R3),C'U'    UNIT ?
          BE    PRMEXECU
          B     NOPARM        ELSE A BAD PARM
-PRMEXECP C     R7,=F'8'      MAX PREFIX LEN IS 8
-         BH    NOPARM        IF > 8 A BAD PARM
+PRMEXECP C     R7,=F'16'     MAX PREFIX LEN IS 8
+         BH    NOPARM        IF > 16 A BAD PARM
+         C     R7,=F'2'      SAFETY NET, MUST HAVE > 2
+         BNH   NOPARM        IF < 3 TO UNSAFE TO RISK
          LA    R8,DSPREFIX   SAVE IN PREFIX FIELD
          ST    R7,DSPREFIL   SAVE LENGTH OF PREFIX
          B     PRM00005
-PRMEXECV C     R7,=F'6'      VOLSER LEN MUST BE 6
+PRMEXECV C     R7,=F'6'      VOLSER LEN MUST NOT BE > 6
          BH    NOPARM        IF > 6 A BAD PARM
          LA    R8,DSDESTV    SAVE IN DEST VOSLER FIELD
          ST    R7,DSDESTVL   SAVE LENGTH OF VOLSER
@@ -193,21 +247,19 @@ PRM00005 EX    R7,PRMMOVE    SAVE VALUE
          CR    R4,R5         AT END OF PARM STRING ?
          BL    PRM00001      NO, LOOP BACK FOR NEXT PARM
          B     PRMDONE       SKIP DEBUG LINE
-* ---------------------------------------------------------------------
-* DEBUGGING
-* ---------------------------------------------------------------------
-PRMEXIT  WTO   'DEBUG:EXIT ON ZEROS INSTEAD OF OFFSET CALS, LOGIC-ERR'
-* ---------------------------------------------------------------------
-* READ THE USER/PASSWORD CARD WE MUST BE PROVIDED WITH
-* ---------------------------------------------------------------------
+PRMEXIT  WTO   'DEBUG:PARMSCAN EXIT ON ZEROS INSTEAD ADDR, LOGIC-ERR'
 PRMDONE  EQU   *
+         EJECT
+* ---------------------------------------------------------------------
+* READ THE USER/PASSWORD CARD WE MUST BE PROVIDED WITH DD AUTHCARD
+* ---------------------------------------------------------------------
          OPEN  (AUTHCARD,(INPUT))
          LTR   R14,R15
          BNZ   NOAUTHDD
          GET   AUTHCARD
          MVC   AUTHDATA(L'AUTHDATA),0(R1)
          B     AUTHOK
-EOFAUTH  WTO   'NO DATA PROVIDED TO AUTHCARD'
+EOFAUTH  WTO   'NO DATA PROVIDED TO AUTHCARD, REFUSING TO DO ANYTHING'
          CLOSE (AUTHCARD)
          B     EXIT08
 AUTHOK   CLOSE (AUTHCARD)
@@ -220,8 +272,9 @@ AUTHOK   CLOSE (AUTHCARD)
          MVC   SYSPLINE+10(6),DSDESTV
          MVC   SYSPLINE+22(20),DSDESTU
          MVC   SYSPLINE+43(7),=CL7'PREFIX='
-         MVC   SYSPLINE+50(8),DSPREFIX
+         MVC   SYSPLINE+50(L'DSPREFIX),DSPREFIX
          PUT   SYSPRINT,SYSPLINE 
+         EJECT
 * ---------------------------------------------------------------------
 * SCAN THE TIOT FOR ALL DD CARDS, WE WANT TO LOCATE AND PROCESS ALL
 * //DDanything DD CARDS PROVIDED TO THE JOBSTEP.
@@ -242,7 +295,6 @@ TESTDD1  CLI   0(R3),X'00'           IS LENGTH FIELD ZERO?
          SPACE 2
 *    IF HERE, FOUND A DDnnnn CARD, USE JCL DD CARDS
          B     CONTDD                START PROCESING THIS DD
-         EJECT
 *
 * PROCESS ALL THE DD DDn CARDS IN THE JOB
 *
@@ -250,6 +302,7 @@ NEXTDD   L     R3,SAVETIOT           GET ORIGIONAL R3 BACK
          SR    R0,R0                 ZERO REG 0
          IC    R0,0(R3)              MOVE TIOELNGH TO REG 0
          AR    R3,R0                 ADD TIOELNGH TO REG 3
+         ST    R3,SAVETIOT           SAVE IT, R3 IS USED IN MAIN CODE
 CHECKDD  CLI   0(R3),X'00'           IS LENGTH FIELD ZERO?
          BE    EXIT00                GET OUT IF LAST DD
          CLC   =C'DD',4(R3)          IS THIS A "DD" DD STMNT?
@@ -292,7 +345,7 @@ CONTDD2  MVC   SYSPLINE(22),=CL22'SCANNING VOLSER vvvvvv'
          MVC   OPENFAIL+39(6),DVOLSER
 OPENFAIL WTO   'UNABLE TO READ VTOC FOR VOLSER=vvvvvv, SKIPPED'
          SPACEOUT SYSPLINE
-         MVC   SYSPLINE(46),OPENFAIL+8
+         MVC   SYSPLINE(46),OPENFAIL+8  LOG WTO TEXT TO SYSPRINT
          PUT   SYSPRINT,SYSPLINE
          B     NEXTDD                BACK AND GET NEXT DD
 *
@@ -306,8 +359,8 @@ READDSC1 READ  DECB1,SF,DD0001,DSCB1,'S'   START READ FOR VTOC
 * FOR THE VARIABLE LENGTH OF THE PREFIX WE WERE PROVIDED.
          L     R7,DSPREFIL           LENGTH OF PREFIX PROVIDED
          EX    R7,COMPARDS           COMPARE WITH DSNAME FOUND
-*
          BNE   READDSC1              NO, IS OK, GET NEXT
+*-------------------------------------------------------------
          MVC   DSNAME(44),DSCB1      SAVE DATASET NAME
 * DETERMINE DSORG, USED TO DETERMINE SPACE ALLOCATION REQD.
          CLI   DS1DSORG,DS1DSGPS          DSORG=PS ?
@@ -319,10 +372,30 @@ READDSC1 READ  DECB1,SF,DD0001,DSCB1,'S'   START READ FOR VTOC
          MVC   SYSPLINE+33(44),DSNAME
          PUT   SYSPRINT,SYSPLINE
          B     READDSC1
-DSORGPO  MVC   DSORG(2),=CL2'PO'
+DSORGPO  MVC   DSORG(2),=CL2'PO'      SET TYPE = PO
+         BAL   R2,CALCDIRB            AND CALCULATE DIR BLOCKS USED
          B     DSORG@OK
-DSORGPS  MVC   DSORG(2),=CL2'PS'
-DSORG@OK BAL   R2,MOVEDSET           ELSE MOVE THE DATASET
+DSORGPS  MVC   DSORG(2),=CL2'PS'      SET TYPE = PS
+DSORG@OK EQU   *            A VALID "PS" OR "PO" DATASET TYPE
+* 
+* WORK OUT WHAT EXTENTS THE DATASET IS USING (TRKS) FOR RECREATE
+         NC    DS1PTRDS,DS1PTRDS       SEE IF THERE IS A FORMAT 3 DSCB
+         BZ    SCANEXTS                NO, CARRY ON
+         LA    R2,DS1PTRDS             YES, OBTAIN IT
+         LA    R3,DVOLSER
+         LA    R4,DSATFMT3
+         STM   R1,R4,DSATDCB3
+         OBTAIN DSATDCB3               GET THE FORMAT 3 DSCB
+         LTR   R15,R15                 TEST RETURN CODE
+         BZ    SCANEXTS      OK, GO TEST EXTENTS USED
+*                            ELSE ERROR, USE DEFAULTS
+         MVC   EXTPRI,=CL5'00010'
+         WTO   'DSCB3 READ ERROR, USING DEFAULT PRI EXT OF 10 TRKS'
+         B     MOVE@OK
+SCANEXTS EQU   *
+         BAL   R2,CALCTRKU  USE THE DSCB ENTRIES WE READ TO
+*                           WORK OUT THE TRACKS NEEDED   
+MOVE@OK  BAL   R2,MOVEDSET           MOVE THE DATASET
          B     READDSC1              GO GET ANOTHER DSNAME
 *
 * EOFDISK IS REACHED WHEN NO MORE FILES ON DISK
@@ -338,7 +411,7 @@ EXIT00   CLOSE (SYSPRINT)         CLOSE SYSPRINT
          LM    R14,R12,12(R13)    RESTORE REGISTERS
          SLR   R15,R15            EXIT CODE 0
          BR    R14                RETURN TO SYSTEM
-NOPARM   WTO   'INVALID PARM DATA PROVIDED'
+NOPARM   WTO   'INVALID PARM DATA PROVIDED, OR NO PARM'
          B     EXIT08
 NODDCARD WTO   'NO DDnnn JCL CARDS PROVIDED, NOTHING TO DO'
          B     EXIT08
@@ -417,11 +490,12 @@ JCL04    MVI   0(R1),C','
          CLC   DSORG(2),=CL2'PO'
          BNE   JCL05
          MVC   CARDLINE(L'CARD12PO),CARD12PO
+         MVC   CARDLINE+15(5),EXTPRI+3
+         MVC   CARDLINE+23(3),DIRSIZE+5
          B     JCL06
 JCL05    MVC   CARDLINE(L'CARD12PS),CARD12PS
+         MVC   CARDLINE+15(5),EXTPRI+3
 JCL06    EQU   *
-* ---- TODO: populate primary and secondary space fields
-*            one day instead of hard coding
          PUT   INTRDR,CARDLINE
          SPACEOUT CARDLINE
          MVC   CARDLINE(L'CARD12A),CARD12A
@@ -448,13 +522,206 @@ JCL08    PUT   INTRDR,CARDLINE
          PUT   INTRDR,CARDLINE
          CLOSE (INTRDR)
          BR    R2                           RETURN VIA R2
+         EJECT
+* ---------------------------------------------------------------------
+* CALCTRKP : CALCULATE TRACKS USED AND TRACKS TOTAL          
+* ENTRY    : BAL R2,CALCTRKU                               
+* REQUIRES : FMT1 AND FMT3 DSBS ALREADY OBTAINED BY MAINLINE 
+* ---------------------------------------------------------------------
+CALCTRKU STM   R0,R15,CALCSAVA    SAVE ALL REGISTERS
+*        R1        - WORK REGISTER
+*        R2        - RETURN ADDRESS
+*        R4        - WORK REGISTER
+*        R5        - EXECUTE TABLE POINTER                            *
+*        R6        - TRACKS ALLOCATED                                 *
+*        R7        - EXTENT DESCRIPTION POINTER/TRACKS USED           *
+         SPACE 2
+*--------GET TRACK ALLOCATION
+         SR    R4,R4                   CLEAR REGISTER 4
+         SR    R5,R5                   CLEAR REGISTER 5
+         SR    R6,R6                   CLEAR REGISTER 6
+         SR    R7,R7                   CLEAR REGISTER 7
+         ST    R7,TRKSTOT              ZERO TRACKS TOTAL
+         IC    R4,DS1NOEPV             LOAD NUMBER OF EXTENTS
+*                               MEANS WE USE THE ABOVE
+DSATTRKS EX    R0,DSATADDR(R5)         PROCESS EXTENT BLOCK
+         CLI   0(R7),X'00'
+         BE    DSATUTRK
+         LA    R7,2(R7)                LOAD ADDRESS OF STARTING TRACK
+         MVC   HALF(2),4(R7)           LOAD ENDING CYL NUMBER
+         LH    R1,HALF
+         MVC   HALF(2),0(R7)           LOAD STARTING CYL NUMBER
+         SH    R1,HALF                 SUBTRACT STARTING FROM ENDING
+         MH    R1,TRKPRCYL             MULTIPLY BY TRACKS PER CYL
+         MVC   HALF(2),6(R7)           LOAD ENDING TRACK
+         AH    R1,HALF                 ADD TO TRACK COUNT
+         MVC   HALF(2),2(R7)           LOAD STARTING TRACK
+         SH    R1,HALF                 SUBTRACT FROM TRACK COUNT
+         AR    R6,R1                   ACCUMULATE TOTAL
+         LA    R6,R1(R6)               ADD 1 TRACK
+         LA    R5,4(R5)
+         BCT   R4,DSATTRKS             DECREMENT EXTENT COUNT
+DSATUTRK ST    R6,TRKSTOT              SAVE TOTAL TRACKS
+*--------GET TRACKS USED
+         SR    R7,R7
+         LH    R7,DS1LSTAR             LOAD TRACKS USED
+         NC    DS1LSTAR,DS1LSTAR       TEST FOR ZERO
+         BZ    DSAT2DEC
+         A     R7,=F'1'                ADD 1
+* SAVE 8 BYTE EXTENTS USED FOR USE AS PRI EXTENT
+DSAT2DEC CVD   R7,TRKSUSEP             TRACKS USED TO PACKED
+         UNPK  EXTPRI(8),TRKSUSEP      CONVERT TO TEXT nnnnnnnd
+         OI    EXTPRI+7,X'F0'          ZERO ZONE BIT
+         LM    R0,R15,CALCSAVA  RESTORE ALL REGISTERS TO PRIOR STATE
+         BR    R2
+*--------LOAD EXTENT DESCRIPTIONS LOOKUP TABLE
+DSATADDR LA    R7,DS1EXT1              << EXECUTED INSTRUCTION >>
+         LA    R7,DS1EXT2              << EXECUTED INSTRUCTION >>
+         LA    R7,DS1EXT3              << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT01             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT02             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT03             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT04             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT05             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT06             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT07             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT08             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT09             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT10             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT11             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT12             << EXECUTED INSTRUCTION >>
+         LA    R7,DS3EXT13             << EXECUTED INSTRUCTION >>
+TRKSCYL  DC    AL1(000),CL7'       '   00 (00) - UNASSIGNED
+         DC    AL1(010),CL7'2311   '   01 (01) - 2311 DISK
+         DC    AL1(200),CL7'2301   '   02 (02) - 2301 DRUM
+         DC    AL1(010),CL7'2303   '   03 (03) - 2303 DRUM
+         DC    AL1(046),CL7'2302   '   04 (04) - 2302 DISK FILE
+         DC    AL1(000),CL7'       '   05 (05) - 2321 DATA CELL
+         DC    AL1(008),CL7'2305-1 '   06 (06) - 2305-1
+         DC    AL1(008),CL7'2305-2 '   07 (07) - 2305-2
+         DC    AL1(020),CL7'2314   '   08 (08) - 2314 DISK
+         DC    AL1(019),CL7'3330   '   09 (09) - 3330 DISK
+         DC    AL1(000),CL7'       '   10 (0A) - UNASSIGNED
+         DC    AL1(030),CL7'3350   '   11 (0B) - 3350
+         DC    AL1(000),CL7'       '   12 (0C) - UNASSIGNED
+         DC    AL1(019),CL7'3330-1 '   13 (0D) - 3330-11 DISK
+         DC    AL1(000),CL7'       '   14 (0E) - UNASSIGNED
+         DC    AL1(000),CL7'       '   15 (0F) - UNASSIGNED
+         LTORG
+CALCSAVA DS    16F      REGISTER SAVE AREA FOR PCT CALC ROUTINE
+TRKSTOT  DS    F        TRACKS ALLOCATED TOTAL, MAY USE TO PAD EXTS
+*                       ALLOCATED IN JCL ONE DAY, NOT TODAY
+TRKPRCYL DS    H        TRACKS PER CYL FOR DASD TYPE
+HALF     DS    H        HALFWORD WORK AREA
+         DS    0D       ALIGN SO CVD CAN USE PL8 FIELD BELOW
+TRKSUSEP DS    PL8      TRACKS USED PACKED
+EXTPRI   DS    CL8      TRACKS USED AS TEXT
+         EJECT
+*----------------------------------------------------------------------
+* CALCDIRB : CALCULATE DIR BLOCKS USED WHEN DSORG=PO
+* ENTRY    : BAL R2,CALCDIRB
+* REQUIRES :
+*----------------------------------------------------------------------
+* R2 - RETURN ADDRESS
+* R3 - COUNT ALLOCATED DIRECTORY BLOCKS
+* R4 - COUNT USED DIRECTORY BLOCKS
+* R8 - USED FOR ADDRESSING
+* R10 - USED FOR ADDRESSING
+*
+* ---- DYNAMICALLY ALLOCATING THE PDS DATASET ----
+CALCDIRB STM   R0,R15,DYNASAVE  SAVE ALL REGISTERS
+         LA    R9,REQBLK        ADDRESSABILITY FOR RB DSECT
+         USING S99RB,R9
+         LA    R10,RBPTR
+         USING S99RBP,R10       REG FOR REQ BLOCK PTR DSECT
+         MVC   TUVOLSER(6),DVOLSER VOLSER TO OPEN
+         MVC   DYNDSNAM,DSNAME     DATASET NAME TO OPEN
+         LA    R0,DSNAME           NOW FIND REAL LEN OF THAT DSNAME
+         LA    R1,DSNAME+43
+DYNLEN00 CLI   0(R1),C' '
+         BNE   DYNLEN02
+         S     R1,=F'1'   
+         CLR   R1,R0
+         BNH   DYNLEN01            AT START OF DSNAME, NO DSNAME !
+         B     DYNLEN00            ELSE KEEP SEARCHING BACKWARD
+DYNLEN01 WTO   'INVALID DSNAME PASSED TO DYNALLOC'
+         ABEND 400
+DYNLEN02 SR    R1,R0               CALC LENGTH OF DSNAME
+         A     R1,=F'1'   
+         STH   R1,MDHTEMP          MODIFY LEN IN TU UNIT
+         MVC   DYNDSLEN(2),MDHTEMP
+* DYNAMICALLY ALLOCATE THE DD FOR THE DATASET
+*   SETUP RB FOR ALLOC
+         XC    REQBLK,REQBLK     CLEAR RB
+         MVI   S99RBLN,REQBLKLN  SET RB LEN
+         MVI   S99VERB,S99VRBAL  ALLOCATE REQUEST
+         LA    R1,TUPTR001      ADDR OF TEXT LIST
+         ST    R1,S99TXTPP      STORE INTO RB
+*   SETUP RB POINTER
+         LA    R1,REQBLK        ADDRESS OF RB
+         ST    R1,S99RBPTR      STORE RB ADDR INTO TB POINTER
+         OI    S99RBPTR,S99RBPND TURN ON HIGH ORDER BIT(LIST END)
+*   ISSUE SVC 99 (DYNAMIC ALLOCATION)
+         LA    R1,RBPTR
+         DYNALLOC
+         LTR   R15,R15           DID DYNALLOC WORK ?
+         BZ    COUNTDIR          YES
+*               ....+....1....+....2....+....3....+....4....+...
+DYNAFAIL WTO   'UNABLE TO DYNALLOC, USING DEFAULT 010 DIR BLOCKS'
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(48),DYNAFAIL+8  LOG WTO TEXT TO SYSPRINT
+         PUT   SYSPRINT,SYSPLINE
+         MVC   DIRSIZE,=CL8'00000010'
+         B     DYNAEXIT
+*
+* ----- READ PDS DIRECTORY TO COUNT USED DIRECTORY BLOCKS ------
+COUNTDIR OPEN  (DIR$FILE,INPUT)
+* Count the number of allocated directory blocks.
+* R3 contains allocated
+         SR    R3,R3
+READBLK  GET   DIR$FILE
+         A     R3,=F'1'
+         B     READBLK
+DIREND   CLOSE (DIR$FILE)
+         CVD   R3,DIRBUSED             DIR BLKS ALLOCATED TO PACKED
+         UNPK  DIRSIZE(8),DIRBUSED     CONVERT TO TEXT nnnnnnnd
+         OI    DIRSIZE+7,X'F0'         ZERO ZONE BIT
+*
+* ------ DYNAMICALLY UN-ALLOCATE THE PDS DATASET -------
+         XC    REQBLK,REQBLK     CLEAR RB
+         MVI   S99RBLN,REQBLKLN  SET RB LEN
+         MVI   S99VERB,S99VRBUN   SET UNALOLOCAT VERB
+         LA    R1,TUPTR003 ADDR OF BG OF TEXT INIT LIST
+         ST    R1,S99TXTPP
+         LA    R1,REQBLK        ADDRESS OF RB
+         ST    R1,S99RBPTR      STORE RB ADDR INTO TB POINTER
+         OI    S99RBPTR,S99RBPND TURN ON HIGH ORDER BIT(LIST END)
+         LA    R1,RBPTR
+         DYNALLOC
+         DROP  R10
+         DROP  R9
+         LTR   R15,R15           DID DYNALLOC RELEASE WORK ?
+         BZ    DYNAEXIT          YES, ALL DONE
+* =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-==-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+* IF DYNAMIC UNALLOCATION FAILS TREAT AS CRITICAL, SOMETHING IS WRONG!
+* =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-==-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+*               ....+....1....+....2....+....3....+....4.
+DYNUFAIL WTO   'UNABLE TO DYNALLOC RELEASE PDS, ABEND 200'
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(41),DYNUFAIL+8  LOG WTO TEXT TO SYSPRINT
+         PUT   SYSPRINT,SYSPLINE
+         CLOSE (SYSPRINT)    TRY AND MAKE SURE ERROR MSG IS FLUSHED
+         ABEND 200
+DYNAEXIT LM    R0,R15,DYNASAVE
+         BR    R2
+         EJECT
 * ---------------------------------------------------------------------
 * THE JOLLY OLD DATA AREA
 * ---------------------------------------------------------------------
          LTORG
-SAVEAREA DS    18F                ENVIRONMENT SAVE AREA
+DSATDCB3 CAMLST SEEK,0,0,0        USED FOR DSCB FMT3 SEARCHES
 * NO DEFAULTS FOR PREFIX, DEFAULT THE OTHER TWO VALUES
-DSPREFIX DC    CL8' '             SEARCH PREFIX
+DSPREFIX DC    CL16' '            SEARCH PREFIX
 DSDESTV  DC    CL6'PUB012'        DESTINATION VOLSER
 DSDESTU  DC    CL20'TSO'          DESTINATION UNIT
 DSPREFIL DC    F'0'               SEARCH PREFIX LENGTH
@@ -472,7 +739,9 @@ SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=PM,DSORG=PS,RECFM=F,              X
 INTRDR   DCB   DDNAME=INTRDR,MACRF=PM,DSORG=PS,RECFM=F,                X
                LRECL=80,BLKSIZE=80
 AUTHCARD DCB   DDNAME=AUTHCARD,MACRF=(GL),DSORG=PS,EODAD=EOFAUTH
+         EJECT
 * ---------------------------------------------------------------------
+* The JCL lines needed to move the dataset
 * ---------------------------------------------------------------------
 CARD01   DC    C'//MOVEDSET JOB  (0),''MOVE DSET'',CLASS=A,MSGCLASS=T,'
 * CARD02 WAS HARDCODED, REPLACED BY AUTHCARD DD INPUT
@@ -490,8 +759,8 @@ CARD09   DC    C'// DISP=(OLD,DELETE,DELETE),'
 *CARD05  DC    C'// DSN=d'                 --- DO NOT REDEFINE
 CARD10   DC    C'//SYSUT2 DD VOL=SER=??????,UNIT=????,'
 CARD11   DC    C'// DCB=*.SYSUT1,'
-CARD12PO DC    C'// SPACE=(TRK,(010,005,015)),'  HARD CODE
-CARD12PS DC    C'// SPACE=(TRK,(010,005)),'      HARD CODE
+CARD12PO DC    C'// SPACE=(TRK,(00000,1,000)),'  PRI-EXT AND DIR CHANGE
+CARD12PS DC    C'// SPACE=(TRK,(00000,1)),'      PRI-EXT WILL CHANGE
 CARD12A  DC    C'// DISP=(NEW,CATLG,DELETE),'
 *CARD05  DC    C'// DSN=d'                 --- DO NOT REDEFINE
 CARD13PO DC    C'//SYSIN DD *'
@@ -499,7 +768,7 @@ CARD13PS DC    C'//SYSIN DD DUMMY'
 CARD14   DC    C'//'
 CARD15   DC    C' COPY INDD=SYSUT1,OUTDD=SYSUT2'
 CARD16   DC    C'/*'
-* 
+         EJECT
 * ---------------------------------------------------------------------
 * THESE VARIABLES ARE USED IN THE DDnnn VTOC SCANNING CODE.
 * ---------------------------------------------------------------------
@@ -513,7 +782,12 @@ COMPARDS CLC   DSCB1(0),DSPREFIX  COMPARE VARLEN PREFIX
          DS    0D
 DSCB1    DS    CL144
          ORG   DSCB1
-         IECSDSL1 1             MAP THE DSCB FORMAT 1 LAYOUT
+         IECSDSL1 1               MAP THE DSCB FORMAT 1 LAYOUT
+         ORG
+DSATFMT3 DS    0D,148C            FORMAT 3 DSCB (ADD EXTENTS)
+         ORG   DSATFMT3
+         #VTCFMT3
+         ORG
 DD0001   DCB   DDNAME=DD0001,DSORG=PS,MACRF=R,RECFM=F,BLKSIZE=96,      X
                EXLST=EXLST,KEYLEN=44,EODAD=EOFDISK
 EXLST    DC    0F'0',X'87',AL3(JFCB)
@@ -523,8 +797,53 @@ EXLSTBKL DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
 JFCBAREA DC    176X'00'                 JFCB AREA
          ORG   JFCBAREA
          IEFJFCBN LIST=NO      MAP THE JFCB AREA
+         EJECT
 * ---------------------------------------------------------------------
+* Added for DYNALLOC requirements for opening PDS files and counting
+* the directory blocks used.
 * ---------------------------------------------------------------------
+DYNASAVE DS    16F      SAVE ALL REGISTERS OVER DYNALLOC CODE
+DIR$FILE DCB   DDNAME=MDDYN01,BLKSIZE=256,LRECL=256,RECFM=F,           X
+               DSORG=PS,EODAD=DIREND,MACRF=GL 
+         DS    0D       ALIGN SO CVD CAN USE PL8 FIELD BELOW
+DIRBUSED DS    PL8      DIR BLOCKS USED PACKED
+DIRSIZE  DS    CL8      DIR BLOCKS USED AS TEXT
+MDHTEMP  DS    H
+RBPTR    DS    F
+REQBLK   DS    CL(S99RBEND-S99RB)
+REQBLKLN EQU   L'REQBLK
+* ----------------- DYNAMIC ALLOCATION FIELDS -----------------
+* TEXT UNITS POINTER LIST
+TUPTR001 DS    0F
+         DC    A(TUDDNA1)  ADDR OF TU FOR DDNAME
+         DC    A(TUDSSA1)  ADDR OF TU FOR DS STATUS
+         DC    A(TUDSNA1)  ADDR OF TU FOR DSNAME
+         DC    X'80'       INDICATES LAST TU ADDR FOLLOWS
+         DC    A(TUVOLA1)  ADDR OF TU FOR VOLSER
+* TEXT UNITS, KEYS AND VALUES
+TUDDNA1  DC    AL2(DALDDNAM) TU KEY FOR DDNAME
+         DC    AL2(1)        NUMBER OF ENTRIES
+         DC    AL2(7)        LENGTH OF DDNAME
+         DC    CL7'MDDYN01'  DD NAME
+TUDSSA1  DC    AL2(DALSTATS),AL2(1),AL2(1),X'08'  DISP=(KEEP,
+TUDSNA1  DC    AL2(DALDSNAM),AL2(1)
+DYNDSLEN DC    AL2(44)
+DYNDSNAM DC    CL44' '
+TUVOLA1  DC    AL2(DALVLSER),AL2(1),AL2(6)           VOL=SER=DUMMY1
+TUVOLSER DC    CL6'DUMMY1'                        REPLACED WHEN CALLED
+TUBLKSIZ DC    AL2(DALBLKSZ),AL2(1),AL2(2),X'0100'  BLKSIZE=256
+TULRECL  DC    AL2(DALLRECL),AL2(1),AL2(2),X'0100'  LRECL=256 
+TUDSORG  DC    AL2(DALDSORG),AL2(1),AL2(2),X'4000'  DSORG=PS 
+TURECFM  DC    AL2(DALRECFM),AL2(1),AL2(1),X'80'    RECFM=F
+* ----------- DYNAMIC UN-ALLOCATION FIELDS -----------
+TUPTR003 DS    0F
+         DC    X'80'           INDICATE LAST ENTRY FOLLOWS
+         DC    AL3(TUDDNU1)    ADDR OF DDNAME TO UNALLOCATE
+TUDDNU1  DC    AL2(DUNDDNAM)   KEY FOR DDNAME UNALLOC
+         DC    AL2(1)          NUMBER OF ENTRIES
+         DC    AL2(7)          LENGTH OF DDNAME
+         DC    C'MDDYN01'      DDNAME
+         SPACE 3
          YREGS
          END
 ZZ
@@ -533,37 +852,21 @@ ZZ
 //*
 //* ===================================================================
 //* TEST THE PROGRAM
-//* You should create some test datasets on a volser you want them
-//* to me moved off.
 //* ===================================================================
-//*
-//* PARM DATA IS
-//*    PREFIX=   DATASET PREFIX (OR PARTIAL PREFIX)
-//*    COMMA
-//*    VOL=      VOLSER TO MOVE FOUND DATASETS ONTO
-//*    COMMA
-//*    UNIT=     THE CORRECT UNIT FOR THE VOLSER
 //TESTIT1  EXEC PGM=MDMOVEDS,COND=(0,NE),
-// PARM='PREFIX=GUEST3,VOL=PUB012,UNIT=3380'
+// PARM='PREFIX=GUEST3,VOL=MDTSO1,UNIT=3350'
 //STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
 //SYSPRINT DD   SYSOUT=*
-//*
-//* AUTHCARD CONTAINS THE USERID/PASSWORD JCL CARD
-//* APPENDED AFTER THE JOBCARD
-//* ---- YOU SHOULD HAVE THIS IN A SECURED PDS ----
+//* --- AUTHCARD CONTAINS THE USERID/PASSWORD JCL CARD
+//*     APPENDED AFTER THE JOBCARD
 //AUTHCARD DD   DATA,DLM=ZZ
-// USER=adminusr,PASSWORD=somepass
+// USER=HERC01,PASSWORD=HERCPW1
 ZZ
-//*
-//* INTRDR, BELOW SUBMITS JOB TO INTRDR CLASS A
-//INTRDR   DD   SYSOUT=(A,INTRDR)
-//*
-//* AND A LIST OF VOLSERS TO BE VTOC SCANNED
-//DD0001   DD   DISP=SHR,UNIT=3350,VOL=SER=MVSRES
-//DD0002   DD   DISP=SHR,UNIT=3350,VOL=SER=SRCMD1
-//DD0003   DD   DISP=SHR,UNIT=3375,VOL=SER=PUB001
-//* MOVE GUEST3 FROM PUB001 TO PUB012, ONLY THE LAST
-//* CARD ABOVE WILL CAUSE A DATASET MOVE
-//* ..AND THE BELOW SHOULD BE SKIPPED AS IT IS TARGET
-//DD0004   DD   DISP=SHR,UNIT=3380,VOL=SER=PUB012
+//* --- INTRDR, BELOW SUBMITS JOB TO INTRDR CLASS A
+//*INTRDR   DD   SYSOUT=(A,INTRDR)
+//INTRDR   DD   SYSOUT=*
+//* --- A LIST OF VOLSERS TO BE VTOC SCANNED FOR PREFIX DSETS
+//DD1      DD   DISP=SHR,UNIT=3390,VOL=SER=MDTSO2
+//DD2      DD   DISP=SHR,UNIT=3380,VOL=SER=PUB012
+//DD3      DD   DISP=SHR,UNIT=3350,VOL=SER=SRCMD1
 //
