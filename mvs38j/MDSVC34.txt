@@ -1,0 +1,179 @@
+//MARKASM  JOB (0),'MDSVC34',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  DATA,DLM=ZZ
+**********************************************************************
+*                                                                    *
+*  MDSVC34                                                           *
+*                                                                    *
+*  FOR THE COMMAND PASSED AS A PARM                                  *
+*       WTO THE COMMAND TO BE ACTIONED                               *
+*       ISSUE THE COMMAND                                            *
+*  MAX COMMAND LEN CURRENTLY 35 BYTES WHICH SHOULD BE FINE FOR       *
+*  MY USE. I USE IT AS A MODULE CALLED BY SOME OF MY OTHER PROGRAMS  *
+*  TO AVOID THEM HAVING TO BE AC=1 RATHER THAN INTENDING IT FOR      *
+*  BATCH USE, BUT IT WORKS OK IN BATCH.                              *
+*                                                                    *
+*  MUST BE IN A APF LIBRARY STORED WITH AC=1                         *
+*                                                                    *
+*  USES RAKF RULE FACILITY SVC34 TO CONTROL WHE CAN RUN THE PROGRAM  *
+*  IF YOU DO NOT HAVE A SECURITY PRODUCT INSTALLED CHANGE THE        *
+*  VARIABLE &USERAKF TO 0                                            *
+*                                                                    *
+**********************************************************************
+         SPACE 2 
+         LCLB  &USERAKF
+&USERAKF SETB  1
+         EJECT   
+MDSVC34  CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 2
+*        --- GET THE PARM FIELD PASSED ---
+*        WE ONLY EXPECT ONE PARM SO NO NEED TO CHECK FOR MORE
+         LTR   R1,R1
+         BZ    NOPARM
+         LR    R2,R1               ADDRESS OF ADDR LIST TO R2
+         L     R5,0(,R2)           R5 TO ADDRESS DATA FIELD
+* OK, SAVE THE PARM TO CMDTEXT
+         SR    R3,R3               LEN OF PARM TO R3
+         LH    R3,0(R5)
+         C     R3,=F'0'            IF IT IS ZERO, ALSO NO PARM
+         BE    NOPARM
+         LA    R4,L'CMDTEXT        MAX FIELD LEN ALLOWED IN R4
+         CR    R3,R4               WILL PARM FIT ?
+         BNH   PARMOK                 YES, OK
+         LA    R3,L'CMDTEXT           NO, TRUNCATE TO MAX LEN
+PARMOK   EX    R3,EXPRMSAV         SAVE CMD FOR LEN DETERMINED
+         EX    R3,EXWTOSAV         USE IN THE WTO ALSO
+         A     R3,=F'4'            INCLUDE 4 BYTE LENGTH SIZE
+         STH   R3,CMDLEN           SAVE LENGTH OF COMMAND AREA
+         SPACE 1
+         GETJNAME DATA=JOBNAME     GET JOBNAME FOR WTOS
+         AIF   (&USERAKF EQ 0).NORAKF1
+         EJECT
+CHEKAUTH MVC   AUTHCHK(LRACHECK),RACHECKL    INIT RACHECK MACRO
+RACSVC   RACHECK CLASS=RACLASS,ENTITY=RAOBJECT,MF=(E,AUTHCHK)
+         C     R15,=F'0'  AUTHORISED, NOTE THAT RAKF ALSO
+         BE    CONTWTO    RETURNS 0 IF NO RULE, ALTHOUGH
+*                         RAKF LOGS A MSG SAYING SO, THIS
+*                         MEANS WE DO NOT CHECK RC=4 (NORULE)
+*                         AS RAKF NEVER RETURNS THAT
+         C     R15,=F'8'  EXPLICITLY DENIED BY RAKF RULES
+         BE    NOTAUTH
+         C     R15,=F'12'  NO SECURITY PRODUCT INSTALLED
+         BE    NORAKF 
+         B     CONTWTO    SHOULD NEVER GET HERE, DEFAULT 
+*                         IS TO CARRY ON
+NOTAUTH  MVC   NOTAUTH1+17(8),JOBNAME
+NOTAUTH1 WTO   'MID0061E ....+... ACCESS DENIED TO FACILITY SVC34'
+         B     EXIT4
+NORAKF   MVC   NORAKF1+17(8),JOBNAME
+NORAKF1  WTO   'MID0062W ....+... NO SECURITY PRODUCT INSTALLED'
+.NORAKF1 ANOP
+         EJECT
+* A PARM WAS PASSED, AND COMMAND STORED
+* WTO THE COMMAND BEING USED AND ISSUE THE COMMAND
+CONTWTO  MVC   CONTWTO1+17(8),JOBNAME
+CONTWTO1 WTO   'MID0063I         :                                   ',X
+               DESC=(5)
+         MODESET KEY=ZERO,MODE=SUP
+         SR    R1,R1                  CLEAR R1
+         LA    R1,CMDLEN              CMDBUFF NO CMD ISSUED ?
+         SR    0,0                    INDICATE MASTER CONSOLE
+         SVC   34                     ISSUE COMMAND
+         MODESET KEY=NZERO,MODE=PROB
+EXIT     CNOP  0,4                
+         L     R13,4(R13)          
+         LM    R14,R12,12(R13)
+         SLR   R15,R15              RC=0000
+         BR    R14
+EXIT4    L     R13,4(R13)        
+         LM    R14,R12,12(R13)
+         LA    R15,4                RC=0004
+         BR    R14
+         SPACE 3
+*  --- NO PARM OR BAD PARM PROVIDED, FATAL ERROR
+NOPARM   CNOP  0,4
+         GETJNAME DATA=JOBNAME     GET JOBNAME FOR WTO
+         MVC   NOPARM1+17(8),JOBNAME
+NOPARM1  WTO   'MID0067E         :MDSVC34:NO PARM DATA PROVIDED'
+         B     EXIT4     --- SO EXIT OUT
+         EJECT   
+SAVEAREA DS    18F
+JOBNAME  DC    CL8' '
+         SPACE 3
+* EX COMMAND DEFINITIONS
+EXWTOSAV MVC   CONTWTO1+26(0),2(R5) SAVE PARM1 DATA FROM +2 FOR WTO
+EXPRMSAV MVC   CMDTEXT(0),2(R5)     SAVE PARM1 DATA FROM +2 FOR CMD
+         SPACE 3
+* SVC34 COMMAND AREA TO BE USED
+CMDBUFF  DS    0F                   NEXT TWO ARE THE COMMAND
+CMDLEN   DC    AL2(0),AL2(0)        TEXT LENGTH, FLAGS
+CMDTEXT  DC    CL35' '              COMMAND TEXT -- IF CHANGED ALSO
+*                                   CHANGE WTO AREA SIZE !
+         AIF   (&USERAKF EQ 0).NORAKF2
+* USED FOR RAKF AUTHORITY PRE-CHECKING
+RACLASS  DC    AL1(L'RACLASSN)
+RACLASSN DC    C'FACILITY'
+RACHECKL RACHECK MF=L
+LRACHECK EQU   *-RACHECKL
+AUTHCHK  RACHECK MF=L
+RAOBJECT DC    CL20'SVC34'
+.NORAKF2 ANOP
+         EJECT
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+         END
+ZZ
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH(MDSVC34),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=1',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ SETCODE AC(1)
+ INCLUDE SYSLMOD(MDSVC34)
+ ENTRY MDSVC34
+ NAME MDSVC34(R)
+/*
+//

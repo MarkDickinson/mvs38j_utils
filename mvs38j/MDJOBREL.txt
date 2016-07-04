@@ -2,11 +2,23 @@
 //*
 //*  INSTALLATION
 //*
+//* --------------------------------------------------------
+//* PRE-REQUISITES
+//*  MDSVC34  - now supplied seperately
+//*  As that program is used by many of my automation tools
+//*  now I am no longer including an out of date copy with
+//*  this file. The latest stable copy is available from this
+//*  github site, the latest versions are at
+//*  (one line of course)
+//*  http://mdickinson.dyndns.org/hercules/downloads/
+//*    misc_asm/mdsvc34.asm.txt
+//* --------------------------------------------------------
+//*
 //*  A - Pre-installation
 //*
 //*  Customisations required ... IN ORDER
-//*  (1) globally change "SYS9.LINKLIB.APFAUTH" to one of your
-//*      APF authourised libraries
+//*  (1) ensure you have previously installed my MDSVC34 
+//*      program, or this cannot do anything
 //*  (2) globally change "SYS9.LINKLIB" to one of your non_APF
 //*      authourised libraries
 //*  (3) globally change SYS9.PROCLIB to one of your
@@ -25,7 +37,6 @@
 //*  C - Install the files
 //*  (8) run the members below, all should return CC=0000
 //*         MDJOBREL     (assemble)
-//*         MDSVC34      (assemble)
 //*         SAMPPROC     (install procedure)
 //*         MDJOBLOG     --> optional, dummy to stop 813 
 //*                          module not found errors but
@@ -37,7 +48,7 @@
 //*
 //*  D - thats it, done
 //*      in batch jobs that are expected to release any
-//*      dependant jobs just add as the lost job step
+//*      dependant jobs just add as the last job step
 //*      to each job
 //*        //STEPX EXEC PROC=MDJOBREL
 //*
@@ -203,15 +214,15 @@ GOTCODE  DS    0H
 * it to an indexed log file for viewing/re-running).
 * ------------------------------------------------------
 MDJOBRE1 CNOP  0,4
-         MVC   INFOMSG1(8),JOBNAME
+         MVC   INFOMSG1+9(8),JOBNAME
          L     R3,MAXALLOW
-         TODEC8 REG=R3,BUF=INFOMSG1+23
+         TODEC8 REG=R3,BUF=INFOMSG1+32
          CLI   JOBABEND,C'Y'
          BNE   MDJOBRE2
-         MVC   INFOMSG1+43(8),=CL8'ABENDED '         
+         MVC   INFOMSG1+52(8),=CL8'ABENDED '         
          B     MDJOBRE3
 MDJOBRE2 L     R3,MAXJOBCC
-         TODEC8 REG=R3,BUF=INFOMSG1+43
+         TODEC8 REG=R3,BUF=INFOMSG1+52
 MDJOBRE3 EQU   *
          SPACE 2
 * ------------------------------------------------------
@@ -237,8 +248,10 @@ SCANCTL  GET   CONTROL
 SCAN01   SCAN  MAXLEN=8,TYPE=FILENAME
          C     R5,ONE
          BC    GE,SCANCTL2
-         MVC   CARDBAD+8(8),JOBNAME
-CARDBAD  WTO   '         : MDJOBREL BAD CONTROL CARD FOUND',ROUTCDE=11
+         MVC   CARDBAD+17(8),JOBNAME
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+CARDBAD  WTO   'MID0040E jjjjjjjj MDJOBREL BAD CONTROL CARD FOUND',    X
+               ROUTCDE=11
          B     SCANCTL
 SCANCTL2 MVC   JES2LINE(3),=CL3'$A'''  AND INTO THE JES2 COMMAND
          EX    R5,SETJMSG
@@ -273,9 +286,10 @@ SCANCTL2 MVC   JES2LINE(3),=CL3'$A'''  AND INTO THE JES2 COMMAND
 * ALL OK AT THIS POINT, ISSUE THE CONSOLE COMMAND
          LINK  EP=MDSVC34,PARAM=JES2CMD,ERRET=SVC34ERR
 * LOG WHAT JOB WE HAVE JUST RELEASED
-SCANCTL4 MVC   CARDACT+8(8),JOBNAME
-         MVC   CARDACT+42(8),JES2NAME
-CARDACT  WTO   '         : MDJOBREL RELEASING JOB          ',ROUTCDE=11
+SCANCTL4 MVC   CARDACT+17(8),JOBNAME
+         MVC   CARDACT+49(8),JES2NAME
+CARDACT  WTO   'MID0041I jjjjjjjj MDJOBREL RELEASING JOB          ',   X
+               ROUTCDE=11
 CARDFND  MVI   ONEFOUND,C'Y'
          SPACE 2
          B     SCANCTL             SEARCH FOR MORE CARDS
@@ -283,8 +297,9 @@ EOFCTRL  EQU   *
          CLOSE (CONTROL)
          CLI   ONEFOUND,C'Y'
          BC    EQ,EXIT
-         MVC   CARDMISN+8(8),JOBNAME
-CARDMISN WTO   '         : MDJOBREL NO CONTROL CARD FOUND',ROUTCDE=11
+         MVC   CARDMISN+17(8),JOBNAME
+CARDMISN WTO   'MID0042E jjjjjjjj MDJOBREL NO CONTROL CARD FOUND',     X
+               ROUTCDE=11
          B     EXIT
          EJECT
 * ------------------------------------------------------
@@ -292,14 +307,16 @@ CARDMISN WTO   '         : MDJOBREL NO CONTROL CARD FOUND',ROUTCDE=11
 * (IF ANY) THAT WERE FOUND IN THE JOBSTEPS.
 * ------------------------------------------------------
 *
-PARMERR  MVC   PARMERRW+8(8),JOBNAME
-PARMERRW WTO   '-------- : MDJOBREL BAD PARM, READ MANUAL',ROUTCDE=11
+PARMERR  MVC   PARMERRW+17(8),JOBNAME
+PARMERRW WTO   'MID0043E -------- MDJOBREL BAD PARM, READ MANUAL',     X
+               ROUTCDE=11
          B     EXIT
          SPACE 2
-DOALERT  MVC   ALRTMSG+8(8),JOBNAME
-         MVC   ALRTMSG+29(8),JES2NAME
+DOALERT  MVC   ALRTMSG+17(8),JOBNAME
+         MVC   ALRTMSG+38(8),JES2NAME
          MVI   ONEFOUND,C'Y'       STOP NO JOBS FOUND MSG
-ALRTMSG  WTO   'XXXXXXXX FAILED, JOB XXXXXXXX NOT RELEASED',DESC=(2)
+ALRTMSG  WTO   'MID0044E XXXXXXXX FAILED, JOB XXXXXXXX NOT RELEASED',  X
+               DESC=(2)
          B     SCANCTL          KEEP LOOKING FOR ANY OTHER JOBS THAT
 *                               WOULD HAVE BEEN RELEASED BY THIS ONE,
 *                               WE NEED TO REPORT THEM ALL.
@@ -309,16 +326,19 @@ EXIT     EQU   *
          BC    EQ,EXIT2            NONE, JUST EXIT
 *                                  ELSE REPORT WE HAVE NOT RELEASED
 *                                  ANY JOBS AND HALTED THE JOBSTREAM
-* 51 BYTES... SHOULD MATCH MSG LEN OF INFOMSG1
-         MVC   ALRTMSG2+8(51),INFOMSG1
-ALRTMSG2 WTO   'jjjjjjjj MAXCC ALLOWED=XXXXXXXX, MAX JOBCC=XXXXXXXX',  X
-               DESC=(2)
-         MVC   ALRTMSG3+8(8),JOBNAME
-ALRTMSG3 WTO   'XXXXXXXX FAILED, JOBSTREAM HALTED',DESC=(2)
+* 60 BYTES... SHOULD MATCH MSG LEN OF INFOMSG1
+         MVC   ALRTMSG2+8(L'INFOMSG1),INFOMSG1
+         MVC   ALRTMSG2+8(8),=CL8'MID0046E'
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+ALRTMSG2 WTO   'mmmmmmmm jjjjjjjj MAXCC ALLOWED=XXXXXXXX, MAX JOBCC=XXXX
+               XXXXX     ',DESC=(2)
+         MVC   ALRTMSG3+17(8),JOBNAME
+ALRTMSG3 WTO   'MID0047E XXXXXXXX FAILED, JOBSTREAM HALTED',DESC=(2)
          B     EXIT3
-* 51 BYTES... SHOULD MATCH MSG LEN OF INFOMSG1
-EXIT2    MVC   INFOTEXT+8(51),INFOMSG1
-INFOTEXT WTO   'jjjjjjjj MAXCC ALLOWED=XXXXXXXX, MAX JOBCC=XXXXXXXX'
+* 60 BYTES... SHOULD MATCH MSG LEN OF INFOMSG1
+EXIT2    MVC   INFOTEXT+8(L'INFOMSG1),INFOMSG1
+INFOTEXT WTO   'mmmmmmmm jjjjjjjj MAXCC ALLOWED=XXXXXXXX, MAX JOBCC=XXXX
+               XXXXX     '
          EJECT
 * ------------------------------------------------------
 * 
@@ -341,12 +361,13 @@ INFOTEXT WTO   'jjjjjjjj MAXCC ALLOWED=XXXXXXXX, MAX JOBCC=XXXXXXXX'
 *       do with the message data.
 *
 * ------------------------------------------------------
-         MVC   MDLOGDAT(L'INFOMSG1),INFOMSG1  CURRENTLY 51 BYTES
+         MVC   MDLOGDAT(L'INFOMSG1),INFOMSG1  CURRENTLY 60 BYTES
 *                                    ALTHOUGH DATA AREA IS 80
          LINK  EP=MDJOBLOG,ERRET=NOLOGPGM,PARAM=(MDLOGPRM),VL=1
          B     EXIT3       ALL DONE, LEAVE PROGRAM
-         MVC   NOLOGPGM+8(8),JOBNAME
-NOLOGPGM WTO   'jjjjjjjj NO MDJOBLOG PROGRAM, DISK LOGGING SKIPPED'
+         MVC   NOLOGPGM+17(8),JOBNAME
+NOLOGPGM WTO   'MID0048E jjjjjjjj NO MDJOBLOG PROGRAM, DISK LOGGING SKIX
+               PPED'
          B     EXIT3
 MDLOGPRM DC    AL2(80)             PARM LENGTH, CARD IMAGE FOR NOW
 MDLOGDAT DC    CL80' '             PARM DATA               
@@ -367,19 +388,21 @@ EXIT3    EQU   *
 * AND WHILE WE ARE HERE, CALLED FOR > $A'12345678'
 * AS WELL.
 *
-PROGERR  CVD    R6,DECIMAL
-         UNPK   DECIMAL(3),DECIMAL+6(2)
-         OI     DECIMAL+2,C'0'
-         MVC    ERRWTO+44(3),DECIMAL
-         MVC    ERRWTO+8(8),JOBNAME
-         ST     R1,ERRSAVR1
-ERRWTO   WTO    '        :*ERROR* MDJOBREL CMDLEN OF nnn CALCULATED'
-         L      R1,ERRSAVR1
-         B      EXIT2
-ERRSAVR1 DS     1F
+PROGERR  CVD   R6,DECIMAL
+         UNPK  DECIMAL(3),DECIMAL+6(2)
+         OI    DECIMAL+2,C'0'
+         MVC   ERRWTO+53(3),DECIMAL
+         MVC   ERRWTO+17(8),JOBNAME
+         ST    R1,ERRSAVR1
+ERRWTO   WTO   'MID0049E         :*ERROR* MDJOBREL CMDLEN OF nnn CALCULX
+               ATED'
+         L     R1,ERRSAVR1
+         B     EXIT2
+ERRSAVR1 DS    1F
 * ------------------------------------------------------
 * ------------------------------------------------------
-SVC34ERR WTO   'ERROR: PROGRAM MDSVC34 NOT FOUND'
+SVC34ERR MVC   SVC34ERW+17(8),JOBNAME               
+SVC34ERW WTO   'MID0047E jjjjjjjj PROGRAM MDSVC34 NOT FOUND'
          B     EOFCTRL       JUMP TO CLOSE SYSIN B4 EXIT
 *
 * ------------------------------------------------------
@@ -410,7 +433,10 @@ PACK     PACK  DWORK,2(*-*,3)      ** EXECUTE ONLY **
 DWORK    DC    D'0'                DOUBLE WORD WORK AREA
 MAXALLOW DC    F'0'                MAX ALLOWED CC IN PRIOR STEPS
 MAXJOBCC DS    F                   WHAT WAS THE MAX JOB CC       
-INFOMSG1 DC   CL51'jjjjjjjj MAXCC ALLOWED=XXXXXXXX, MAX JOBCC=XXXXXXXX'
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+INFOMSG1 DC    CL60'MID0045I jjjjjjjj MAXCC ALLOWED=nnnnnnnn, MAX JOBCCX
+               =nnnnnnnn'
+*                  MID0046E for same text if a failed job message
 * SVC34 STUFF HERE NOW
          DS    0F
 JES2CMD  DC    AL2(0)
@@ -467,14 +493,14 @@ LE       EQU   13 -                A NOT HIGH
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=1',
 //             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH(MDJOBREL),DISP=SHR
+//SYSLMOD  DD  DSN=SYS9.LINKLIB(MDJOBREL),DISP=SHR
 //SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
 //SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
 //SYSPRINT DD  SYSOUT=*
 //LKED2   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=1',
 //             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
+//SYSLMOD  DD  DSN=SYS9.LINKLIB,DISP=SHR
 //SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
 //SYSPRINT DD  SYSOUT=*
 //SYSLIN   DD  *
@@ -482,464 +508,6 @@ LE       EQU   13 -                A NOT HIGH
  ENTRY MDJOBREL
  NAME MDJOBREL(R)
 /*
-//
-./ ADD NAME=MDWAIT
-//MARKASM  JOB (0),'MDWAIT',CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
-//ASM     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
-//         DD  DISP=SHR,DSN=SYS1.AMODGEN
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *
-* -------------------------------------------------------------------
-*
-* MDWAIT:
-*
-* Purpose: to wait until a job has finished running, then exit.
-*          It will check every 60 seconds to see if the job it is
-*          waiting on has completed.
-*          This is for my batch processing where I have some backup
-*          jobs that are automatically generated and submitted to
-*          the INTRDR, the job submitting them would then release a
-*          dataset compress job; sometimes the compress would start
-*          first (which is bad).
-*          Now when jobs are submitted in the background the next
-*          batch job my scheduled jobs release is a job to wait for
-*          the background job to complete (using this), and my
-*          nicely ordered batch stream runs in order again.
-*
-* Useage:
-*    //STEPA EXEC PGM=MDWAIT,PARM='JOBNAME'
-*        The PARM= should contain the name of the batch job or
-*        STC you want to wait on until the job completes.
-*
-* Messages (all WTOs)
-*   In all cases JJJJJJJJ is replaces by the name of the batch job
-*   that is running MDWAIT. The ________ is replaced by the jobname
-*   from the PARM= field. This makes it easier to see what is
-*   waiting.
-*
-*     NO JOBNAME TO WAIT ON PROVIDED, ABEND U0100
-*         Can't run witout a jobname to wait on, just abend
-*
-*     JJJJJJJJ: WAITING ON JOB ________ (CHECK INTVL=1MIN)
-*         This is the job we are waiting on, will check in 1 min.
-*
-*     JJJJJJJJ: WAIT COMPLETE ON JOB ________
-*         The job we were waiting on has completed.
-*
-*
-* -------------------------------------------------------------------
-MDWAIT   CSECT
-         STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-*
-* ---- ENSURE WE HAVE A PARM, SAVE PARMLEN AS THE JOBNAME
-         L     R1,0(,R1)           POINT TO PARM
-         LH    R0,0(,R1)           GET LENGTH OF PARM
-         LTR   R0,R0               IF ZERO THEN NO PARM
-         BNZ   SAVEPARM
-         WTO   'NO JOBNAME TO WAIT ON PROVIDED, ABEND U0100'
-         ABEND 100
-*
-SAVEPARM LA    R1,2(,R1)           ADDRESS PARM DATA
-         LR    R7,R0               MOVE LEN TO R7 (R0 TRASHED IN EX)
-         EX    R7,SAVEJNAM         SAVE FOR LEN R0 (NOW PARMLEN IN R7)
-* SEEMS TO ADD A TRAILING NULL ?, TEST AND CLEAR IF SO
-         LA    R7,JOBNAME
-         AR    R7,R0              NOTE: MAY TRASH EX IF JNAME WAS
-*                                    EIGHT BYTES, OK AS DONE WITH IT
-*                                    SHOULDNT AS EX WILL NOT BE NULL
-         CLI   0(R7),0
-         BNE   SKIPNUL
-         MVI   0(R7),C' '
-SKIPNUL  CNOP 0,4
-         BAL   R4,GETJOBID
-*
-* RECORD WHAT WE ARE WAITING ON
-         MVC   WTO1+8(8),MYJNAME
-         MVC   WTO1+33(8),JOBNAME
-WTO1     WTO   'JJJJJJJJ: WAITING ON JOB ________ (CHECK INTVL=1MIN)'
-         STIMER WAIT,,DINTVL=SECS60
-*
-* WE SLEEP 60 SECS (ABOVE), CHECK FOR THE JOB (BELOW), AND IF IT IS
-* STILL RUNNING WE LOOP BACK TO THE WTO AND WAIT AGAIN.
-* IF THE JOB WE ARE WAITING ON IS NO LONGER RUNNING WE EXIT.
-         LA    R3,0
-         USING PSA,R3               PSA--->CVT
-         L     R4,FLCCVT
-         USING CVTMAP,R4            CVT--->ASVT
-         L     R7,CVTASVT
-         USING ASVT,R7              ASVT--->ASCB
-         XR    R8,R8                ZERO
-NEXTASID DS    0H
-         L     R5,ASVTENTY(R8)      AN ASID
-         USING ASCB,R5
-         CLM   R5,B'1000',=X'80'    IS HIGH BIT ON ?
-         BNE   INUSE                   NO, VALID
-         CLM   R5,B'0111',=XL3'0'   END OF TABLE ?
-         BE    ENDASVT                 ALL OVER
-RENTR    DS    0H
-         LA    R8,4(R8)             INCREMENT ASVTENTY ENTRY
-         B     NEXTASID
-INUSE    DS    0H
-         L     R6,ASCBJBNI          JOBNAME IF INITIATOR
-         LTR   R6,R6
-         BNZ   TESTIT
-         L     R6,ASCBJBNS          JOBNAME IF STC, ETC
-* THE CONTROL BLOCK ENTRY IS TRAILINg SPACE PADDED SO WE CAN
-* COMPARE FOR A FULL 8 BYTES (TO AVOID POSSIBLE FALSE MATCHES
-* ON SHORT JOB NAMES)
-TESTIT   CLC   JOBNAME(8),0(R6)     IS THIS THE JOB ?
-         BE    WTO1                   YES, GO BACK AND WAIT
-         B     RENTR                  NO, KEEP LOOKING, GET NEXT
-*
-* END OF ASVT TABLE, THE TASK IS NOT RUNNING, WE CAN EXIT
-ENDASVT  B     EXIT
-*
-* NORMAL EXIT BLOCK
-EXIT     CNOP  0,4
-         MVC   WTO2+8(8),MYJNAME
-         MVC   WTO2+39(8),JOBNAME
-WTO2     WTO   'JJJJJJJJ: WAIT COMPLETE ON JOB ________'
-         L     R13,4(R13)
-         LM    R14,R12,12(R13)
-         SLR   R15,R15
-         BR    R14
-         EJECT
-         DS    0F
-* GET THE JOBNAME OF THIS BATCH JOB, USE IN WTO MESSAGES
-GETJOBID LA    R5,16               ADDR OF CVT POINTER
-         L     R6,0(R5)            ADDR OF CVT
-         L     R5,0(R6)            ADDR OF TCBS
-         L     R6,4(R5)            ADDR OF 2ND TCB
-         L     R5,180(R6)          ADDR OF JSCB
-         L     R6,260(R5)          ADDR OF JCT PREFIX
-         LA    R6,24(R6)           ADDR OF JOBNAME IN JCT
-         MVC   MYJNAME(8),0(R6)    STORE THE JOBNAME
-         BR    R4
-         EJECT
-SAVEAREA DS    18F                SAVEAREA FOR MAIN PROGRAM
-JOBNAME  DC    CL8' '             THE JOBNAME WE WILL WAIT FOR
-MYJNAME  DC    CL8' '             THE JOBNAME WE WILL WAIT FOR
-SAVEJNAM MVC   JOBNAME(0),0(R1)   EX COMMAND TO SAVE JOBNAME PARM
-SECS60   DC      CL8'00006000'    SIXTY SECONDS, FOR STIMER
-         LTORG
-         IHAPSA
-         CVT DSECT=YES
-         IHAASVT                     * ASVT MAP
-         IHAASCB
-*
-* REGISTER EQUATES
-R0       EQU   0
-R1       EQU   1
-R2       EQU   2
-R3       EQU   3
-R4       EQU   4
-R5       EQU   5
-R6       EQU   6
-R7       EQU   7
-R8       EQU   8
-R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
-R13      EQU   13
-R14      EQU   14
-R15      EQU   15
-         END
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
-//LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB(MDWAIT),
-//    DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB,DISP=SHR
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- INCLUDE SYSLMOD(MDWAIT)
- ENTRY MDWAIT
- NAME MDWAIT(R)
-/*
-//
-./ ADD NAME=MDSVC34
-//MARKASM  JOB (0),'MDSVC34',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
-//ASM     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
-//         DD  DISP=SHR,DSN=INSTALL.MID.MDJOBREL
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *
-**********************************************************************
-*                                                                    *
-*  MDSVC34                                                           *
-*                                                                    *
-*  FOR THE COMMAND PASSED AS A PARM                                  *
-*       WTO THE COMMAND TO BE ACTIONED                               *
-*       ISSUE THE COMMAND                                            *
-*  MAX COMMAND LEN CURRENTLY 35 BYTES WHICH SHOULD BE FINE FOR       *
-*  RELEASING JOBS WHICH IS ALL I WILL USE IT FOR ($A'xxxxxxxx')      *
-*                                                                    *
-*  MUST BE IN A APF LIBRARY STORED WITH AC=1                         *
-*                                                                    *
-*  A N D   AS SUCH CAN ONLY BE INVOKES BY AUTHORISED PROGRAMS IN A   *
-*  AUTHORISED LIBRARY.                                               *
-*                                                                    *
-**********************************************************************
-         SPACE 5
-MDSVC34  CSECT
-         STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-*
-         SPACE 2
-*        --- GET THE PARM FIELD PASSED ---
-*        WE ONLY EXPECT ONE PARM SO NO NEED TO CHECK FOR MORE
-         LTR   R1,R1
-         BZ    NOPARM
-         LR    R2,R1               ADDRESS OF ADDR LIST TO R2
-         L     R5,0(,R2)           R5 TO ADDRESS DATA FIELD
-* OK, SAVE THE PARM TO CMDTEXT
-         SR    R3,R3               LEN OF PARM TO R3
-         LH    R3,0(R5)
-         C     R3,=F'0'            IF IT IS ZERO, ALSO NO PARM
-         BE    NOPARM
-         LA    R4,L'CMDTEXT        MAX FIELD LEN ALLOWED IN R4
-         CR    R3,R4               WILL PARM FIT ?
-         BNH   PARMOK                 YES, OK
-         LA    R3,L'CMDTEXT           NO, TRUNCATE TO MAX LEN
-PARMOK   EX    R3,EXPRMSAV         SAVE CMD FOR LEN DETERMINED
-         EX    R3,EXWTOSAV         USE IN THE WTO ALSO
-         A     R3,=F'4'            INCLUDE 4 BYTE LENGTH SIZE
-         STH   R3,CMDLEN           SAVE LENGTH OF COMMAND AREA
-         GETJNAME DATA=JOBNAME     GET JOBNAME FOR WTO
-         B     CONTWTO
-         SPACE 1
-*  --- NO PARM OR BAD PARM PROVIDED, FATAL ERROR
-NOPARM   CNOP  0,4
-         GETJNAME DATA=JOBNAME     GET JOBNAME FOR WTO
-         MVC   NOPARM1+8(8),JOBNAME
-NOPARM1  WTO   '        :MDSVC34:NO PARM DATA PROVIDED'
-         B     EXIT      --- SO EXIT OUT
-         EJECT
-* A PARM WAS PASSED, AND COMMAND STORED
-* WTO THE COMMAND BEING USED AND ISSUE THE COMMAND
-*               jjjjjjjj ....+....1....+....2....+....3....+  TO LOG
-CONTWTO  MVC   CONTWTO1+8(8),JOBNAME
-CONTWTO1 WTO   '        :                                   ',DESC=(5)
-         MODESET KEY=ZERO,MODE=SUP
-         SR    R1,R1                  CLEAR R1
-         LA    R1,CMDLEN              CMDBUFF NO CMD ISSUED ?
-         SR    0,0                    INDICATE MASTER CONSOLE
-         SVC   34                     ISSUE COMMAND
-         MODESET KEY=NZERO,MODE=PROB
-EXIT     CNOP  0,4                  LETS EXIT
-         L     R13,4(R13)           ERROR HANDLER
-         LM    R14,R12,12(R13)
-         SLR   R15,R15              RC=0000
-         BR    R14
-         SPACE 3
-SAVEAREA DS    18F
-JOBNAME  DC    CL8' '
-         SPACE 3
-* EX COMMAND DEFINITIONS
-EXWTOSAV MVC   CONTWTO1+17(0),2(R5) SAVE PARM1 DATA FROM +2 FOR WTO
-EXPRMSAV MVC   CMDTEXT(0),2(R5)     SAVE PARM1 DATA FROM +2 FOR CMD
-         SPACE 3
-* SVC34 COMMAND AREA TO BE USED
-CMDBUFF  DS    0F                   NEXT TWO ARE THE COMMAND
-CMDLEN   DC    AL2(0),AL2(0)        TEXT LENGTH, FLAGS
-CMDTEXT  DC    CL35' '              COMMAND TEXT -- IF CHANGED ALSO
-*                                   CHANGE WTO AREA SIZE !
-         EJECT
-R0       EQU   0
-R1       EQU   1
-R2       EQU   2
-R3       EQU   3
-R4       EQU   4
-R5       EQU   5
-R6       EQU   6
-R7       EQU   7
-R8       EQU   8
-R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
-R13      EQU   13
-R14      EQU   14
-R15      EQU   15
-*
-         END
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
-//LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=1',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH(MDSVC34),DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=1',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- SETCODE AC(1)
- INCLUDE SYSLMOD(MDSVC34)
- ENTRY MDSVC34
- NAME MDSVC34(R)
-/*
-//
-./ ADD NAME=MDSVC34T
-//MARKTEST JOB (0),'TEST MDSVC34',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
-//* *************************************************************
-//*
-//* THIS JOB TESTS EXECUTION OF THE MDSVC34 PROGRAM
-//* (1) ASSEMBLE A TEST PROGRAM TO INVOKE THE PROGRAM DIRECTLY
-//*     FROM AN ASSEMBLER PROGRAM
-//* (2) RUN THE ASSEMBLED PROGRAM TO TEST INVOKATION
-//* (3) RUN MDSVC34 FROM JCL DIRECTLY TO ENSURE IT WORKS THAT
-//*     WAY OK
-//* (4) RUN MDSVC34 FROM JCL WITH NO PARM TO ENSURE THAT THE
-//*     CORRECT ERROR MESSAGE IS WRITTEN
-//*
-//* *************************************************************
-//ASM     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3330
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *
-**********************************************************************
-*                                                                    *
-*  TESTVC34                                                          *
-*                                                                    *
-*  FOR THE COMMAND PASSED AS A PARM                                  *
-*       WTO THE COMMAND TO BE ACTIONED                               *
-*       ISSUE THE COMMAND                                            *
-*                                                                    *
-*  MUST BE IN A APF LIBRARY STORED WITH AC=1                         *
-*                                                                    *
-**********************************************************************
-         SPACE 5
-TESTVC34 CSECT
-         STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-*
-         SPACE 2
-         LINK  EP=MDSVC34,PARAM=CMDPARMS,ERRET=SVC34ERR
-         B     EXIT
-SVC34ERR CNOP  0,4
-         WTO   'ERROR: PROGRAM MDSVC34 NOT FOUND'
-         B     EXIT
-CMDPARMS DS    0F
-         DC    AL2(14)      12 BYTES IN COMMAND + 2 LEN
-         DC    CL20'$A''DY02BKPU''        ' pad to even num
-         SPACE 2
-EXIT     CNOP  0,4                  LETS EXIT
-         L     R13,4(R13)           ERROR HANDLER
-         LM    R14,R12,12(R13)
-         SLR   R15,R15              RC=0000
-         BR    R14
-         SPACE 3
-SAVEAREA DS    18F
-         EJECT
-R0       EQU   0
-R1       EQU   1
-R2       EQU   2
-R3       EQU   3
-R4       EQU   4
-R5       EQU   5
-R6       EQU   6
-R7       EQU   7
-R8       EQU   8
-R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
-R13      EQU   13
-R14      EQU   14
-R15      EQU   15
-*
-         END
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
-//LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=1',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH(TESTVC34),DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=1',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- SETCODE AC(1)
- INCLUDE SYSLMOD(TESTVC34)
- ENTRY TESTVC34
- NAME TESTVC34(R)
-/*
-//* -----------------------------------------
-//* TEST MDSVC34 PROGRAM USING THE TEST
-//* PROGRAM ASSEMBLED ABOVE
-//* -----------------------------------------
-//TESTPGM1 EXEC PGM=TESTVC34,COND=(0,NE)
-//* -----------------------------------------
-//* ALSO TEST RUNNING IT DIRECTLY USING JCL
-//* -----------------------------------------
-//* TEST MDSVC34 FROM JCL WITH A VALID PARM
-//TESTPGM2 EXEC PGM=MDSVC34,PARM='$A''SYSPROGC''',COND=(0,NE)
-//* TEST MDSVC34 FROM JCL WITH NO PARM, IT SHOULD WRITE AN
-//* ERROR SAYING NO PARM PROVIDED
-//TESTPGM3 EXEC PGM=MDSVC34,COND=(0,NE)
 //
 ./ ADD NAME=SCAN
          MACRO
@@ -1101,100 +669,6 @@ SCN7&SYSNDX BR    R7
 .SKIPTC  ANOP
 SCN9&SYSNDX EQU   *
          MEND
-./ ADD NAME=GETJNAME
-           MACRO
-&NAME      GETJNAME &DATA=
-.* ...................................................................
-.*
-.*   GETJNAME: FRONT END TO GETJNAME MODULE
-.*
-.*   CALL WITH
-.*        GETJNAME DATA=xxxx
-.*             DATA= MUST BE THE NAME OF A DATA AREA WHERE AT LEAST
-.*             EIGHT BYTES CAN SAFELY BE STORED.
-.*
-.*   REGISTERS MODIFIED
-.*      R1 IS USED BY THE MACRO, SHOULD BE SAVE AS R1 IS TRASHED IN
-.*      MOST SYSTEM MACROS ANYWAY SO THE CALLER SHOULD NOT BE USING
-.*      IT FOR ADDRESSING.
-.*      WE DO RESTORE IT SO WE CHANGE NOTHING, BUT IT IT WAS BEING
-.*      USED FOR ADDRESSING THEN THERE ARE UNKNOWN IMPACTS.
-.*
-.* ...................................................................
-         AIF   ('&DATA' EQ '').GJNERR1
-         AIF   (L'&DATA LT 8).GJNERR1
-         B     *+8                 SKIP REGISTER SAVE WORD
-GNJ&SYSNDX DS F
-         ST    1,GNJ&SYSNDX       SAVE R1, WE USE IT
-         LA    1,16               ADDR OF CVT POINTER
-         L     1,0(1)             ADDR OF CVT
-         L     1,0(1)             ADDR OF TCBS
-         L     1,4(1)             ADDR OF 2ND TCB
-         L     1,180(1)           ADDR OF JSCB
-         L     1,260(1)           ADDR OF JCT PREFIX
-         LA    1,24(1)            ADDR OF JOBNAME IN JCT
-         MVC   &DATA.(8),0(1)     STORE JOB NAME
-         L     1,GNJ&SYSNDX       RESTORE R1 TO WHAT IT WAS
-         MEXIT
-.GJNERR1 MNOTE 12,'**** DATA= MUST PROVIDE AN 8 BYTE DATA AREA ****'
-         MEND
-./ ADD NAME=SETRC
-//MARKA    JOB (0),'ASSEMBLE SETRC',MSGLEVEL=1,CLASS=A,MSGCLASS=A
-//ASM     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
-//         DD  DISP=SHR,DSN=SYS1.AMODGEN
-//         DD  DISP=SHR,DSN=SYS1.ATSOMAC
-//         DD  DISP=SHR,DSN=SYS1.HASPSRC
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *
-*
-*    // EXEC PGM=SETRC,PARM=nn
-*
-SETRC    CSECT                     DEFINE PROGRAM CSECT
-         USING *,12                ESTABLISH ADDRESSABILITY
-         SAVE  (14,12),,*          SAVE REGISTERS
-         LR    12,15               COPY EP ADDRESS TO R12
-         SR    15,15               SET RC = 0
-         L     3,0(,1)             LOAD ADDR OF PARM LIST
-         LH    5,0(,3)             LOAD LENGTH OF PARM LIST
-         LTR   5,5                 TEST IF 0
-         BZ    EXIT                BR IF NO PARM LIST
-         BCTR  5,0                 REDUCE LENGTH BY 1
-         EX    5,PACK              CONVERT PARMLIST DATA TO DECIMAL
-         CVB   15,DWORK             AND TO BINARY
-EXIT     RETURN (14,12),T,RC=(15)  RESTORE REGS & RETURN TO CALLER
-PACK     PACK  DWORK,2(*-*,3)      ** EXECUTE ONLY **
-DWORK    DC    D'0'                DOUBLE WORD WORK AREA
-         END   SETRC               END OF SETRC PROGRAM
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
-//LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB(SETRC),DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=SYS9.LINKLIB,DISP=SHR
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- INCLUDE SYSLMOD(SETRC)
- ENTRY SETRC
- NAME SETRC(R)
-/*
-//
 ./ ADD NAME=SAMPPROC
 //MARKA JOB (0),'CREATE MDJOBREL PROC',CLASS=A,MSGCLASS=T
 //COPYPROC EXEC PGM=IEBGENER
@@ -1279,8 +753,7 @@ DY02WAIT DY02PAKU  AFTER THE BACKUP OF PDS WE COMPRESS THEM
 DY02PAKU DUMMY     AT WHICH POINT WE ARE DONE
 *
 * WEEKLY BATCH JOB STREAM
-WK00RDY  WK01MKFL  ON WTOR REPLY U, RELEASE JOB TO CREATE WORK
-*                  FILE FOR WEEKLY BACKUP LISTINGS
+WK00RDY  WK01MKFL  PROMPT FOR OK TO START/CANCEL WEEKLY BATCH 
 WK01MKFL WK01SHUT  IF OK SHUTDOWN EVERYTHING BUT JES2
 WK01SHUT WK02BKPS  AFTER TSO, NET, TASKMON, MMPF SHUTDOWN DO BACKUP
 WK02BKPS WK02WAIT  WAIT FOR ALL INSTANCES OF WK02BKPS TO END
@@ -1391,8 +864,14 @@ MDJOBLOG CSECT
          ST    R13,4(R15)
          LR    R13,R15
 * ---- get the jobname for any WTO messages
-*      The macro saves/restores R1 
-         GETJNAME DATA=JOBNAME
+         LA    R2,16             ADDR OF CVT POINTER
+         L     R2,0(R2)          ADDR OF CVT
+         L     R2,0(R2)          ADDR OF TCBS
+         L     R2,4(R2)          ADDR OF 2ND TCB
+         L     R2,180(R2)        ADDR OF JSCB
+         L     R2,260(R2)        ADDR OF JCT PREFIX
+         LA    R2,24(R2)         ADDR OF JOBNAME IN JCT
+         MVC   JOBNAME,0(R2)     STORE JOB NAME
 * ---- check the parm, adjust len down if parmlen to large
          L     R2,0(,R1)     POINT TO PARM
          LH    R3,0(,R2)     GET PARM LENGTH
@@ -1430,14 +909,17 @@ EXITOK   L     R13,4(R13)
          SLR   R15,R15
          BR    R14
          EJECT
-NOPARM   MVC   NOPARMW+8(8),JOBNAME
-NOPARMW  WTO   'jjjjjjjj NO PARM PASSED TO MDJOBLOG, NO LOGGING'
+NOPARM   MVC   NOPARMW+17(8),JOBNAME
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+NOPARMW  WTO   'MID0056W jjjjjjjj NO PARM PASSED TO MDJOBLOG, NO LOGGINX
+               G'
          B     EXITOK
-NODDCARD MVC   NODDWTO+8(8),JOBNAME
-NODDWTO  WTO   'jjjjjjjj NO LOGFILE DD CARD PRESENT, NO LOGGING'
+NODDCARD MVC   NODDWTO+17(8),JOBNAME
+NODDWTO  WTO   'MID0057W jjjjjjjj NO LOGFILE DD CARD PRESENT, NO LOGGINX
+               G'
          B     EXITOK
-OPENERR  MVC   OPENERRW+8(8),JOBNAME
-OPENERRW WTO   'jjjjjjjj UNABLE TO OPEN LOGFILE, NO LOGGING'
+OPENERR  MVC   OPENERRW+17(8),JOBNAME
+OPENERRW WTO   'MID0058W jjjjjjjj UNABLE TO OPEN LOGFILE, NO LOGGING'
          B     EXITOK
          EJECT
 SAVEAREA DS    18F

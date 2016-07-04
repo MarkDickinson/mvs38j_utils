@@ -299,7 +299,7 @@ NODATE   EQU   *
          RDJFCB BKPLIST                GET THE BKPLIST DATASET NAME
          CLC   JFCBDSNM(6),=CL6'JES2.J'  if a JES2 spool file crash
          BNE   CONTINUE
-         WTO   'BKPLIST DD MUST BE DISK FILE'
+         WTO   'MID0060E BKPLIST DD MUST BE DISK FILE',ROUTCDE=11
          ABEND 100
 CONTINUE MVC   SYSPNAME(44),JFCBDSNM   THE DATASET NAME
          TM    JFCBIND1,JFCPDS         IS IT A PDS
@@ -307,7 +307,7 @@ CONTINUE MVC   SYSPNAME(44),JFCBDSNM   THE DATASET NAME
 * YES, find and append the member name to the filename
          CLC   JFCBELNM(8),=CL8'        '  if spaces no member name !
          BNE   GETMBR
-         WTO   'NO MEMBER NAME ON BKPLIST DD'
+         WTO   'MID0061E NO MEMBER NAME ON BKPLIST DD',ROUTCDE=11
          ABEND 100 
 GETMBR   LA    6,SYSPNAME+44          USE R6 TO FIND LAST NONBLANK
          BAL   4,BLNKLOOP
