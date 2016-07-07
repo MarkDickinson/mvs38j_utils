@@ -1,4 +1,5 @@
-//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T
+//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T,
+// USER=MARK,PASSWORD=MVS38J
 //* *****************************************************************
 //*
 //* INSTALL DATE/TIME UTILITY PROGRAM
@@ -214,8 +215,8 @@ SCHED001 - date utility program to find the next day/date matching
 SCHED002 - date utility program to find the number of hsecs from  
            the current time until a target time, if target time
            is within 24hrs
-SCHEDTST - A prototype job scheduler, would work if I fixed the
-           bug in sched001 but I intend to enhance this a lot
+SCHEDTST - A prototype job scheduler, fully functional for     
+           scheduling job submissions
 
 TESTDOW  - test the DAYOWEEK macro, example of how to use it
 DAYOWEEK - macro to return the day of the week (0-6 for sun-mon)
@@ -341,7 +342,7 @@ SCHED001  ASM   Scheduler utility, used to get info on a future date
 SCHED002  ASM   Scheduler utility, used to get hsecs between current
                 time and a future time; if future time within 24hrs
 SCHEDTST  ASM   Scheduler, assembles and start the scheduler using
-                the test SYSIN tim scheduling datastream 
+                the test SYSIN time scheduling datastream 
 
 MEMBER    TYPE PURPOSE (Testing utilities; examples of use)
 --------  ----- ------------------------------------------------------
@@ -1665,6 +1666,9 @@ Change History
 2016/02/16   Bugfix to the above bug fix in udate003, looks ok now
 2016/07/04   Got the LEAPYEAR macro working OK with YYYY option,
              and added the TESTLEAP member to test it
+2016/07/07   The SCHEDTST member is now a bug free working job  
+             scheduler that exercises the "schednnn" utility
+             programs shipped with this file.
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&REG=
@@ -3241,68 +3245,170 @@ LT       EQU   4    * A LOW
 0116187 1000      
 /*
 //
+./ ADD NAME=TESTLEAP
+//MARKLEAP JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
+//* TEST LEAPYEAR MACRO
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN              
+//         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+         PRINT GEN
+* --------------------------------------------------------------------
+*
+* --------------------------------------------------------------------
+         MACRO
+&NAME    SPACEOUT &A
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEND
+DATETST  CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* ---------------------------------------------------------------
+*
+* OPEN THE FILES
+         OPEN  (SYSIN,(INPUT),SYSPRINT,(OUTPUT))
+*
+* READ THROUGH ALL THE SCHEDULE CARDS NOW
+READCARD CNOP  0,4
+         GET   SYSIN
+         MVC   CARDLINE,0(R1)
+*
+         SPACEOUT PRNTLINE          LOG TO SYSPRINT WHAT WE HAVE
+         MVC   PRNTLINE(5),=CL5'CARD:'
+         MVC   PRNTLINE+5(80),CARDLINE
+         PUT   SYSPRINT,PRNTLINE
+         SPACEOUT PRNTLINE          LOG TO SYSPRINT WHAT WE HAVE
+*
+         CLI   CARDLINE,C'*'
+         BE    READCARD             IGNORE COMMENT CARDS
+         PACK  DOUBLE,CARDLINE(4)   YYYY TO PACKED
+         CVB   R4,DOUBLE            TO BINARY 
+         LEAPYEAR TYPE=YYYY,REG=R4
+         LTR   R1,R1
+         BZ    LEAPYES
+         MVC   PRNTLINE(30),=CL30'yyyy IS A LEAP YEAR           '
+         MVC   PRNTLINE(4),CARDLINE
+         PUT   SYSPRINT,PRNTLINE
+         B     READCARD
+LEAPYES  MVC   PRNTLINE(30),=CL30'yyyy IS NOT A LEAP YEAR'
+         MVC   PRNTLINE(4),CARDLINE
+         PUT   SYSPRINT,PRNTLINE
+         B     READCARD
+* ---------------------------------------------------------------
+EOFSYSIN CLOSE (SYSIN,,SYSPRINT)
+EXIT     L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+*
+         EJECT
+***********************************************************************
+***********************************************************************
+SAVEAREA DS    18F
+DOUBLE   DS    D
+CHAR8    DS    CL8
+PRNTLINE DC    CL132' '
+CARDLINE DC    CL80' '
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,RECFM=F,EODAD=EOFSYSIN,X
+               LRECL=80,BLKSIZE=80
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=PM,DSORG=PS,RECFM=F,              X
+               LRECL=132,BLKSIZE=132
+         LTORG
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD(DATETST),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(DATETST)
+ ENTRY DATETST
+ NAME DATETST(R)
+/*
+//TEST1    EXEC PGM=DATETST,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+* YYYY is all that is expected
+2010
+2011
+2012
+2013
+2014
+2015
+2016
+2017
+2018
+2019
+2020
+/*
+//
 ./ ADD NAME=SCHEDTST
 //MARKTEST JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T,
 // TIME=1440
-//*
 //* ===================================================================
 //*
-//*                W O R K   I N   P R O G R E S S
-//*                -------------------------------
+//* SCHEDTST: Assemble and test MDSCHED1 (prototype job scheduler)
+//*           (An example of exercising all the programs in this file)
 //*
-//* This will one day be a job scheduler. As it makes heavy use of
-//* date utilities I have included the SCHEDnnn programs into my date
-//* library, and inluded this member which is the current state of
-//* the job scheduler.
-//*
-//* This is functional for scheduling jobs on MVS3.8J
-//*
-//* CURRENT STATUS:
-//*   --> works ALMOST perfectly for scheduling jobs, this is done
-//*       via INTRDR so the program does not have to be authorised
-//*       Does not support command scheduling, to issue commands
-//*       would require this program to be APF authourised. I'm
-//*       looking at linking to a seperate authourised program
-//*       module to do that as I already have one for that purpose
-//*       Remaining issue when extracting records from a IO data
-//*       the last block, which may not be full, will result
-//*       in me passing those trailing bit patterns as job
-//*       cards.... thinking about that.
-//*   + time calculations correct (ie: if a job is scheduled
-//*     to run at 10:00am every day and the scheduler is not
-//*     started until 11:00am it will run in the next day...
-//*     note that once checkpointing is implemented this 
-//*     may change to handle jobs that 'would have run' if
-//*     the scheduler had not been shutdown for an ipl or 
-//*     something like that; but checkpointing isn't in yet
-//*   + does submit jobs based on weekday number (0-6, sun-mon)
-//*   + does submit jobs based on date of month, ie: 10th of each
-//*   + does submit jobs based on an exact yyyy/mm/dd provided,
-//*     and handles errors (ie: if you say run on nov31 it will
-//*     work out there are not 31 days in nov and run it on dec1)
-//*   + PARM="USER=user,PASSWORD=password" can be provided to
-//*     the program which will be appended as a job continuation
-//*     card for batch jobs if provided. Needed on RAKF systems
-//*     where the default batch class should be denied by default
-//*
-//* PENDING, in order of requirements
-//*   - Thinking, maybe replace the PARM= to provide a user/password
-//*     pair with a control file that does it based on jobname
-//*     prefix so different batch jobs can run with different
-//*     authorities
-//*   - replace in memory tables for scheduling with a VSAM file(s),
-//*     needed for job/file dependance and checkpoint recovery
-//*     functions
-//*   - checkpointing/timestamping last OK activity, that will
-//*     be in really soon
-//*   - job completion checking, job was ok or errored etc. Thats 
-//*     going to be tricky, will have to modify job streams
-//*     being submitted to notify/update the vsam file
-//*   - job dependency checking, job b only runs if job a worked
-//*     ok, and maybe at a really low priority file dependancy
-//*     checking
-//*   - the ability to issue console commands on schedule. As
-//*     JES2 provides that natively thats also a low priority
+//* (A) Globally change MARK.LIB.LOAD
+//*     to one of your load libraries
+//* (B) In the TESTPGM step customise
+//*     (1) The JOBDECKS DD should point to a PDS you have jobs stored
+//*         within, the one in this JCL will not work for you.
+//*     (2) Update the sample SYSIN cards with current dates and the 
+//*         names of jobs in your PDS; and the times of course
+//*     (3) If you use RAKF update the PARM= value with a user/password
+//*         that can run batch jobs on your site, if you do not use
+//*         RAKF or have the values already coded in your jobdecks
+//*         delete the parm field
+//*     (4) Note: the TESTPGM step as provided writes the jobcards to  
+//*         sysout rather than intrdr so you can preview. The commented
+//*         out line fot intrdr can be uncommented when you are
+//*         comfortable.
 //*
 //* ===================================================================
 //ASM     EXEC PGM=IFOX00,
@@ -3319,19 +3425,118 @@ LT       EQU   4    * A LOW
 //SYSIN    DD  *               
 * *********************************************************************
 *
-* SCHEDTST: 
+* MDSCHED1: JOB SCHEDULER
 *
-* Input:   If a parm is provided it as appended as a job continuation
-*          card after all job card information is read
-*          DD SYSIN    - job scheduling control file
-*          DD JOBDECKS - a PDS containing batch jobs to be submitted
-*          DD PUNCH    - where jobs are written to, normally this
-*                        would be an INTRDR card reader, but for
-*                        testing sysout can be used
+*                W O R K   I N   P R O G R E S S
+*                -------------------------------
 *
+* This will one day be a job scheduler. As it makes heavy use of
+* date utilities I have included the SCHEDnnn programs into my date
+* library, and inluded this member which is the current state of
+* the job scheduler.
+*
+* This is fully functional for scheduling JOBs on MVS3.8J
+*
+* Input: PARM='data string' - if provided is used as a
+*          continuation card appended to the jobcard;
+*          I use it to pass a 'USER=xxx,PASSWORD=xxx' value
+*        DD SYSIN    - job scheduling control file
+*        DD JOBDECKS - a PDS containing batch jobs to be submitted
+*        DD PUNCH    - where jobs are written to, normally this
+*          would be an INTRDR card reader, but for testing
+*          sysout can be used
 * Outputs: Submits batch jobs on schedule via DD punch
+*          Lots of WTOs
+*          Responses to operator commands
 *
-* Purpose: Batch job scheduler prototype
+* Operator Commands Available
+* ---------------------------
+* F jobname,STATUS     - show next scheduled jobs
+* F jobname,RELOAD     - reread the SYSIN control file
+* F jobname,STOP       - stop the scheduler
+* P jobname            - stop the scheduler
+*
+* SYSIN Control Card Format
+* -------------------------
+*    Cols 1-8 Member name in JOBFILE DD
+*    Col 10   Calculation type flag 
+*               W=next weekday number             
+*               D=next DD day of month
+*               U=use exact date provided
+*               R=repeat every nn minutes (NOT IMPLEMENTED YET)
+*               L=use calendar (NOT IMPLEMENTED YET)
+*    Cols 12-15 HHMM (hour and minute to run)
+*    Cols 17-26 DATA value for requested datestamp calclation
+*             W - weekday number to use, 0-6 where 0 is sunday
+*                 OR * to run every day
+*             D - day of month to use, ie: 07 to run on the seventh
+*                 of each month (jan7, feb7...) NOTE: if an invalid
+*                 day for a month is used, ie: using 31 would fail
+*                 for november, it will be scheduled as if it were
+*                 valid... ie: using 31nov would run on 1Dec as that
+*                 is when it would have run if there were 31 days 
+*                 in nov.
+*             U - and exact date as YYYY/MM/DD. Dates in the past
+*                 will be ignored
+*
+* CAUTION: A maximum of 15 jobs can be scheduled for the same
+*          date/time minute, thats a table space limitation you
+*          can change easily in the program (TBLMAX)
+*
+* ENSURE YOU HAVE NUMBERS WHERE NUMBERS ARE SUPPOSED TO BE
+* CARD DATA IS NOT CHECKED AT PRESENT, IF IT ABENDS S0C7 YOU HAVE
+* A NON-NUMERIC WHERE A NUMBER SHOULD BE.
+*
+* General Notes
+* -------------
+*
+* Note: the test program step uses a SYSIN card deck stream for
+*       input. To test the reload function you probably really
+*       want to use a dataset so you can edit the data cards.
+*
+* CURRENT STATUS:
+*   +-> works ALMOST perfectly for scheduling jobs, this is done
+*       via INTRDR so the program does not have to be authorised
+*       Does not support command scheduling, to issue commands
+*       would require this program to be APF authourised; at
+*       this point if you want to issue commands put then in a
+*       jobdeck (or use JES2 timers which already allow the
+*       scheduking of commands)
+*    -> Remaining issue when extracting records from a IO data
+*       the last block, which may not be full, will result
+*       in me passing those trailing bit patterns as job
+*       cards.... thinking about that.
+*   + does submit jobs based on weekday number (0-6, sun-mon)
+*   + does submit jobs based on date of month, ie: 10th of each
+*   + does submit jobs based on an exact yyyy/mm/dd provided,
+*     and handles errors (ie: if you say run on nov31 it will
+*     work out there are not 31 days in nov and run it on dec1)
+*   + optional PARM="USER=user,PASSWORD=password" can be provided 
+*     to the program which will be appended as a job continuation
+*     card for batch jobs if provided. Needed on RAKF systems
+*     where the default batch class should be denied by default
+*
+*  Note on timestamp calculations
+*    The scheduler libraries handle calculations such as
+*    31st of february by just calculating the timestamp
+*    that is 31 days from the start of february.
+*    As this scheduler only queues for execution jobs one
+*    hour ahead of time in most cases that would prevent 
+*    a job defined in that way from running... however
+*    in a month with only 30 days if you set a date of 31st
+*    with a timestamp of say 00:30am it is possible that if
+*    the last "poll" of scheduled jobs occurs after 23:30
+*    that the job would be scheduled on.
+*    Sooo, be carefull
+*
+* PENDING, in order of requirements
+*   - Thinking, maybe replace the PARM= to provide a user/password
+*     pair with a control file that does it based on jobname
+*     prefix so different batch jobs can run with different
+*     authorities
+*   - the ability to issue console commands on schedule. As
+*     JES2 provides that natively and commands can be issued
+*     from a batch job using BSPOSCMD or MDSVC34 thats a low priority
 *
 * *********************************************************************
          MACRO
@@ -3339,7 +3544,7 @@ LT       EQU   4    * A LOW
          MVI   &A,C' '
          MVC   &A+1(L'&A-1),&A
          MEND
-SCHEDTST CSECT
+MDSCHED1 CSECT
          STM   R14,R12,12(13)         , standard program entry
          BALR  R12,R0
          USING *,R12
@@ -3459,14 +3664,42 @@ MODIFY   EQU   *
          BNE   OPERROR             * NO - ERROR
 * ROUTINE TO PROCESS A PROCESS THE NEWRULES COMMAND                 *
          CLC   CIBDATA(4),CMDSTOP  * IS IT A STOP REQUEST ?
-         BNE   OPERROR             * NO - ERROR THEN
-         TTIMER CANCEL             * CANCEL THE TIMER FOR ANY EVENT
-         B     RC00                * AND WE STOP
+         BE    RC00                * YES, WE EXIT
+         CLC   CIBDATA(6),CMDSTATU * IS IT A STATUS ?
+         BE    OPCMDLST            - reload then list
+         CLC   CIBDATA(6),CMDRELOD * IS IT A RELOAD ?
+         BE    OPCMDLOD            - reload then list
+* ELSE AN INVALID COMMAND
+         B     OPERROR             * NO - ERROR THEN
+OPCMDLST BAL   R6,STATDISP         * STATUS DISPLAY
+         B     OPCMDRET
+OPCMDLOD BAL   R6,READCTLF         REREAD THE SCHEDULE TABLE
+         B     OPCMDRET
 OPERROR  EQU   *
-         WTO   'MID0221W ONLY STOP IS PERMITTED'
-NEWTIMER EQU   *
-OPCMDRET EQU   *
+         WTO   'MID0221W ONLY STOP, STATUS OR RELOAD IS PERMITTED'
+OPCMDRET CNOP  0,4
          QEDIT ORIGIN=COMCIBPT,BLOCK=(R3) * FREE IT  
+* As we cancelled the timer we need to recalculate when it
+* should go off, we don't want to rewait on the origional
+* timeout :-)
+         TIME  BIN                r0 has hsecs since midnight
+         L     R2,TIMESTMP        r2 now has hsecs since mn we used
+         CR    R2,R0              did command take us past exec time ?
+         BNL   CALCNEW            no, use difference
+         LA    R2,1               yes, set to 1 100th of a sec so
+         B     CALCDONE           we trigger immediately
+CALCNEW  SR    R2,R0              else use nexttime-currtime
+CALCDONE ST    R2,MINDIFF         and save the new difference
+* debugging, what the hell is happening to that timer
+         SLR   R0,R0
+         L     R1,MINDIFF           minutes until next activity
+         D     R0,ONEMIN            div by 1min hsecs
+         CVD   R1,DOUBLE
+         UNPK  DOUBLE2(8),DOUBLE
+         OI    DOUBLE2+7,C'0'  
+         MVC   DBGWTO01+38(3),DOUBLE2+5
+DBGWTO01 WTO   'MID0232I TIMER RESCHEDULED TO nnn MINUTES (DEBUG)',    X
+               ROUTCDE=11
          B     WAIT
 * ********************************************************************
 * CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
@@ -3502,7 +3735,7 @@ DONEWPOL EQU   *
 *
 * Say what member we are processing, and then process it
 DONEW000 MVC   DONEWWTO+32(8),8(R8)    member name to wto         
-DONEWWTO WTO   'MID0222I SUBMITTING JOB xxxxxxxx   '
+DONEWWTO WTO   'MID0222I SUBMITTING JOB xxxxxxxx   ',ROUTCDE=11
          MVC   MEMBER(L'MEMBER),8(R8)  member to be read
          BAL   R6,GETJOBIN
 * And keep going
@@ -3542,7 +3775,11 @@ LINKERR  WTO   'MID0223E REQUIRED DATE MODULES ARE NOT IN LINKLIST'
 ***********************************************************************
 * READCTLF: read control file                                         *
 *                                                                     *
+* Stores up to max-entry jobs that are all scheduled to run at the    *
+* same time.                                                          *
+*                                                                     *
 * called BAL R6,READCTLF                                              *
+*                                                                     *
 ***********************************************************************
 READCTLF STM   R0,R15,CTLFSAVE
          L     R1,ONEHOUR          reset mindiff back to one hour
@@ -3586,19 +3823,12 @@ READNEXT GET   SYSIN
          LA    R1,0
          ST    R1,TBLCOUNT          and will be first entry
          LA    R8,TBLENTRY          and back to index first entry
+* Also save the HH:MM part of the data card, used in status display
+         MVC   LOWHH(2),CARDLINE+11   HH:MM   HH PART
+         MVC   LOWMM(2),CARDLINE+13   HH:MM   MM PART
 READ001  CNOP  0,4
-* FRED
-*         DSECT
-*TBLENTRY DS    0F              word alignment
-*NEXTEXEC DS    2F      (record key)  next exec date/rime registers
-*MBRNAME  DS    CL8                   name of member in job file
-*EXPIRED  DS    F                     if using memory, mark actioned
-*TBLENTLN EQU   *-TBLENTRY
-*TBLMAX   EQU   15                    max table entries
-*TBLLV    EQU   TBLMAX*TBLENTLN       gives this getmain size reqd
-* FRED
          MVC   0(8,R8),PARMDATA     ...r0,r1 values time values
-         MVC   8(8,R8),CARDLINE      save jobname
+         MVC   8(8,R8),CARDLINE      save job membername
          LA    R2,0                     set expired to false
          ST    R2,16(R8)      
          L     R1,TBLCOUNT          M count by tbllen to get offset
@@ -3622,7 +3852,7 @@ READ003  L     R1,NEXTHOUR          increment jobns in next hour
 READSKIP WTO   'MID0224E MAX JOBS FOR NEXT ACTIVITY EXCEEDED, SKIPING'
          B     READNEXT             and get next card
 EOFSYSIN CLOSE (SYSIN)         close the input file
-         L     R1,MINDIFF           DEBUG, ensure not zero
+         L     R1,MINDIFF       
          C     R1,ZERO 
          BH    READ004              above zero, is ok
          CVD   R1,DOUBLE
@@ -3649,11 +3879,19 @@ READ004  L     R1,NEXTHOUR          jobs in next hour for message
          CVD   R1,DOUBLE
          UNPK  DOUBLE2(8),DOUBLE
          OI    DOUBLE2+7,C'0'                          
-         MVC   WTOSTATE+47(3),DOUBLE2+5
+         MVC   WTOSTATE+47(3),DOUBLE2+5 into wto
+         MVC   LOWCOUNT(3),DOUBLE2+5    save in status message also
 *               ..1....+....2....+....3....+....4....+....5....+....6
 WTOSTATE WTO   'MID0227I NEXT ACTIVITY IN mmm MINS FOR nnn JOBS, nnn JOX
-               BS IN NEXT HOUR'
+               BS IN NEXT HOUR',ROUTCDE=11
          DROP  R7
+* Save hsecs since midnight timer should pop, so we can recalculate
+* the correct time if operators enter commands (which cancel the timer)
+         TIME  BIN                r0 has hsecs since midnight
+         L     R2,MINDIFF         r2 now has hsecs of timer
+         AR    R2,R0              r2 now has hsecs from midnight 
+         ST    R2,TIMESTMP        and save the new difference
+*
          LM    R0,R15,CTLFSAVE
          BR    R6              return
          EJECT
@@ -3802,6 +4040,40 @@ JSCAN1   S     R3,=F'1'
          MVI   JOBCONT,C'N'
 CONTEXIT LM    R1,R4,SAVECONT
          BR    R4 
+         EJECT
+***********************************************************************
+* BAL R6,STATDISP                                                     *
+* DISPLAY SCHEDULER STATUS AND ANY JOBS NEXT DUE TO RUN               *
+***********************************************************************
+* only need to list scheduled jobs if there are any
+STATDISP STM   R5,R9,SAVEDISP
+         L     R5,TBLCOUNT           USE R2 (oops, R1 used by WTO)
+         C     R5,ZERO 
+         BNH   WTOJOB00              NO TABLE ENTRIES
+* else list the entries in the table and when they will run
+WTOJOBNN WTO   'MID0233I nnn JOBS DUE TO RUN AT HH:MM '
+         L     R7,TBLADDR
+         USING TBLENTRY,R7
+         LA    R8,TBLENTRY          USE R8 TO INDEX INTO TABLE
+         LA    R9,TBLENTLN          OFFSET JUMP (TBL ITEM LEN)
+* Say what members we will be running next              
+WTOJOBMV MVC   WTOJOBLL+21(8),8(R8)
+WTOJOBLL WTO   'MID0234I JOB xxxxxxxx SCHEDULED'
+         AR    R8,R9                move R8 to next slot
+         S     R5,ONE               dec counter
+         C     R5,ZERO              any left to list ?
+         BH    WTOJOBMV             list the next queued job
+         B     STATEXIT             done
+         DROP  R7
+WTOJOB00 CNOP  0,4
+         WTO   'MID0235I NO JOBS QUEUED ON LAST HOURLY CHECK'
+STATEXIT LM    R5,R9,SAVEDISP
+         BR    R6                   done
+SAVEDISP DS    5F                   save registers over statdisp
+LOWCOUNT EQU   WTOJOBNN+17
+LOWHH    EQU   WTOJOBNN+40
+LOWMM    EQU   WTOJOBNN+43
+         EJECT
          LTORG
 ***********************************************************************
 * Data areas required.                                                *
@@ -3819,6 +4091,7 @@ TBLSIZE  DS    F                   size of memory table (get/freemain)
 ONEDAY   DC    F'8640000'          hsecs in one day
 MINDIFF  DC    F'360000'           default 60 minutes
 ONEHOUR  DC    F'360000'           to reset mindiff  
+TIMESTMP DS    F                   used to recalculate timer
 NEXTHOUR DS    F                   number of jobs within next hour
 HAVEPARM DS    C                   jcl parm provided
 JOBCONT  DS    C                   processing jobcards flag
@@ -3838,8 +4111,8 @@ CARDLINE DS    CL80                input card work area
 *
          UDATEVAR DSECT=NO         date routine data mapping area
 *
-SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,RECFM=F,EODAD=EOFSYSIN,X
-               LRECL=80,BLKSIZE=80
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,RECFM=FB,              X
+               EODAD=EOFSYSIN,LRECL=80             
          EJECT
 ***********************************************************************
 *                                                                     *
@@ -3852,6 +4125,8 @@ ECBLIST  DS    3F                 ECB LIST FOR STIMER,COM,WTOR
 TIMEXPRM DS    F                  TIMER PARAMETER
 EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
 CMDSTOP  DC    CL5'STOP',X'00'     to test operator input
+CMDSTATU DC    CL7'STATUS',X'00'   show pending jobs/status display
+CMDRELOD DC    CL7'RELOAD',X'00'   reload schedule control file    
          EJECT
 ***********************************************************************
 *                                                                     *
@@ -3863,15 +4138,15 @@ CMDSTOP  DC    CL5'STOP',X'00'     to test operator input
          DSECT
          IEZCIB                      * CIB
 ***********************************************************************
-* VSAM table data record mapping dsect                                *
-* Still undecided whether to use a vsam work file or memory tables    *
+* A list of all jobs that will run at the next scheduled HH:MM        *
 ***********************************************************************
          DSECT
+* Do not change the first two table entries
+* The code uses 0(Rn) to store the time registers
+* The code uses 8(Rn) to address the membername
 TBLENTRY DS    0F              word alignment
-NEXTEXEC DS    2F      (record key)  next exec date/rime registers
+NEXTEXEC DS    2F                    time registers
 MBRNAME  DS    CL8                   name of member in job file
-DIFFCHEK DS    F                     hsecs to wait at last scan
-EXPIRED  DS    F                     if using memory, mark actioned
 TBLENTLN EQU   *-TBLENTRY
 TBLMAX   EQU   15                    max table entries
 TBLLV    EQU   TBLMAX*TBLENTLN       gives this getmain size reqd
@@ -3903,7 +4178,7 @@ LT       EQU   4    * A LOW
 //LKED1   EXEC PGM=IEWL,
 //             PARM='XREF,LIST,LET,TEST,AC=0',
 //             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DISP=SHR,DSN=MARK.LIB.LOAD(SCHEDTST)
+//SYSLMOD  DD  DISP=SHR,DSN=MARK.LIB.LOAD(MDSCHED1)
 //SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
 //SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
 //SYSPRINT DD  SYSOUT=*
@@ -3914,14 +4189,14 @@ LT       EQU   4    * A LOW
 //SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
 //SYSPRINT DD  SYSOUT=*
 //SYSLIN   DD  *
- INCLUDE SYSLMOD(SCHEDTST)
- ENTRY SCHEDTST
- NAME SCHEDTST(R)
+ INCLUDE SYSLMOD(MDSCHED1)
+ ENTRY MDSCHED1
+ NAME MDSCHED1(R)
 /*
-//TEST EXEC PGM=SCHEDTST,COND=(0,NE),
-// PARM='USER=xxxx,PASSWORD=xxxxxx'
+//TESTPGM EXEC PGM=MDSCHED1,COND=(0,NE),
+// PARM='USER=xxxxxx,PASSWORD=xxxxxx'
 //STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
-//JOBDECKS DD DISP=SHR,DSN=SYS9.JOBDECKS
+//JOBDECKS DD DISP=SHR,DSN=MARK.TEST.MDSCHED1.JOBFILE
 //PUNCH    DD SYSOUT=*
 //*PUNCH    DD SYSOUT=(A,INTRDR)  REPLACE ABOVE TO RUN JOBS
 //SYSABEND DD SYSOUT=*
@@ -3929,8 +4204,11 @@ LT       EQU   4    * A LOW
 //SYSIN DD *
 * *********************************************************************
 *
-* TEST DATA CARDS
-* MBR    C HHMM DATA
+* TEST DATA CARDS - CUSTOMISE THESE FOR YOUR SITE
+* Pretty much a copy of what I use with a few extra examples thrown
+* in to show the syntax formats I don't use a lot.
+*
+* MBRNAMEx C HHMM DATA
 *    Cols 1-8 Member name in JOBFILE DD
 *    Col 10   Calculation type flag 
 *               W=next weekday number             
@@ -3961,167 +4239,73 @@ LT       EQU   4    * A LOW
 * A NON-NUMERIC WHERE A NUMBER SHOULD BE.
 *
 * *********************************************************************
-XXXXXXXX W 2015 0            EXPECT NEXT SUNDAY
-XXXXXXXX W 2015 1            EXPECT NEXT MONDAY 
-XXXXXXXX W 0800 *            EXPECT TOMORROW
-XXXXXXXX D 2016 31           EXPECT 31 NOV, OOPS 1 DEC
-XXXXXXXX U 2017 2013/12/15   EXACT DATE PROVIDED (SUN)
-XXXXXXXX U 0800 2013/12/17   EXACT DATE PROVIDED (TUE)
-XXXXXXXX D 2016 07           EXPECT 07 DEC 2014 (TUE)
-XXXXXXXX W 2015 3            EXPECT WEDNESDAY
-DY01PNCH W 1255 5            EXPECT ...
-DY01SCR  W 1255 5            EXPECT ...
-DY02THU  W 1255 5            EXPECT ...
-WK00RDY  W 1345 5            EXPECT ...
-IPLREASN U 1400 2013/12/20   EXACT DATE PROVIDED
-NOTFOUND U 1402 2013/12/20   EXACT DATE PROVIDED
-XXXXXXB2 W 1240 3            EXPECT ...
-XXXXXXC2 W 0900 3            EXPECT ...
-XXXXXXXX W 0900 2            EXPECT NEXT TUE
-XXXXXXXX W 0900 3            EXPECT NEXT WEDNESDAY
-XXXXXXXX W 2200 3            EXPECT THIS WEDNESDAY
-XXXXXXXX W 2200 5            EXPECT NEXT FRIDAY
-/*
-//
-./ ADD NAME=TESTLEAP
-//MARKLEAP JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
-//* TEST LEAPYEAR MACRO
-//ASM     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
-//         DD  DISP=SHR,DSN=SYS1.AMODGEN              
-//         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *
-         PRINT GEN
-* --------------------------------------------------------------------
+* 
+* GENERAL MAINTENANCE JOBS
+* ------------------------
+J2PURGE  W 2305 *            EVERY DAY, PURGE OLD SPOOLED OUTPUT
+J2LOGROL W 0001 *            EVERY DAY, ROLL SYSLOG
+DY01SCR  W 0010 *            EVERY DAY, RECLAIM SCRATCH TAPES
+J2ARCSTR W 0003 6            EVERY SATURDAY, START WTR TO ARCIVE SYSLOG
+J2ARCEND W 0008 6            EVERY SATURDAY, STOP WTR STARTED ABOVE    
 *
-* --------------------------------------------------------------------
-         MACRO
-&NAME    SPACEOUT &A
-         MVI   &A,C' '
-         MVC   &A+1(L'&A-1),&A
-         MEND
-DATETST  CSECT
-         STM   R14,R12,12(13)         , standard program entry
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-* ---------------------------------------------------------------
+CHECKDS  W 0001 *            EVERY DAY, EVERY 2 HRS, CHECK KEY DATASETS
+CHECKDS  W 0201 *            PERCENTAGE FULL AND AUTORECOVER IF NEEDED;
+CHECKDS  W 0401 *            MOVE ANY GUEST* DATASETS CREATED ON PACKS 
+CHECKDS  W 0601 *            THEY SHOULD NOT BE ON TO PACKS THEY CAN   
+CHECKDS  W 0801 *            BE PERMITTED TO EXIST ON                  
+CHECKDS  W 1001 *          
+CHECKDS  W 1201 *                     
+CHECKDS  W 1401 *                       
+CHECKDS  W 1601 *                        
+CHECKDS  W 1801 *                        
+CHECKDS  W 2001 *                     
+CHECKDS  W 2201 *                        
 *
-* OPEN THE FILES
-         OPEN  (SYSIN,(INPUT),SYSPRINT,(OUTPUT))
+* My I am alive polls to detect how long the hercules
+* system has been running so I can spot any unexpected
+* restarts of the system my automation decided was
+* necessary.
+DUPTIME  W 0001 *      
+DUPTIME  W 0301 *      
+DUPTIME  W 0601 *    
+DUPTIME  W 0901 *    
+DUPTIME  W 1201 *     
+DUPTIME  W 1501 * 
+DUPTIME  W 1801 *       
+DUPTIME  W 2101 *      
 *
-* READ THROUGH ALL THE SCHEDULE CARDS NOW
-READCARD CNOP  0,4
-         GET   SYSIN
-         MVC   CARDLINE,0(R1)
+* BACKUP SCHEDULES
+* SEPERATE ENTRIES AS FRIDAYS WEEKLY BACKUPS NEED EVERYTHING
+* APART FROM JES2 STOPPED, DAYLY ONES JUST 80% OF SERVICES
+DAILYPRE W 1855 0            SUN, WARN USERS TO LOGOFF PRE BACKUPS
+DAILY    W 1900 0            SUN, START DAILY BACKUPS
+DAILYPRE W 1855 1            MON, WARN USERS TO LOGOFF PRE BACKUPS
+DAILY    W 1900 1            MON, START DAILY BACKUPS
+DAILYPRE W 1855 2            TUE, WARN USERS TO LOGOFF PRE BACKUPS
+DAILY    W 1900 2            TUE, START DAILY BACKUPS
+DAILYPRE W 1855 3            WED, WARN USERS TO LOGOFF PRE BACKUPS
+DAILY    W 1900 3            WED, START DAILY BACKUPS
+DAILYPRE W 1855 4            THU, WARN USERS TO LOGOFF PRE BACKUPS
+DAILY    W 1900 4            THU, START DAILY BACKUPS
+WEEKYPRE W 1855 5            FRI, WARN USERS TO LOGOFF PRE BACKUPS
+WEEKLY   W 1900 5            FRI, START FULL WEEKLY BACKUPS
+DAILYPRE W 1855 6            SAT, WARN USERS TO LOGOFF PRE BACKUPS
+DAILY    W 1900 6            SAT, START DAILY BACKUPS
 *
-         SPACEOUT PRNTLINE          LOG TO SYSPRINT WHAT WE HAVE
-         MVC   PRNTLINE(5),=CL5'CARD:'
-         MVC   PRNTLINE+5(80),CARDLINE
-         PUT   SYSPRINT,PRNTLINE
-         SPACEOUT PRNTLINE          LOG TO SYSPRINT WHAT WE HAVE
+* TK3 EREP CANNOT BE ALLOWED TO FILL UP
+DUMPEREP W 2200 6            EVERY SATURDAY, DUMPEREP
+DUMPEREP W 2200 1            EVERY MONDAY, DUMPEREP
+DUMPEREP W 2200 3            EVERY WEDNESDAY, DUMPEREP
+DUMPEREP W 2200 5            EVERY FRIDAY, DUMPEREP
 *
-         CLI   CARDLINE,C'*'
-         BE    READCARD             IGNORE COMMENT CARDS
-         PACK  DOUBLE,CARDLINE(4)   YYYY TO PACKED
-         CVB   R4,DOUBLE            TO BINARY 
-         LEAPYEAR TYPE=YYYY,REG=R4
-         LTR   R1,R1
-         BZ    LEAPYES
-         MVC   PRNTLINE(30),=CL30'yyyy IS A LEAP YEAR           '
-         MVC   PRNTLINE(4),CARDLINE
-         PUT   SYSPRINT,PRNTLINE
-         B     READCARD
-LEAPYES  MVC   PRNTLINE(30),=CL30'yyyy IS NOT A LEAP YEAR'
-         MVC   PRNTLINE(4),CARDLINE
-         PUT   SYSPRINT,PRNTLINE
-         B     READCARD
-* ---------------------------------------------------------------
-EOFSYSIN CLOSE (SYSIN,,SYSPRINT)
-EXIT     L     R13,4(R13)
-         LM    R14,R12,12(R13)
-         SLR   R15,R15
-         BR    R14
-*
-         EJECT
-***********************************************************************
-***********************************************************************
-SAVEAREA DS    18F
-DOUBLE   DS    D
-CHAR8    DS    CL8
-PRNTLINE DC    CL132' '
-CARDLINE DC    CL80' '
-SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,RECFM=F,EODAD=EOFSYSIN,X
-               LRECL=80,BLKSIZE=80
-SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=PM,DSORG=PS,RECFM=F,              X
-               LRECL=132,BLKSIZE=132
-         LTORG
-* REGISTER EQUATES
-R0       EQU   0
-R1       EQU   1
-R2       EQU   2
-R3       EQU   3
-R4       EQU   4
-R5       EQU   5
-R6       EQU   6
-R7       EQU   7
-R8       EQU   8
-R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
-R13      EQU   13
-R14      EQU   14
-R15      EQU   15
-         END
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
-//LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=MARK.LIB.LOAD(DATETST),DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- INCLUDE SYSLMOD(DATETST)
- ENTRY DATETST
- NAME DATETST(R)
-/*
-//TEST1    EXEC PGM=DATETST,COND=(0,NE)
-//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
-//SYSPRINT DD   SYSOUT=*
-//SYSIN    DD   *
-* YYYY is all that is expected
-2010
-2011
-2012
-2013
-2014
-2015
-2016
-2017
-2018
-2019
-2020
+* EXAMPLES OF USING SPECIFIC DAYS INTO MONTH AND EXACT DATES
+MONTH01  D 1105 01           FIRST OF EVERY MONTH, DEMO
+MONTH01  D 1105 20           TWENTIETH OF EVERY MONTH, DEMO
+MONTH31  D 0105 31           THIRTYFIRST, **READ** PGM COMMENTS
+XMASMSG  U 0900 2016/12/25   EXACT TIME DATE PROVIDED, DEMO
+XMASMSG  U 0900 2017/12/25   EXACT TIME DATE PROVIDED, DEMO
+XMASMSG  U 0900 2018/12/25   EXACT TIME DATE PROVIDED, DEMO
+DUPTIME  W 1135 4            EXPECT EVERY THURSDAY 
 /*
 //
 ./ ENDUP
