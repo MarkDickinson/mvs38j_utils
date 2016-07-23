@@ -1,4 +1,7 @@
-//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T
+//MARKA    JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T,
+// USER=MARK,PASSWORD=MVS38J
+//*
+//* WILL NOT ASSEMBLE, ADDRESSING ERRORS DAMN IT
 //*
 //*   My MPF / Marks MPF / MVS 3.8J console automation 
 //*      without IEECVXIT (almost, see notes below)
@@ -118,6 +121,10 @@
 //*                programs from additional sources.
 //*   2016/05/14 - Adjust so STATS command can be called BAL R1 
 //*                so the stats can be logged when MMPF exits
+//*   2016/07/21 - added a datestamp to show last restart time  
+//*                to the MMPF STATS command, as I stop/start
+//*                it a lot and the stats were getting 
+//*                meaningless without a timestamp :-)
 //*
 //CREATE   EXEC PGM=IEFBR14
 //SYSPRINT DD   SYSOUT=*
@@ -1228,7 +1235,7 @@ BSPPILOT DOM
 * KEYWORD LINE YOU SHOULD USE TO END THE DECK, SEE THE KNOWN BUGS
 * STATEMENT IN THE MAIN MMPF PROGRAM BANNER COMMENTS
 ENDDECK
-./ ADD NAME=MMPF
+./ ADD NAME=MMPF 
 //MARKJ003 JOB (0),'ASSEMBLE MMPF',CLASS=A,MSGCLASS=T
 //ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
 //             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
@@ -1254,14 +1261,14 @@ ENDDECK
 *                                                                     *
 *   IT READS THE SYSTEM CONSOLE BUFFER TO OBTAIN IT'S MESSAGES        *
 *   (BASED UPON THE SPY CODE FROM THE PYCROFT SITE) AND IT WILL       *
-*   CHECK EACH ATTENTION/ALERT MESSAGE (THOSE PREFIXED WITH A *) TO   *
+*   CHECK EACH ATTENTION/ALERT MESSAGE (THOSE PREFIXED WITH A */@) TO *
 *   SEE IF THERE IS A MATCHING RULE IN THE RULES TABLE FOR IT.        *
 *                                                                     *
 *   -RULE TABLE READ FROM SYSIN, REFESHABLE (F xxx,MMPF=nn) TO RELOAD *
 *    THE EXISTING RULE FILE OR LOAD ANOTHER ONE, ALL MEMBERS MUST BE  *
 *    NAMED MMPFnn FOR THIS TO WORK OF COURSE.                         *
 *   -RULES PARSEABLE, MAY CONTAIN KEYWORDS &WORD1-20 AND &MSG         *
-*   -MAX RULR TABLE SIZE HARD CODED AS 30 RULES (TODO: GET THE        *
+*   -MAX RULE TABLE SIZE HARD CODED AS 30 RULES (TODO: GET THE        *
 *    GETMAIN WORKING WITH A LEN IN A REGISTER RATHER THAN A HARD      *
 *    CODED ONE THEN MAKE LEN A PROGRAM PARM)                          *
 *   -ALL ACTIVITY LOGGED TO SYSPRINT                                  *
@@ -1299,7 +1306,7 @@ ENDDECK
 *        THIS IS SO I CAN MOVE MY TAPE AUTOMATION OUT OF IEECVXIT AS  *
 *        THAT CODE PUTS A LOT OF OVERHEAD IN THERE WITH GETMAINS ETC. *
 *                                                                     *
-* EXAMPLES: REFER TO SUPPLIED SAMPLE PARMLIB MEMBER MMPF00            *
+* EXAMPLES: REFER TO SAMPLE PARMLIB MEMBERS MMPF00 AND MMPFEX00       *
 *                                                                     *
 * CHANGES                                                             *
 *   2007/10/20 - Initial version working with CMD function.           *
@@ -1345,6 +1352,8 @@ ENDDECK
 *   2016/05/14 - changed STATS command section so it is called BAL    *
 *                so it can be called at program exit to show the stats*
 *                Had to truncate a few more WTOs                      *
+*   2016/07/23 - added a timestamp for when MMPF started to make the  *
+*                stats message more meaningfull                       *
 *                                                                     *
 * I M P O R T A N T                                                   *
 *   This has been setup for my system which may be at a different     *
@@ -1365,8 +1374,9 @@ ENDDECK
 *   the file will now be used to stop the 'read next data block' loop *
 *   (although its not looping as such, it just does it twice rather   *
 *    than loop forever; bugger of a thing to figure out)              *
-*   --ALSO getting very close to the 4K limit, have had to truncate   *
-*   few WTOs to get it to assemble now.                               *
+*   --ALSO even with two base registers have hit program limit size   *
+*   and have to truncate WTOs and remove some checks to get new       *
+*   features to fit (todo: split into multiple csects)                *
 *                                                                     *
 ***********************************************************************
 *
@@ -1451,9 +1461,9 @@ SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
 *   N O T E: GETJOBID HAS BEEN MOVED RIGHT UP HERE SO I HAVE A JOB    *
 *            NAME FOR ERROR WTOS, SO WE SAVE THE PARMLIST ADDR NOW.   *
 ***********************************************************************
-         ST    R1,PARMSADR        SAVE ADDR OF PARM LIST
+         ST    R1,SAVER1          SAVE ADDR OF PARM LIST
          BAL   R5,GETJOBID        GET OUT JOB/TASK NAME FOR MSGS
-         L     R1,PARMSADR        NO WE HAVE A JOBNAME, CHECK PARMS
+         L     R1,SAVER1          NOW WE HAVE A JOBNAME, CHECK PARMS
          LTR   R1,R1              ANY PARMS TO PROCESS ?
          BZ    NOPARM             NO PARM, USE THE DEFAULT
          LR    R2,R1              ADDR LIST NOW IN R2      
@@ -1475,9 +1485,8 @@ SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
          MVC   DEBUGON(1),CHARY
          B     BLDUCMS
 *
-PARMERR  WTO2  'MID010E xxxxxxxx:BAD PARM, ABEND'
-         MVC   PARMER2+12(35),2(R5)
-PARMER2  WTO   'GOT ....+....1....+....2....+....3....+'
+PARMERR  MVC   PARMERR2+16(8),MYJOBNAM
+PARMERR2 WTO   'MID010E xxxxxxxx:INVALID PARM, MUST ABEND'
          ABEND 100
 *
 NOPARM   DS    0F        JUST USE DEFAULT OF MMPF00, NO NOTIFY NEEDED
@@ -1522,7 +1531,7 @@ NEXTCNSL LA    R5,UCMTAB          R5 = ADDR OF UCMTAB
          BNH   GETUCM             NO, CONTINUE
 RESETCN  L     R4,OLDCONS         RESET TO OLD CONSOLE
          ST    R4,CONSOLE         AND SAVE IT
-         WTO2  'MID001E         :UNABLE TO FIND AN AUTHORISED CONSOLE'
+         WTO2  'MID001E         :NO AUTHORISED CONSOLES FOUND'
          ABEND 4
 GETUCM   SLL   R4,2               MULTIPLY BY 4
          LA    R5,0(R5,R4)        R5 = ADDR OF ADDR OF UCM
@@ -1600,7 +1609,7 @@ AUTHDONE EQU   *
                BLOCK=(R3)            *
          LTR     R15,R15             * OK ?
          BZ      SETCOUNT            * YES - CONTINUE
-         WTO2    'MID016E xxxxxxxx:UNABLE TO ALLOCATE COMM AREA'
+         WTO2    'MID016E xxxxxxxx:UNABLE TO OBTAIN COMM AREA'
          ABEND   1
 SETCOUNT EQU     *
          QEDIT   ORIGIN=COMCIBPT,    * SET LIMIT ON MODIFY             X
@@ -1610,6 +1619,16 @@ SETCOUNT EQU     *
 *
          OPEN  (SYSPRINT,OUTPUT)  WE WILL HAVE A LOG FILE
 *
+* TIMESTAMP STARTUP TIME, USED IN STATS DISPLAY
+         TIME  DEC
+         ST    R0,INITTIMP                TIME HHMMSSth PACKED
+         ST    R1,INITTIMP+4              DATE 00YYDDDF
+         UNPK  INITTIMC,INITTIMP          PACKED TO EBCDIC
+         OI    INITTIMC+14,X'F0'          REPAIR SIGN
+         MVC   INITTIME(2),INITTIMC+10
+         MVC   INITTIME+3(3),INITTIMC+12
+         MVC   INITTIME+7(2),INITTIMC   
+         MVC   INITTIME+10(2),INITTIMC+2
 *
 *  INITIAL LOAD OF THE MESSAGE RULES FROM EXISTING MEMBER VALUE
 *
@@ -1696,7 +1715,8 @@ SHOWSBAL ST    R1,SHOWSTR1                              2016/05/14
          LA    R1,STATMSG+25         FORMATTED OUTPUT ADDR
          UNPK  0(8,R1),STATWRK       UNPK FOR LENGTH 8
          OI    7(R1),X'F0'           ZERO ZONE BIT
-STATMSG  WTO   'MID029I jjjjjjjj:nnnnnnnn MESSAGES WERE AUTOMATED' 
+STATMSG  WTO   'MID029I jjjjjjjj:nnnnnnnn MESSAGES AUTOMATED SINCE YY.DX
+               DD HH:MM'
          L     R1,SHOWSTR1                              2016/05/14
          BR    R1                                       2016/05/14
 *        B     OPCMDRET               (REMOVED)         2016/05/14
@@ -1893,7 +1913,7 @@ GETSYS02 LH    R0,JFCBLKSI           GET BLOCK LENGTH
          LR    R9,R0                 R9 = BLK LNGTH , R0 IS FREE
          C     R15,=F'4'             TEST RETURN CODE FOR 4
          BNE   GETSYS03              IF NOT 4, STORAGE WAS OBTAINED.
-         WTO   'MID009E xxxxxxxx:INSUFFICIENT STORAGE AVAILABLE'
+         WTO   'MID009E xxxxxxxx:INSUFFICIENT FREE STORAGE'
          LA    R0,=F'1'          RECORD AN ERROR
          ST    R0,SYSINERR
          B     SYSINXIT
@@ -2280,12 +2300,12 @@ NRLOAD   SR    R1,R1         NO ERROR IN R1 YET
          CLC   MEMBER(8),=CL8'MMPF00  '
          BE    NRABORT                   ALREADY TRIED MMPF00
          MVC   MEMBER(8),=CL8'MMPF00  '
-         WTO2  'MID014W jjjjjjjj:TRYING DEFAULT MEMBER MMPF00 NOW'
+         WTO2  'MID014W jjjjjjjj:TRYING DEFAULT MMPF00 NOW'
          SR    R1,R1
          BAL   R5,GETSYSIN   GET THE NEW DECK
          C     R1,=F'0'      NO ERROR ?
          BNE   NRABORT
-         WTO2  'MID015W jjjjjjjj:WARNING, USING DEFAULT OF MMPF00'
+         WTO2  'MID015W jjjjjjjj:USING DEFAULT MMPF00'
          B     NRULOK
 *                            ELSE NOTHING ELSE TO TRY
 NRABORT  MVC   NRABORTW+37(8),MYJOBNAM
@@ -2294,7 +2314,7 @@ NRABORTW WTO2  'MID012E xxxxxxxx:USE F xxxxxxxx,MMPF=nn TO SELECT A RULX
          B     NREXIT
 NRBAKOUT MVC   MEMBER(8),MEMBERO
          MVC   MEMBERO(8),=CL8'        '
-         WTO2  'MID016W jjjjjjjj:WARNING, TRYING PREVIOUS MEMBER'
+         WTO2  'MID016W jjjjjjjj:TRYING PREVIOUS MEMBER'
          B     NRLOAD
 NRULOK   MVC   MEMBERO(8),MEMBER      SAVE AS A BACKOUT
 NREXIT   L     R5,NRRTN
@@ -2345,7 +2365,6 @@ DOMSAV2  DS    F
 ***********************************************************************
 EXSAVCRD MVC   0(0,R2),0(R1)       EX TO SAVE IN GETMAINED AREA
 ADDRRULS DS    F                   ADDRESS OF GETMAINED RULE TABLE
-PARMSADR DS    F                   SAVE ADDR OF PROGRAM PARM LIST
 ADDRGETW DS    F                   ADDRESS OF GETMAINED GWDESCT AREA
 SAVER1   DS    F                   SAVE AREA WHEN I PLAY WITH R1
 SCIOR9   DS    F                   SAVE WHEN USED IN BAL FOR CHKAMSG
@@ -2392,7 +2411,11 @@ ONE      DC    F'1'                THE NUMBER ONE, FOR ADDITIONS
 DECIMAL  DC    D'0'
 DEBUGR1  DS    F
          ORG
+         LTORG
 AUTOCNT  DC    F'0'                USED TO COUNT MSGS AUTOMATED
+INITTIMP DS    D                   FOR TIMESTAMPS IN STATS MSGS
+INITTIMC DS    CL15
+INITTIME EQU   STATMSG+59          YY.DDD HH:MM
          SPACE 5
 ***********************************************************************
 *                                                                     *
@@ -2688,9 +2711,9 @@ SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
 *                EXACTLY. VARIABLE LENGTH BUT ENTIRE PARM MUST NOT    *
 *                EXCEED 60 BYTES.                                     *
 ***********************************************************************
-         ST    R1,PARMSADR        SAVE ADDR OF PARM LIST
+         ST    R1,SAVER1          SAVE ADDR OF PARM LIST
          BAL   R5,GETJOBID        GET OUT JOB/TASK NAME FOR MSGS
-         L     R1,PARMSADR        NOW WE HAVE A JOBNAME, CHECK PARMS
+         L     R1,SAVER1          NOW WE HAVE A JOBNAME, CHECK PARMS
 
          L     R1,0(,R1)           POINT TO PARM
          LH    R0,0(,R1)           GET LENGTH OF PARM
@@ -3036,7 +3059,7 @@ WTODOTEX WTO   '....+....1....+....2....+....3....+....4....+....5'
 *                                                                     *
 ***********************************************************************
          LTORG
-PARMSADR DS    F                   SAVE ADDR OF PROGRAM PARM LIST
+SAVER1   DS    F                   SAVE ADDR OF PROGRAM PARM LIST
 SAVEMGCR DS    3F                  SAVE AREA FOR MGCR
 RULECNT  DS    F                   ACTUAL NUMBER OF RULES READ
 SAVEGETJ DS    6F                  SAVE AREA FOR GETJOB ID
