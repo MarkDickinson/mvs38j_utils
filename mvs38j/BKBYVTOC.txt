@@ -21,26 +21,24 @@
 //* (3) USED BY THE TEST JOB --only required if you want to test :-)
 //*    MARK.TEST.BKBTVTOC        (test job report listing file)
 //*    UNIT=3380,VOL=SER=PUB002  (alloced disk for above)
-//* (4) CHOSE AN APF AUTHORISED LIBRARY
-//*    CHANGE SYS9.LINKLIB.APFAUTH to one of your site local
-//*    APF authorised libraries. Used in the MDEXWRAP assembly
-//*    job
-//* (5) UTILITY LIBRARY
+//* (4) CHOSE A LOAD LIBRARY (DOES NOT NEED TO BE APF)
+//*    CHANGE SYS9.LINKLIB to one of your site local libraries
+//* (5) DATE UTILITY LIBRARY
 //*    CHANGE INSTALL.UTILS.DATETIME TO WHEREVER YOU INSTALLED
 //*    MY DATE UTILITY LIBRARY. If you did not install that
-//*    make the changes documented below in BKBYVTOC.
+//*    make the changes documented below.
 //*
 //* --- I M P O R T A N T   N O T E ---
 //*    If you have NOT already installed my date utility
 //*    program YOU WILL HAVE TO MAKE CHANGES as follows     
 //*    BKBYVTOC member           
 //*      - remove the INSTALL.UTILS.DATETIME file from the
-//*        SYSLIB DD concatonation list
+//*        SYSLIB DD concatenation list
 //*      - in the source code locate and comment out the
 //*        line containing UDATEVAR
 //*      - in the source code locate and comment out the
 //*        line containing UDATEMAC and the lines below
-//*        that that copy date fileds onto the report line.
+//*        that that copy date fields onto the report line.
 //*      The only impact of doing so is that you will not 
 //*      have dates included in your backup report listings
 //*
@@ -48,7 +46,7 @@
 //*    library from here also.
 //*
 //* ---- After you have run this job to create the install DS ----
-//* 1. Run the memeber BKBYVTOC to assemble the program
+//* 1. Run the member BKBYVTOC to assemble the program
 //* 2. Optionally run the TESTJOB member to test it
 //*
 //* =================== END JOB COMMENTS =======================
@@ -104,6 +102,7 @@
 *            PRODUCE A LIST OF FILES WITH OTHER DSORGS SO WE KNOW WHAT
 *            HAS BEEN SKIPPED... I MAY USE THAT LATER TO ADD OTHER
 *            DSORG TYPES TO THE BACKUP TEMPLATES.
+*            ALSO LIST MANUALLY EXCLUDED DSETS IN THE SKIPLIST
 *
 * --------------------------------------------------------------------
 * CREDITS... THE VTOC SEARCH PROCESSING I COPIED...
@@ -119,16 +118,20 @@
 *    TEMPLATE - JOB TEMPLATE NEEDED TO PROVIDE THE
 *               BKPPO AND BKPPS PROCS AND MANAGE
 *               THE INITIAL TAPE MOUNT
+*    EXCLUDE  - CARD IMAGE INPUT LIST OF DSN MASKS TO BE EXCLUDED
+*               FROM THE BACKUPS
 *    DDnn     - DD CARDS IDENTIFYING VOLSERS TO SCAN
 *
 * OUTPUTS...
 *    SKIPLIST - FILES SKIPPED FROM THE BACKUP, AND WHY
-*                   FMTERR MEANS SKIPPED BECAUSE NOT PO OR PS DSORG
-*                   NOTCAT MEANS FILE IS NOT CATALOGUED TO THAT DISK
+*                   FMTERR - SKIPPED BECAUSE NOT PO OR PS DSORG
+*                   NOTCAT - FILE IS NOT CATALOGUED TO THAT DISK
+*                   EXCLUD - IT WAS IN THE EXCLUDE MASK LIST 
 *               LRECL=80. GENERALLY TO SYSOUT.
 *    BKPLIST  - THE BACKUP LISTING.
 *               LRECL=80. MAY BE A PDS MEMBER OR A SEQUENTIAL FILE.
-*               MAY N O T BE SYSOUT/SPOOL.
+*               MAY N O T BE SYSOUT/SPOOL AS IT MUST BE A FILE THAT
+*               CAN BE BACKED UP.
 *    JCLOUT   - THE BACKUP JOB(S) TO BACKUP ALL THE PACKS
 *               LRECL=80. MAY BE A SEQUENTIAL FILE FOR LATER
 *               USE OR SPOOL FOR TESTING, BUT WOULD NORMALLY BE
@@ -183,7 +186,7 @@
 *                DO NOT HAVE MY DATE UTILITY... OR YOU COULD DOWNLOAD
 *                THAT FROM THE SAME PLACE YOU GOT THIS.
 *              = REPLACED ALL MVI/CLI OF C' ' WITH MVC/CLC OF BLNKCHAR
-*                AND SHRUNK WTO STATEMENTS BE REMOVING JOBNAME FROM THE
+*                AND SHRUNK WTO STATEMENTS BY REMOVING JOBNAME FROM THE
 *                START OF EACH MSG AS ABOVE CHANGES HAD BLOWN OUT THE
 *                SYMBOL TABLE AND I DON'T REALLY WANT TO USE TWO
 *                REGSISTERS FOR ADDRESSING YET. STILL HAVE TO KEEP
@@ -198,6 +201,10 @@
 *   2015/09/04 = ADDED THE JDATE (YYDDD) TO THE BACKUP LISTING BANNER
 *                AS I NEED IT FOR SOME JOBS THAT PROCESS THE BACKUP
 *                LISTING
+*   2016/08/08 = ADDED THE EXCLUDE DD CARD TO PROVIDE DSN MASKS FOR  
+*                FILES TO BE EXCLUDED FROM BEING BACKED UP, AS I   
+*                HAVE SOME VBA FILES THAT IEBGENER CANNOT BACKUP
+*                THE EXCLUDE DD CARD IS OPTIONAL
 *
 * --------------------------------------------------------------------
 *
@@ -214,6 +221,12 @@
 * // DCB=(DSORG=PS,RECFM=FB,LRECL=80,BLKSIZE=80),
 * // SPACE=(TRK,(1,1),RLSE),
 * // DSN=MARK.BACKUP.LIST
+* //EXCLUDE  DD   *
+* * ASTER IN COLUM 1 IS A COMMENT
+* MARK.EXCLUDE.ME1
+* MARK.EXCLUDE.ME2
+* /*
+* //
 *
 * ********************************************************************
          EJECT
@@ -324,6 +337,45 @@ HAVEFNAM LA    6,SYSPNAME+L'SYSPNAME
          SR    6,7
          ST    6,SYSPNLEN
 *
+* ---------------------------------------------------------------
+* Do we have an EXCLUDE DD card, if so load the exception list
+* ---------------------------------------------------------------
+         LA    1,0               Default is 0 exclude cards
+         ST    1,EXCOUNT         Save count 
+         RDJFCB EXCLUDE          Test for existence of DD card
+         LTR   15,15
+         BNZ   NOEXCLUD          No DD card, no excludes
+         GETMAIN R,LV=EXCLLEN
+         ST    1,EXCLADDR
+         LR    10,1              R10 to address dsect
+         LR    5,1               R5 as index into it
+         USING EXCLLIST,10       lets use it
+         OPEN  (EXCLUDE,(INPUT))
+         LA    5,EXCLTBL         R5 is index into table
+         LA    6,0               R6 is count of entries
+         LA    7,EXCLMAX         R7 is max entries allowed
+EXCLNEXT GET   EXCLUDE
+         CLI   0(1),C'*'         a * in column 1 is a comment
+         BE    EXCLNEXT
+         CLI   0(1),C' '         a space in column 1 is illegal, ignore
+         BE    EXCLNEXT
+         MVC   4(44,5),0(1)      move 44 bytes to offset in dsect + 4
+         LR    2,1               use R2 to find end of dsn mask
+         A     2,=F'48'          from end of possible dsn
+EXCLSCAN S     2,FULLONE         index back one
+         CLI   0(2),C' '         is it a space ?
+         BE    EXCLSCAN          yes, check prev byte
+         SR    2,1               addr of R2 - addr R1 to get the length
+         ST    2,0(5)            save mask len in dsect also
+         A     5,=F'48'          increment offset into dsect
+         A     6,FULLONE         increment exception count
+         CR    6,7               at max entries ?
+         BL    EXCLNEXT          no, go get next card
+         WTO   'TOO MANY EXCLUDE CARDS,IGNORED AFTER 40'
+EXCLEOF  ST    6,EXCOUNT         save count of excludes stored
+         CLOSE (EXCLUDE)         and done with exclude file
+NOEXCLUD CNOP  0,4
+*
 * SYSPNAME has the filename
 * SYSPNLEN has the length of the filename
 * ---------------------------------------------------------------
@@ -331,7 +383,6 @@ HAVEFNAM LA    6,SYSPNAME+L'SYSPNAME
 *           SYSPNAME has the filename
 *           SYSPNLEN has the length of the filename
 * ---------------------------------------------------------------
-*
          OPEN  (SKIPLIST,(OUTPUT))
          OPEN  (BKPLIST,(OUTPUT),JCLOUT,(OUTPUT))
          L     3,16                  CVT ADDR
@@ -401,7 +452,12 @@ EOF      CLOSE SYSLIB                CLOSE DOWN THIS PACK
 *
 EOJ      CLOSE (SKIPLIST)   CLOSE FILES
          CLOSE (BKPLIST,,JCLOUT)
-         L     13,SAVEAREA+4         RELOAD CALLERS SAVE AREA
+         L     3,EXCOUNT             ANY EXCLUDE ENTRIES ?
+         C     3,FULLZERO            IF ZERO THERE WERE NONE
+         BE    SKIPFREE              SO SKIP FREEMAIN        
+         L     1,EXCLADDR            GET ADDRESS OF DSECT GETMAIN
+         FREEMAIN R,A=(1),LV=EXCLLEN AND RELEASE STORAGE
+SKIPFREE L     13,SAVEAREA+4         RELOAD CALLERS SAVE AREA
          LM    14,12,12(13)          RELOAD CALLERS REGISTERS
          LA    15,0                  ZERO RETURN CODE
          BR    14                    GO BACK TO CALLER
@@ -418,10 +474,38 @@ DOBACKUP CNOP  0,4
 *        * the next two lines were added to skip the PASSWORD
 *        * file when backing up MVSRES as that file prompts
 *        * for a password to read the file, which causes the 
-*        * job to fail (when it is not replied to).
+*        * job to fail (when it is not replied to) on systems 
+*        * not using rakf
 *        * ---------------------------------------------------
          CLC   DS1DSNAM(9),=CL9'PASSWORD '
-         BE    READ
+         BE    EXCLULOG       NOW WE LOG EXCLUDES, LOG IT
+*        * ---------------------------------------------------
+*        * and the below code for dsn mask exclude checking
+*        * ---------------------------------------------------
+         L     3,EXCOUNT      ANY EXCLUDE ENTRIES ?
+         C     3,FULLZERO     IF ZERO THERE ARE NONE
+         BE    EXCLDONE       SO SKIP EXCLUDE TESTS
+*                             ELSE
+         LA    3,0            R3 TO BE INDEX COUNTER
+         LA    1,EXCLTBL      R1 ADDRESSES INTO DSECT
+EXNXTCHK L     2,0(1)         LOAD MASK LENGTH INTO R2
+         EX    2,EXCLCMP      EX IS CLC 4(0,R1),DS1DSNAM
+         BE    EXCLULOG       MATCHED MASK, SKIP IT
+         A     3,FULLONE      INCREMENT COUNT INTO TBL
+         A     1,=F'48'       INCREMENT OFFSET INTO TBL
+         C     3,EXCOUNT      AT END OF ENTRIES ?
+         BNH   EXNXTCHK       NO, GO CHECK THE NEXT
+         B     EXCLDONE
+EXCLULOG MVC   LINE1+2(6),=CL6'EXCLUD'     EXCLUDED IN THE REASON
+         MVC   LINE1+16(2),=CL2'OK'        OK IN THE NOTES FIELD
+         ST    4,MIDSTR4      SAVE R4, WE USE IT
+         BAL   4,NOTINBKP     LOG WE EXCLUDED IT
+         L     4,MIDSTR4      GET R4 BACK              
+         B     READ
+EXCLDONE CNOP  0,4
+*        * ---------------------------------------------------
+*        * end exclude checking
+*        * ---------------------------------------------------
          ST    4,MIDSTR4                     SAVE R4, WE USE IT
          ST    6,MIDSTR6                     ALSO R6
          L     4,POSCOUNT
@@ -671,6 +755,9 @@ MIDSTR6  DS    1F                    REGISTER SAVE
 JOBSTSAV DS    1F                    REGISTER SAVE
 POSCOUNT DS    1F                    POSITION COUNT
 JOBCOUNT DS    1F                    JOBS BUILT COUNT
+EXCOUNT  DS    1F                    COUNT OF EXCLUDE ENTRIES
+EXCLADDR DC    F'0'                  ADDR OF EXCLUDE LIST DSECT
+EXCLCMP  CLC   4(0,1),DS1DSNAM       EXCLUDE COMPARE USED BY EX
          DS    0D                    ALIGN
 PACKFLD  DS    PL8                   PACKED DECIMAL WORK
 NUMBRFLD DS    CL8                   TEXT NUMBER WORK
@@ -708,17 +795,68 @@ BKPLIST  DCB   DDNAME=BKPLIST,DSORG=PS,MACRF=(PM),                     X
 JCLOUT   DCB   DDNAME=JCLOUT,DSORG=PS,MACRF=PM,                        X
                BLKSIZE=80,RECFM=F,LRECL=80
 TEMPLATE DCB   DDNAME=TEMPLATE,DSORG=PS,MACRF=(GL),EODAD=ENDSTJOB
+EXCLUDE  DCB   DDNAME=EXCLUDE,DSORG=PS,MACRF=(GL),EODAD=EXCLEOF,       X
+               RECFM=FB,LRECL=80,EXLST=EXLSTEX 
 SYSLIB   DCB   DDNAME=DDXX,DSORG=PS,MACRF=R,RECFM=F,BLKSIZE=96,        X
                EXLST=EXLST,KEYLEN=44,EODAD=EOF
          LTORG
 EXLST    DC    0F'0',X'87',AL3(JFCB)
 JFCB     DS    CL176
          DS    0F
+EXLSTEX  DC    0F'0',X'87',AL3(JFCBEX)
+JFCBEX   DS    CL176
+         DS    0F
 EXLSTBKL DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
 JFCBAREA DC    176X'00'                 JFCB AREA
          ORG   JFCBAREA
          IEFJFCBN              map the jfcbarea
          LTORG
+* ---------------------------------------------------------------
+* Dsect used for keeping a list of excluded entries
+* ---------------------------------------------------------------
+EXCLMAX  EQU   40
+EXCLLIST DSECT
+EXCLTBL  DS    F,CL44       48 bytes (F len,44 char dsn) 
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+         DS    F,CL44       repeated for max entries     
+EXCLLEN  EQU   *-EXCLTBL
          END
 ZZ
 //LKED1B  EXEC PGM=IEWL,
@@ -745,10 +883,13 @@ ZZ
 //* ===================================================
 //* TEST THE PROGRAM.
 //* ...USING SAMPLE TEMPLATE FROM THIS FILE
-//* BKPLIST CAN BE A PDS MEMBER; IE: PREFIX.BKPLIST(MONDAY)
+//* BKPLIST CAN BE A PDS MEMBER RATHER THAN A FLAT FILE
+//* IE: PREFIX.BKPLIST(MONDAY) BUT IT CAN NOT BE SYSOUT
+//* THE EXCLUDE DD IS OPTIONAL
 //* ===================================================
 //TESTPROG EXEC PGM=BKBYVTOC,COND=(0,NE)
 //STEPLIB  DD   DSN=MARK.LIB.LOAD,DISP=SHR
+//*
 //* USE ALL THE CBT VOLUMES, MORE THAN ENOUGH FILES
 //* ON THOSE TO TEST GENERATION OF MULTIPLE JOBS
 //* AT THE 250 STEP LIMIT I HAVE IMPOSED.
@@ -756,7 +897,12 @@ ZZ
 //DD2      DD   UNIT=3350,VOL=SER=CBT000,DISP=OLD
 //DD3      DD   UNIT=3350,VOL=SER=CBT001,DISP=OLD
 //DD4      DD   UNIT=3350,VOL=SER=CBT002,DISP=OLD
+//*
+//* SKIPLIST LISTS ALL DATASETS NOT INCLUDED IN THE BACKUP
+//* AND WHY THEY WERE SKIPPED
 //SKIPLIST DD   SYSOUT=*
+//*
+//* YOU WILL WANT TO CHANGE THIS FILENAME AND PACK
 //BKPLIST  DD   DISP=(NEW,CATLG,DELETE),
 // DSN=MARK.TEST.BKBYVTOC,
 // UNIT=3380,VOL=SER=PUB002,
@@ -765,6 +911,13 @@ ZZ
 //JCLOUT   DD   SYSOUT=*           FOR TESTING
 //*JCLOUT   DD   SYSOUT=(A,INTRDR)   FOR LIVE RUN
 //TEMPLATE DD   DISP=SHR,DSN=INSTALL.UTILS.BKBYVTOC(TEMPLAT1)
+//*
+//* THE EXCLUDE DD IS OPTIONAL, DSNAME MASKS TO NOT BACKUP
+//* EXCLUDED DATASETS WILL BE INCLUDED IN THE SKIPLIST REPORT
+//EXCLUDE  DD   *
+* A ASTERIX IN COLUMN 1 IS A COMMENT CARD
+CBTCOV.FILE039
+/*
 //
 ./ ADD NAME=TEMPLAT1
 //XXXXXXXX JOB (0),CLASS=A,MSGCLASS=A,MSGLEVEL=(1,1)
@@ -776,8 +929,6 @@ ZZ
 //* One key thing to note is that in order to use referbacks
 //* in the procedures, something has to get the tape up first.
 //* The REPORT1 step does that, it has no other purpose.
-//* 2015/09/04 is using MDTAPALC its purpose is to also record
-//*            the volser of the tape allocated to the job.
 //* ---------------------------------------------------------------
 //BKPPO    PROC D=,LABEL=
 //BACKUPPO EXEC PGM=IEBCOPY,REGION=1024K,COND=(0,NE)
