@@ -1,5 +1,4 @@
-//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T,
-// USER=MARK,PASSWORD=MVS38J
+//MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T
 //* *****************************************************************
 //*
 //* INSTALL DATE/TIME UTILITY PROGRAM
@@ -3389,26 +3388,62 @@ R15      EQU   15
 ./ ADD NAME=SCHEDTST
 //MARKTEST JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T,
 // TIME=1440
+//*
 //* ===================================================================
 //*
-//* SCHEDTST: Assemble and test MDSCHED1 (prototype job scheduler)
-//*           (An example of exercising all the programs in this file)
+//*                W O R K   I N   P R O G R E S S
+//*                -------------------------------
 //*
-//* (A) Globally change MARK.LIB.LOAD
-//*     to one of your load libraries
-//* (B) In the TESTPGM step customise
-//*     (1) The JOBDECKS DD should point to a PDS you have jobs stored
-//*         within, the one in this JCL will not work for you.
-//*     (2) Update the sample SYSIN cards with current dates and the 
-//*         names of jobs in your PDS; and the times of course
-//*     (3) If you use RAKF update the PARM= value with a user/password
-//*         that can run batch jobs on your site, if you do not use
-//*         RAKF or have the values already coded in your jobdecks
-//*         delete the parm field
-//*     (4) Note: the TESTPGM step as provided writes the jobcards to  
-//*         sysout rather than intrdr so you can preview. The commented
-//*         out line fot intrdr can be uncommented when you are
-//*         comfortable.
+//* This will one day be a job scheduler. As it makes heavy use of
+//* date utilities I have included the SCHEDnnn programs into my date
+//* library, and inluded this member which is the current state of
+//* the job scheduler; it is a work in progress as it is being
+//* enhanced constantly as I think of extras I need.
+//*
+//* This is fully functional for scheduling JOBs on MVS3.8J
+//*
+//* Note: the test program step uses a SYSIN card deck stream for
+//*       input. To test the reload function you probably really
+//*       want to use a dataset so you can edit the data cards.
+//*
+//* CURRENT STATUS:
+//*   --> scheduling of jobs and commands works OK. Jobs are 
+//*       submitted via INTRDR so the program does not have to be
+//*       authurised if only job submission is required.
+//*       If command members are to be used then it must be
+//*       assembled AC=1 into an APF authourised library to access
+//*       the restricted SVC34 function.
+//*   + does submit jobs based on weekday number (0-6, sun-mon)
+//*   + does submit jobs based on date of month, ie: 10th of each
+//*   + does submit jobs based on an exact yyyy/mm/dd provided,
+//*     and handles errors (ie: if you say run on nov31 it will
+//*     work out there are not 31 days in nov and run it on dec1)
+//*   + PARM="USER=user,PASSWORD=password" can be provided to
+//*     the program which will be appended as a job continuation
+//*     card for batch jobs if provided. Needed on RAKF systems
+//*     where the default batch class should be denied by default
+//*
+//* IN PROGRESS
+//*   - the ability to issue console commands on schedule. Same
+//*     jobfile but members starting @ are assumed to be command
+//*     cards instead of JCL cards. REQUIRES that we are APF
+//*     authourised so a test is done and if we are not then
+//*     at execution time we just log that the command member
+//*     will be skipped. This allows all the scheduling to
+//*     continue to be tested.
+//*
+//* PENDING, in order of requirements
+//*   - sanity check input cards to ensure numbers are where
+//*     number should be
+//*   - Thinking, maybe replace the PARM= to provide a user/password
+//*     pair with a control file that does it based on jobname
+//*     prefix so different batch jobs can run with different
+//*     authorities
+//*   - change console status display to only display on the
+//*     requesting console
+//*   - LOW PRIORITY as I already do this externally
+//*      - job completion checking, job was ok or errored etc.
+//*      - job dependency checking, job b only runs if job a worked
 //*
 //* ===================================================================
 //ASM     EXEC PGM=IFOX00,
@@ -3417,48 +3452,66 @@ R15      EQU   15
 //SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
 //         DD  DISP=SHR,DSN=SYS1.AMODGEN              
 //         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=SYSDA
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=SYSDA
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=SYSDA
 //SYSTERM  DD  SYSOUT=*
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *               
 * *********************************************************************
 *
-* MDSCHED1: JOB SCHEDULER
+* MDSCHED1: 
+* Purpose: Batch job scheduler prototype
+* Requires: the support programs in my date library need to be in the
+*           linklist and the macros in this library are used in the
+*           assembly of this program.
 *
-*                W O R K   I N   P R O G R E S S
-*                -------------------------------
+* Inputs:  Parm data
+*              If a parm is provided it as appended as a job
+*              continuation card after all job card information
+*              is read
+*          DD cards required
+*              DD SYSIN    - job scheduling control file
+*              DD JOBDECKS - a PDS containing batch jobs to be
+*                            submitted
+*              DD PUNCH    - where jobs are written to, normally
+*                            this would be an INTRDR card reader,
+*                            but for testing sysout can be used
+*          Console commands accepted
+*              - modify commands ("F xxx,status" and "F xxx,reload")
+*                and the park ("P xxx") command are accepted
 *
-* This will one day be a job scheduler. As it makes heavy use of
-* date utilities I have included the SCHEDnnn programs into my date
-* library, and inluded this member which is the current state of
-* the job scheduler.
-*
-* This is fully functional for scheduling JOBs on MVS3.8J
-*
-* Input: PARM='data string' - if provided is used as a
-*          continuation card appended to the jobcard;
-*          I use it to pass a 'USER=xxx,PASSWORD=xxx' value
-*        DD SYSIN    - job scheduling control file
-*        DD JOBDECKS - a PDS containing batch jobs to be submitted
-*        DD PUNCH    - where jobs are written to, normally this
-*          would be an INTRDR card reader, but for testing
-*          sysout can be used
 * Outputs: Submits batch jobs on schedule via DD punch
-*          Lots of WTOs
-*          Responses to operator commands
+*             - jcl decks are any member not beginning with @
+*             - if a PARM= is provided to this program the parm
+*               data is appended to the job card (ie: parm can
+*               contain user/password data for all jobs)
+*          Submits commands from command members on schedule if
+*             - the program is APF authourised
+*             - MYSVC34 program is in the linklist
+*             - command members are members beginning with @
+*          WTOs in order of frequency
+*             - logs what members are being processed (job/command)
+*             - reports missing members at scheduled execution time
+*             - logs command members skipped if this program is not
+*               running APF authourised (must be APF to issue commands)
+*             - at startup logs if job card continuation is to be used
+*             - at startup logs if we are running non-apf authourised
+*             - in response to F(modify) commands will display WTOs
+*               showing scheduled jobs and server settings
 *
-* Operator Commands Available
-* ---------------------------
-* F jobname,STATUS     - show next scheduled jobs
-* F jobname,RELOAD     - reread the SYSIN control file
-* F jobname,STOP       - stop the scheduler
-* P jobname            - stop the scheduler
+* Current Limitations: 
+*          A maximum of 15 jobs can be scheduled for the same
+*          date/time minute, thats a table space limitation you
+*          can change in the program (TBLMAX)... however as TK3
+*          does not have 15 initiators what the hell are you
+*          thinking if you need more than that per minute.
 *
-* SYSIN Control Card Format
-* -------------------------
+* --- CONTROL FILE DATA CARD FORMAT ---
+* MBR    C HHMM DATA
 *    Cols 1-8 Member name in JOBFILE DD
+*             Member names starting with @ are console command decks 
+*             instead of JCL decks
 *    Col 10   Calculation type flag 
 *               W=next weekday number             
 *               D=next DD day of month
@@ -3466,7 +3519,7 @@ R15      EQU   15
 *               R=repeat every nn minutes (NOT IMPLEMENTED YET)
 *               L=use calendar (NOT IMPLEMENTED YET)
 *    Cols 12-15 HHMM (hour and minute to run)
-*    Cols 17-26 DATA value for requested datestamp calclation
+*    Cols 17-26 DATA for request calclation
 *             W - weekday number to use, 0-6 where 0 is sunday
 *                 OR * to run every day
 *             D - day of month to use, ie: 07 to run on the seventh
@@ -3479,64 +3532,9 @@ R15      EQU   15
 *             U - and exact date as YYYY/MM/DD. Dates in the past
 *                 will be ignored
 *
-* CAUTION: A maximum of 15 jobs can be scheduled for the same
-*          date/time minute, thats a table space limitation you
-*          can change easily in the program (TBLMAX)
-*
 * ENSURE YOU HAVE NUMBERS WHERE NUMBERS ARE SUPPOSED TO BE
 * CARD DATA IS NOT CHECKED AT PRESENT, IF IT ABENDS S0C7 YOU HAVE
 * A NON-NUMERIC WHERE A NUMBER SHOULD BE.
-*
-* General Notes
-* -------------
-*
-* Note: the test program step uses a SYSIN card deck stream for
-*       input. To test the reload function you probably really
-*       want to use a dataset so you can edit the data cards.
-*
-* CURRENT STATUS:
-*   +-> works ALMOST perfectly for scheduling jobs, this is done
-*       via INTRDR so the program does not have to be authorised
-*       Does not support command scheduling, to issue commands
-*       would require this program to be APF authourised; at
-*       this point if you want to issue commands put then in a
-*       jobdeck (or use JES2 timers which already allow the
-*       scheduking of commands)
-*    -> Remaining issue when extracting records from a IO data
-*       the last block, which may not be full, will result
-*       in me passing those trailing bit patterns as job
-*       cards.... thinking about that.
-*   + does submit jobs based on weekday number (0-6, sun-mon)
-*   + does submit jobs based on date of month, ie: 10th of each
-*   + does submit jobs based on an exact yyyy/mm/dd provided,
-*     and handles errors (ie: if you say run on nov31 it will
-*     work out there are not 31 days in nov and run it on dec1)
-*   + optional PARM="USER=user,PASSWORD=password" can be provided 
-*     to the program which will be appended as a job continuation
-*     card for batch jobs if provided. Needed on RAKF systems
-*     where the default batch class should be denied by default
-*
-*  Note on timestamp calculations
-*    The scheduler libraries handle calculations such as
-*    31st of february by just calculating the timestamp
-*    that is 31 days from the start of february.
-*    As this scheduler only queues for execution jobs one
-*    hour ahead of time in most cases that would prevent 
-*    a job defined in that way from running... however
-*    in a month with only 30 days if you set a date of 31st
-*    with a timestamp of say 00:30am it is possible that if
-*    the last "poll" of scheduled jobs occurs after 23:30
-*    that the job would be scheduled on.
-*    Sooo, be carefull
-*
-* PENDING, in order of requirements
-*   - Thinking, maybe replace the PARM= to provide a user/password
-*     pair with a control file that does it based on jobname
-*     prefix so different batch jobs can run with different
-*     authorities
-*   - the ability to issue console commands on schedule. As
-*     JES2 provides that natively and commands can be issued
-*     from a batch job using BSPOSCMD or MDSVC34 thats a low priority
 *
 * *********************************************************************
          MACRO
@@ -3545,13 +3543,15 @@ R15      EQU   15
          MVC   &A+1(L'&A-1),&A
          MEND
 MDSCHED1 CSECT
-         STM   R14,R12,12(13)         , standard program entry
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
+         STM   R14,R12,12(13)      SAVE REGISTERS
+         LR    R12,R15             R12 IS ADDR OF ENTRY POINT
+         USING MDSCHED1,R12,R11    ADDRESSABILITY TO CSECT
+         LA    R15,SAVEAREA        R15 TEMP ADDR OF OUR SAVE AREA
+         ST    R15,8(R13)          SAVE PTR TO OUR SAVEAREA IN CALLERS
+         ST    R13,SAVEAREA+4      SAVE CALLERS SAVE AREA ADDR
+         LR    R13,R15             R13 TO ADDRESS OUR SAVE AREA
+         LA    R11,4095(R12)       R11 WILL BE...
+         LA    R11,1(R11)          ...SECOND BASE REGISTER
 * ---------------------------------------------------------------------
 * Check for any parm provided
 * ---------------------------------------------------------------------
@@ -3568,25 +3568,29 @@ MDSCHED1 CSECT
 PARMOK   EX    R5,MOVEPARM
          MVI   HAVEPARM,C'Y'
          WTO   'MID0219I JOBCARD CONTINUATION DATA WILL BE USED'
-         B     BEGIN
+         B     TESTAPF
 MOVEPARM MVC   JCLPARM+3(0),0(R1)  ex command to save the parm
 NOPARM   MVI   HAVEPARM,C'N'
-BEGIN    CNOP  0,4
+*
+TESTAPF  CNOP  0,4
+* We can only issue commands if we are APF authourised
+         TESTAUTH FCTN=1
+         LTR   R15,R15
+         BZ    AUTHDONE
+         MVI   USEAPFOK,C'N'
+         WTO   'MID0231W PROGRAM NOT AUTHORISED, COMMAND MEMBERS DISABLX
+               ED'
+AUTHDONE CNOP  0,4
+*
 * If we can continue we need to getmain some memory
          GETMAIN R,LV=TBLLV,SP=126
          ST      R1,TBLADDR        save allocated memory address
 * ---------------------------------------------------------------------
 * Lets loop through the control file and find the next set of jobs
+* Do early so we have data for timer.
 * ---------------------------------------------------------------------
          BAL   R6,READCTLF
-* ---------------------------------------------------------------------
-* Show number and next time of jobs to be run
-*   If numjobs is 0 or next exec time > poll interval next timer will
-*   be set to the poll interval
-*   If a job(s) is scheduled within the poll interval next timer will
-*   be set to the next exec time
-* ---------------------------------------------------------------------
-
+*
 * ---------------------------------------------------------------------
 * Wait for timer (next job exec or next poll time) or operator
 * command to be actioned.
@@ -3696,10 +3700,9 @@ CALCDONE ST    R2,MINDIFF         and save the new difference
          D     R0,ONEMIN            div by 1min hsecs
          CVD   R1,DOUBLE
          UNPK  DOUBLE2(8),DOUBLE
-         OI    DOUBLE2+7,C'0'  
+         OI    DOUBLE2+7,C'0'                          
          MVC   DBGWTO01+38(3),DOUBLE2+5
-DBGWTO01 WTO   'MID0232I TIMER RESCHEDULED TO nnn MINUTES (DEBUG)',    X
-               ROUTCDE=11
+DBGWTO01 WTO   'MID0999I TIMER RESCHEDULED TO nnn MINUTES (DEBUG)'
          B     WAIT
 * ********************************************************************
 * CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
@@ -3734,18 +3737,27 @@ DONEWPOL EQU   *
          LA    R9,TBLENTLN          OFFSET JUMP (TBL ITEM LEN)
 *
 * Say what member we are processing, and then process it
-DONEW000 MVC   DONEWWTO+32(8),8(R8)    member name to wto         
-DONEWWTO WTO   'MID0222I SUBMITTING JOB xxxxxxxx   ',ROUTCDE=11
-         MVC   MEMBER(L'MEMBER),8(R8)  member to be read
+DONEW000 CLI   8(R8),C'@'               command member ?   
+         BE    DOCMD000                 yes, cmd messge
+         MVC   DONEWWTO+39(8),8(R8)     member name to wto         
+DONEWWTO WTO   'MID0222I SUBMITTING JOB MEMBER xxxxxxxx'
+         B     GODOWORK
+
+DOCMD000 CLI   USEAPFOK,C'Y'       are we APF authourised ?
+         BE    DOCMD001
+         MVC   DONECSKP+41(8),8(R8)     member name to wto         
+DONECSKP WTO   'MID0232W SKIPPING COMMAND MEMBER xxxxxxxx, WE ARE NOT AX
+               PF AUTHORISED'
+         B     WORKDONE
+DOCMD001 MVC   DONECWTO+43(8),8(R8)     member name to wto         
+DONECWTO WTO   'MID0233I SUBMITTING COMMAND MEMBER xxxxxxxx'
+GODOWORK MVC   MEMBER(L'MEMBER),8(R8)  member to be read
          BAL   R6,GETJOBIN
 * And keep going
-         AR    R8,R9                move R8 to next slot
+WORKDONE AR    R8,R9                move R8 to next slot
          S     R2,ONE               dec counter
          C     R2,ZERO
          BH    DONEW000
-*
-* everything in table processed now
-*
 *
 * reread the control file for the next jobs
 *
@@ -3815,7 +3827,7 @@ READNEXT GET   SYSIN
          BZ    READNEXT
          L     R0,MINDIFF
          CR    R15,R0
-         BH    READ002              diff higher than current, check 1hr
+         BH    READ002            diff higher than current, check 1hr
          CR    R15,R0             if the same another job for this time
          BE    READ001            
 * else first time for this timestamp
@@ -3849,7 +3861,8 @@ READ003  L     R1,NEXTHOUR          increment jobns in next hour
          A     R1,ONE   
          ST    R1,NEXTHOUR
          B     READNEXT             and get next card
-READSKIP WTO   'MID0224E MAX JOBS FOR NEXT ACTIVITY EXCEEDED, SKIPING'
+READSKIP WTO   'MID0224E MAX JOBS FOR NEXT ACTIVITY EXCEEDED, SKIPING SX
+               OME JOBS'
          B     READNEXT             and get next card
 EOFSYSIN CLOSE (SYSIN)         close the input file
          L     R1,MINDIFF       
@@ -3883,7 +3896,7 @@ READ004  L     R1,NEXTHOUR          jobs in next hour for message
          MVC   LOWCOUNT(3),DOUBLE2+5    save in status message also
 *               ..1....+....2....+....3....+....4....+....5....+....6
 WTOSTATE WTO   'MID0227I NEXT ACTIVITY IN mmm MINS FOR nnn JOBS, nnn JOX
-               BS IN NEXT HOUR',ROUTCDE=11
+               BS IN NEXT HOUR'
          DROP  R7
 * Save hsecs since midnight timer should pop, so we can recalculate
 * the correct time if operators enter commands (which cancel the timer)
@@ -3897,7 +3910,13 @@ WTOSTATE WTO   'MID0227I NEXT ACTIVITY IN mmm MINS FOR nnn JOBS, nnn JOX
          EJECT
 ***********************************************************************
 *                                                                     *
-*            READ THE JOB CARDS, WRITE TO PUNCH FILE                  *
+*            READ CARDS FROM THE MEMBER BEING PROCESSED               *
+*                                                                     *
+*     IF A JOB MEMBER WRITE THE JCL TO DD PUNCH...                    * 
+*     ...OPTIONALLY MODIFY JOBCARD TO INCLUDE USER/PASSWORD INFO      *
+*                                                                     *
+*     IF A COMMAND MEMBER ISSUE THE CONSOLE COMMANDS                  *
+*                                                                     *
 * CALL BAL R6,GETJOBIN                                                *
 * ON EXIT R1 WILL BE 0=OK, NON-ZERO=ERROR OCURRED                     *
 *                                                                     *
@@ -3908,13 +3927,19 @@ WTOSTATE WTO   'MID0227I NEXT ACTIVITY IN mmm MINS FOR nnn JOBS, nnn JOX
 *                                                                     *
 ***********************************************************************
 GETJOBIN STM  R0,R15,JOBINSAV
+         MVI   CMDDECK,C'N'       DEFAULT IS JOB NOT COMMANDS
          MVI   JOBCONT,C'N'       NOT PROCESSING JOBCARDS YET
-         SR   R1,R1
+         CLI   MEMBER,C'@'        TEST FOR COMMAND MEMBER
+         BNE   CSKIP000           IT IS NOT, SKIP FLAG SET
+         MVI   CMDDECK,C'Y'       ELSE SAY USING A CMD MEMBER
+CSKIP000 SR   R1,R1
          ST   R1,JOBINERR         NO ERROR YET
 *  OPEN THE FILE AND LOCATE THE MEMBER REQUESTED
          OPEN  (JOBDECKS,INPUT)
+         CLI   CMDDECK,C'Y'       IF CMDS DO NOT NEED PUNCH
+         BE    CSKIP001
          OPEN  (PUNCH,OUTPUT)
-         RDJFCB JOBDECKS          READ IN CASE WE NEED THE DSN FOR
+CSKIP001 RDJFCB JOBDECKS          READ IN CASE WE NEED THE DSN FOR
 *                                 ERROR MESSAGES. WE READ IT AGAIN
 *                                 CLOSER TO THE GETMAIN FOR ALL THE
 *                                 OTHER VALUED WE NEED.
@@ -3966,6 +3991,12 @@ INITBLK  NI    0(R6),X'00'           RESET BLOCK TO BINARY ZEROS.
          AH    R9,JFCBLKSI           to block end (what we getmained)
 NEXTREC  CLI   0(R10),X'00'          SKIP NULLS AT END OF BLOCK
          BE    SKIPBLNK
+*
+* If a command stream go do trhat with the line
+         CLI   CMDDECK,C'Y'       IF CMDS GO DO THAT       
+         BE    CSKIP002
+*
+* Else if is JCL we write to PUNCH
          MVC   JCLCARD(L'JCLCARD),0(R10)   MOVE LINE TO JCLCARD
 * Extra steps for inserting continuation jobcard
          CLI   HAVEPARM,C'Y'         only do extra if parm given
@@ -3980,6 +4011,22 @@ XTR001   BAL   R4,CONTCHEK    go scan the card to see if we append here
 XTR002   ST    R1,SAVEJOB1           PUT USES REGS 1,14,15
          PUT   PUNCH,JCLCARD 
          L     R1,SAVEJOB1
+         B     SKIPBLNK              GO GET NEXT RECORD LINE
+*
+* Process a command card
+CSKIP002 CLI   0(R10),C'*'           COMMENT CARD ?
+         BE    SKIPBLNK              YES, IGNORE IT
+         MVC   SVC34CMD(L'SVC34CMD),0(R10)  MOVE COMMAND TO SVC34 BUF
+         MVC   WTOCMD+33(35),SVC34CMD
+WTOCMD   WTO   'MIDX2XXI ISSUING COMMAND ....+....1....+....2....+....3X
+               ....+'
+         MODESET KEY=ZERO,MODE=SUP
+         SR    R1,R1
+         LA    R1,SVC34BUF
+         SR    R0,R0                 use master console
+         SVC   34                    isssue command
+         MODESET KEY=NZERO,MODE=PROB
+*
 SKIPBLNK AR    R10,R7                point to next record
          CR    R10,R9                at end of buffer ???
          BL    NEXTREC               no, get next record
@@ -3989,8 +4036,10 @@ EOFMMBR  DS    0H
          L     R1,JOBGMAIN           AND ADDR OF MEMORY TO FREE
          FREEMAIN RU,LV=(0),A=(1)
 JOBINXIT CLOSE (JOBDECKS)            CLOSE FILE
+         CLI   CMDDECK,C'Y'       IF CMDS NO PUNCH TO CLOSE 
+         BE    CSKIP004
          CLOSE (PUNCH)
-         LM    R0,R15,JOBINSAV
+CSKIP004 LM    R0,R15,JOBINSAV
          L     R1,JOBINERR       IF ANY ERRORS REPORT BACK
          BR    R6
 *
@@ -4001,6 +4050,11 @@ JOBGMAIN DS    F
 JOBINERR DS    F
 MEMBER   DS    CL8
 JCLCARD  DS    CL80
+CMDDECK  DS    C
+         DS    0F
+SVC34BUF DC    AL2(37),AL2(0)      Text length, flags + data
+SVC34CMD DS    CL35
+         DS    0F
 PUNCH    DCB   DDNAME=PUNCH,DSORG=PS,MACRF=PM,LRECL=80,                X
                BLKSIZE=80,RECFM=F 
 *   DCB BITS FOR ACCESSING MEMBERS IN JOBDECKS
@@ -4047,18 +4101,35 @@ CONTEXIT LM    R1,R4,SAVECONT
 ***********************************************************************
 * only need to list scheduled jobs if there are any
 STATDISP STM   R5,R9,SAVEDISP
+*
+* Added the APF and job continuation HAVEPARM status displays here
+         CLI   USEAPFOK,C'Y'         are we APF authourised ?
+         BNE   STAT0001 
+         WTO   'MID0235I RUNNING APF AUTHOURISED, COMMAND MEMBERS AVAILX
+               ABLE'
+         B     STAT0002
+STAT0001 WTO   'MID0236I PROGRAM NOT APF AUTHOURISED, COMMAND MEMBERS DX
+               ISABLED'
+STAT0002 CLI   HAVEPARM,C'Y'
+         BNE   STAT0003
+         WTO   'MID0237I JOB CARD CONTINUATION DATA IS BEING APPENDED'
+         B     STAT0004
+STAT0003 WTO   'MID0238I NO JOB CARD CONTINUATION DATA IS APPENDED'
+STAT0004 CNOP  0,4
+*
+* Now the meaningfull job queued/scheduled stats
          L     R5,TBLCOUNT           USE R2 (oops, R1 used by WTO)
          C     R5,ZERO 
          BNH   WTOJOB00              NO TABLE ENTRIES
 * else list the entries in the table and when they will run
-WTOJOBNN WTO   'MID0233I nnn JOBS DUE TO RUN AT HH:MM '
+WTOJOBNN WTO   'MID0239I nnn JOBS DUE TO RUN AT HH:MM '
          L     R7,TBLADDR
          USING TBLENTRY,R7
          LA    R8,TBLENTRY          USE R8 TO INDEX INTO TABLE
          LA    R9,TBLENTLN          OFFSET JUMP (TBL ITEM LEN)
 * Say what members we will be running next              
 WTOJOBMV MVC   WTOJOBLL+21(8),8(R8)
-WTOJOBLL WTO   'MID0234I JOB xxxxxxxx SCHEDULED'
+WTOJOBLL WTO   'MID0240I JOB xxxxxxxx SCHEDULED'
          AR    R8,R9                move R8 to next slot
          S     R5,ONE               dec counter
          C     R5,ZERO              any left to list ?
@@ -4066,7 +4137,7 @@ WTOJOBLL WTO   'MID0234I JOB xxxxxxxx SCHEDULED'
          B     STATEXIT             done
          DROP  R7
 WTOJOB00 CNOP  0,4
-         WTO   'MID0235I NO JOBS QUEUED ON LAST HOURLY CHECK'
+         WTO   'MID0241I NO JOBS QUEUED ON LAST HOURLY CHECK'
 STATEXIT LM    R5,R9,SAVEDISP
          BR    R6                   done
 SAVEDISP DS    5F                   save registers over statdisp
@@ -4095,6 +4166,7 @@ TIMESTMP DS    F                   used to recalculate timer
 NEXTHOUR DS    F                   number of jobs within next hour
 HAVEPARM DS    C                   jcl parm provided
 JOBCONT  DS    C                   processing jobcards flag
+USEAPFOK DC    C'Y'                default assumption is apf ok
 JCLPARM  DC    CL80'// '           jcl parm data
 *
 * Parm area, word aligned, for link to sched002
@@ -4172,20 +4244,20 @@ GE       EQU   11   * NOT A LOW
 LT       EQU   4    * A LOW
          END
 /*
-//SYSPUNCH DD  SYSOUT=*
+//SYSPUNCH DD  SYSOUT=8
 //SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
 //    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
 //LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             PARM='XREF,LIST,LET,TEST,AC=1',
 //             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DISP=SHR,DSN=MARK.LIB.LOAD(MDSCHED1)
+//SYSLMOD  DD  DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH(MDSCHED1)
 //SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
 //SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
 //SYSPRINT DD  SYSOUT=*
 //LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             PARM='XREF,LIST,LET,TEST,AC=1',
 //             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSLMOD  DD  DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
 //SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
 //SYSPRINT DD  SYSOUT=*
 //SYSLIN   DD  *
@@ -4194,9 +4266,9 @@ LT       EQU   4    * A LOW
  NAME MDSCHED1(R)
 /*
 //TESTPGM EXEC PGM=MDSCHED1,COND=(0,NE),
-// PARM='USER=xxxxxx,PASSWORD=xxxxxx'
-//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD
-//JOBDECKS DD DISP=SHR,DSN=MARK.TEST.MDSCHED1.JOBFILE
+// PARM='USER=GUEST3,PASSWORD=GUEST'
+//STEPLIB DD DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//JOBDECKS DD DISP=SHR,DSN=SYS9.SCHEDULE.JOBFILE
 //PUNCH    DD SYSOUT=*
 //*PUNCH    DD SYSOUT=(A,INTRDR)  REPLACE ABOVE TO RUN JOBS
 //SYSABEND DD SYSOUT=*
@@ -4204,12 +4276,17 @@ LT       EQU   4    * A LOW
 //SYSIN DD *
 * *********************************************************************
 *
-* TEST DATA CARDS - CUSTOMISE THESE FOR YOUR SITE
-* Pretty much a copy of what I use with a few extra examples thrown
-* in to show the syntax formats I don't use a lot.
+* Y O U   S H O U L D   H A V E   C O N T R O L   C A R D S   I N   A
+* P D S   M E M B E R.
+* The inline SYSIN here is to DEMO the functions, for live use 
+* (and the reload function to be of use) you need a datafile that
+* can be edited.
 *
-* MBRNAMEx C HHMM DATA
+* TEST DATA CARDS
+* MBR    C HHMM DATA
 *    Cols 1-8 Member name in JOBFILE DD
+*             Member names starting with @ are console command decks 
+*             instead of JCL decks
 *    Col 10   Calculation type flag 
 *               W=next weekday number             
 *               D=next DD day of month
@@ -4231,22 +4308,35 @@ LT       EQU   4    * A LOW
 *                 will be ignored
 *
 * CAUTION: A maximum of 15 jobs can be scheduled for the same
-*          date/time minute, thats a table space limitation you
-*          can change in the program (TBLMAX)
+*          date/time minute
 *
 * ENSURE YOU HAVE NUMBERS WHERE NUMBERS ARE SUPPOSED TO BE
 * CARD DATA IS NOT CHECKED AT PRESENT, IF IT ABENDS S0C7 YOU HAVE
 * A NON-NUMERIC WHERE A NUMBER SHOULD BE.
 *
 * *********************************************************************
-* 
+XXXXXXXX W 2016 0            EXPECT NEXT SUNDAY
+XXXXXXXX W 2016 1            EXPECT NEXT MONDAY 
+NOTFOUND W 0800 *            EXPECT EVERY DAY AT 08:00
+NOTFOUND D 1105 06           EXPECT 6TH OF EACH MONTH 
+NOTFOUND U 1130 2016/07/07   EXACT TIME DATE PROVIDED
+DUPTIME  W 1135 4            EXPECT EVERY THURSDAY 
+CHECKDS  W 1135 4            EXPECT EVERY THURSDAY 
+NOTFOUND W 1135 4            EXPECT EVERY THURSDAY 
+NOTFOUND W 1240 4            EXPECT EVERY THURSDAY 
+NOTFOUND W 1110 5            EXPECT EVERY FRIDAY
+DUPTIME  U 1000 2016/11/13   EXACT DATE PROVIDED
+NOTFOUND U 1000 2016/11/13   EXACT DATE PROVIDED
+@DUTAPE  W 1130 0            SUNDAYS (COMMAND MEMBER @)
+@PMMPF   W 1135 0            SUNDAYS (COMMAND MEMBER @)
+*
 * GENERAL MAINTENANCE JOBS
 * ------------------------
-J2PURGE  W 2305 *            EVERY DAY, PURGE OLD SPOOLED OUTPUT
-J2LOGROL W 0001 *            EVERY DAY, ROLL SYSLOG
+@J2PURGE W 2305 *            EVERY DAY, PURGE OLD SPOOLED OUTPUT 
+@J2LGROL W 0001 *            EVERY DAY, ROLL SYSLOG 
 DY01SCR  W 0010 *            EVERY DAY, RECLAIM SCRATCH TAPES
-J2ARCSTR W 0003 6            EVERY SATURDAY, START WTR TO ARCIVE SYSLOG
-J2ARCEND W 0008 6            EVERY SATURDAY, STOP WTR STARTED ABOVE    
+@J2ARCGO W 0003 6            EVERY SATURDAY, START WTR TO ARCIVE SYSLOG
+@J2ARCEN W 0008 6            EVERY SATURDAY, STOP WTR STARTED ABOVE    
 *
 CHECKDS  W 0001 *            EVERY DAY, EVERY 2 HRS, CHECK KEY DATASETS
 CHECKDS  W 0201 *            PERCENTAGE FULL AND AUTORECOVER IF NEEDED;
@@ -4260,19 +4350,6 @@ CHECKDS  W 1601 *
 CHECKDS  W 1801 *                        
 CHECKDS  W 2001 *                     
 CHECKDS  W 2201 *                        
-*
-* My I am alive polls to detect how long the hercules
-* system has been running so I can spot any unexpected
-* restarts of the system my automation decided was
-* necessary.
-DUPTIME  W 0001 *      
-DUPTIME  W 0301 *      
-DUPTIME  W 0601 *    
-DUPTIME  W 0901 *    
-DUPTIME  W 1201 *     
-DUPTIME  W 1501 * 
-DUPTIME  W 1801 *       
-DUPTIME  W 2101 *      
 *
 * BACKUP SCHEDULES
 * SEPERATE ENTRIES AS FRIDAYS WEEKLY BACKUPS NEED EVERYTHING
