@@ -144,7 +144,7 @@ Edit UDATE003  (date calculations using time STCK values)
       current time; refer to the test programs for syntax.
       ---> they are refenced by the main u370date macro if you
            intend to use some of the BETA functions such as
-           CALCCARD (calccard does not work correctly yet)
+           CALCCARD
 Edit SCHED001,
  - change the load library from MARK.LIB.LOAD to one you want to use
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
@@ -163,9 +163,6 @@ Edit SCHEDTST ( *** very optional, the scheduler will start ***)
    YOU HAVE JOBS DERFINED IN
  - run the job to assemble the program, IT WILL ALSO START THE
    PROGRAM running, use 'P jobname' to stop the test.
- * This is not a production ready job scheduler, it exists to test
-   the functions of the programs only at this time
- 
 
 Testing
 -------
@@ -215,7 +212,7 @@ SCHED002 - date utility program to find the number of hsecs from
            the current time until a target time, if target time
            is within 24hrs
 SCHEDTST - A prototype job scheduler, fully functional for     
-           scheduling job submissions
+           scheduling jobs and commands
 
 TESTDOW  - test the DAYOWEEK macro, example of how to use it
 DAYOWEEK - macro to return the day of the week (0-6 for sun-mon)
@@ -280,7 +277,6 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
                                * ==> in testing - BETA - not OK
                                *  --> REQUIRES SCHED001 IN LINKLIST 
                                *  --> data mapping is D370SCHD
-                               *  --> you should not play with this
                 Extra Macro parameters required if REQ=DATA or DATATZ
                   DATEREG=     required if INFMT=DEC,REQ=DATA is used
                   TIMEREG=     required if INFMT=DEC,REQ=DATA is used
@@ -1668,14 +1664,14 @@ Change History
 2016/07/07   The SCHEDTST member is now a bug free working job  
              scheduler that exercises the "schednnn" utility
              programs shipped with this file.
+2016/11/13   Updated SCHEDTST member, now also supports issuing
+             console commands as well as submitting jobs
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&REG=
 .**********************************************************************
 .*                                                                    *
 .* LEAPYEAR: CHECK IF LEAP YEAR                                       *
-.*                                                                    *
-.* N O T   Y E T   W O R K I N G                                      *
 .*                                                                    *
 .* PARAMETERS -                                                       *
 .*   TYPE=YYYY|DEC                                                    *
