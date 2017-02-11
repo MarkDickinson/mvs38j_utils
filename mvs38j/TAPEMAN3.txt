@@ -1,4 +1,5 @@
-//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T
+//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T,
+// USER=MARK,PASSWORD=MVS38J
 //* **************************************************************
 //*
 //*         INSTALLATION JOB FOR TAPEMAN3
@@ -4647,9 +4648,15 @@ TAPEMAN.SRC
                  resource to (to prevent the OS requesting endless
                  'retry' tape mounts until the tapeman scratch pool
                  is exhausted, the job needs to be cancelled)
+     ZMD0001   - a usermod for TK4- to update IEECVXIT with the   
+                 message handling needed for TAPEMAN3
+                 (note: for TK4-, not for turnkey3)
+     ZMD0001R  - a job to backout usermod ZMD0001; it backs out
+                 to the base level so Jurgens usermods for TK4-
+                 need to be manually re-applied (doc in member)
 
 TAPEMAN.LINKLIB
-  These are pre-assembled modules. See the documentation for those
+  These are assembled modules. See the documentation for those
   that need to be in apf libraries and those that don't.
      TAPEMAN   - tapeman program itself
      TAPEMCUU  - batch mounter when automation is shutdown
@@ -4730,6 +4737,9 @@ A.3 - create a new catalogue and dataspace
 Appendix B - preparation datasheet
 
 Appendix C - installtion checklist (very short)
+
+Appendix D - user exit changes, manual for TK3 usermod for TK4-
+             (optional unless use use RAKF)
 
 
 ---------------------------------------------------------------
@@ -4941,7 +4951,7 @@ SHCMDOPT DISABLE
   (1) add an extra DD card to the MMPF proc you use, it should be
       using the filename you selected, the example here is what
       is used on my system
-//TAPEVOLS DD   DSN=VSAM.TAPEMAN3.VVDS.VOLSERS,DISP=OLD
+//TAPEVOLS DD   DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS,DISP=OLD
       Yes, disp must be old !. shr will run in mmpf ok but then
       all other utilities trying to share the database will get
       IO errors on sharing violations.
@@ -5129,6 +5139,39 @@ Appendix C - installation checksheet
 |   [ ] Added the new MMPF rules, and activated them          |
 |                                                             |
 +-------------------------------------------------------------+
+
+
+
+---------------------------------------------------------------
+Appendix D - user exit changes, manual for TK3 usermod for TK4-
+---------------------------------------------------------------
+
+Turnkey3 users should refer to the IEECVXIT member and merge
+the required changes made there with any changes you may have
+already made for your own customistaion.
+
+TK4- users, if they have not already customised IEECVXIT 
+themselves, can run the job to install usermod ZMD0001
+A F T E R changing the TK3 VSAM database name to the name
+you have chosen to install the database as
+(search on VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS)
+
+If doing the changes manually for your customised IEECVXIT
+user exit the changes you must make are
+* for a RAKF deny on a tape volser you must cancel the job
+  requesting the mount or there will be an endless loop of
+  mount requests being rejected by RAKF ... this is needed
+  even if you do not use my tapeman3 utility as it is
+  jolly old RAKF causing that
+* for an enqueue (waiting for dataset) on the tape volser
+  catalog file you must 'P MMPF' assuming you are using
+  my MMPF utility of course (this documentation assumes
+  you are) to release the file... 
+  ...batch jobs (database update jobs) cause this...
+  ...it is expected you have a external way of restarting 
+  MMPF after a few seconds, I use 'taskmon' for this
+  which should be available from the website you obtained
+  this file from.
 ./ ADD NAME=TAPEMCUU
 TAPEMCUU - a TAPEMAN Utility Program
 ====================================
@@ -5243,7 +5286,7 @@ test program it does no verification on the date field passed.
 
 //MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=T
 //TAPEMUTL EXEC PGM=TAPEMUTL
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 TAPE01 07099
@@ -5288,7 +5331,7 @@ The contents of that member are below
 //* THAT HAVE PASSED THEIR EXPIRY DATES.
 //*
 //DAILYSCR EXEC PGM=TAPEMSCR
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS VSAM FILE
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS VSAM FILE
 //SYSPRINT DD   SYSOUT=*
 //
 
@@ -5323,7 +5366,7 @@ you use to restore these files down, there are sample jobs
 
 //MARKTUTL JOB  (0),'TAPE MAINT',CLASS=A,MSGCLASS=T
 //TAPEMUTL EXEC PGM=TAPEMUTL
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 INSERT TAPE01
@@ -5368,7 +5411,7 @@ QQ
 //* $CREATDB: CREATE THE DATA FILE NEEDED BY TAPEMAN.
 //*
 //* - CHANGE VSAM01 TO ONE OF YOUR VSAM DATASPACE VOLUMES
-//* - CHANGE THE VSAM.TAPEMAN3 PREFIX TO A PREFIX YOU HAVE IN
+//* - CHANGE THE VSAM.INSTALL.TAPEMAN3 PREFIX TO A PREFIX YOU HAVE IN
 //*   IN ONE OF YOUR CATALOGUES, PREFERABLY ONE USED BY THE
 //*   USER CATALOGUE ON YOUR VSAM VOLUME IF YOU WANT IT TO WORK
 //* - CHANGE THE 'RECORDS' VALUES IN THE DATA AREA DEFINITION
@@ -5391,20 +5434,20 @@ QQ
 //* DBREC definition) fits nicely with sysprin output.
 //*
 //SYSIN    DD   *
- DELETE (VSAM.TAPEMAN3.VVDS.VOLSERS) CLUSTER SCRATCH
+ DELETE (VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS) CLUSTER SCRATCH
  SET MAXCC = 0
  DEFINE CLUSTER  -
-         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS) -
+         (NAME(VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS) -
          VOLUMES(VSAM01) -
          RECORDS(100 50)) -
        DATA -
-         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS.DATA) -
+         (NAME(VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS.DATA) -
          KEYS(6 0) -
          RECORDSIZE(132 132) -
          FREESPACE(20 10) -
          BUFFERSPACE(2000) ) -
        INDEX -
-         (NAME(VSAM.TAPEMAN3.VVDS.VOLSERS.INDEX) )
+         (NAME(VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS.INDEX) )
 /*
 //
 ./ ADD NAME=CTAPEMAN
@@ -5471,7 +5514,7 @@ QQ
 //*
 //DAILYSCR EXEC PGM=TAPEMSCR
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //
 ./ ADD NAME=TAPLABEL
@@ -5533,7 +5576,7 @@ TAPE1 INITT SER=MARK30,NUMBTAPE=1,OWNER='MVS38J/MID',DISP=REWIND
 //*
 //ADDTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 INSERT MARK01
@@ -5566,6 +5609,31 @@ INSERT MARK27
 INSERT MARK28
 INSERT MARK29
 INSERT MARK30
+INSERT MARK31
+INSERT MARK32
+INSERT MARK33
+INSERT MARK34
+INSERT MARK35
+INSERT MARK36
+INSERT MARK27
+INSERT MARK38
+INSERT MARK39
+INSERT MARK40
+INSERT MARK41
+INSERT MARK42
+INSERT MARK43
+INSERT MARK44
+INSERT MARK45
+INSERT MARK46
+INSERT MARK47
+INSERT MARK48
+INSERT MARK49
+INSERT MARK50
+INSERT MARK51
+INSERT MARK52
+INSERT MARK53
+INSERT MARK54
+INSERT MARK55
 /*
 //
 ./ ADD NAME=UTLDEL
@@ -5575,7 +5643,7 @@ INSERT MARK30
 //*
 //DELTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALLS.TAPEMAN.LINKLIB     SITE SPECIFIC
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 DELETE MARK01
@@ -5590,7 +5658,7 @@ DELETE MARK02
 //*
 //EXPIRCTL EXEC PGM=TAPEMEXP
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB     SITE SPECIFIC
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 MARK01 09360
@@ -5610,7 +5678,7 @@ MARK03 10001
 //*
 //LSTTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB     SITE SPECIFIC
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 LIST ALL
@@ -5627,7 +5695,7 @@ LIST MARK01
 //*
 //SCRTAPES EXEC PGM=TAPEMUTL
 //STEPLIB  DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.LINKLIB
-//TAPEVOLS DD   DISP=OLD,DSN=VSAM.TAPEMAN3.VVDS.VOLSERS
+//TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 SCRATCH MARK01
@@ -5660,10 +5728,301 @@ SCRATCH MARK27
 SCRATCH MARK28
 SCRATCH MARK29
 SCRATCH MARK30
+SCRATCH MARK41
+SCRATCH MARK42
+SCRATCH MARK43
+SCRATCH MARK44
+SCRATCH MARK45
+SCRATCH MARK46
+SCRATCH MARK47
+SCRATCH MARK48
+SCRATCH MARK49
+SCRATCH MARK50
+SCRATCH MARK51
+SCRATCH MARK52
+SCRATCH MARK53
+SCRATCH MARK54
+SCRATCH MARK55
 /*
 //
 ./ ENDUP
 QQ
+//*
+//*
+//*
+//* USERMODS FOR TK4-
+//* Use iebgener to install these to avoid their iebcopy command
+//* cards screwing up iebcopy if that was used to install them.
+//*
+//*
+//USERMODI EXEC PGM=IEBGENER
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DATA,DLM=QQ
+//ZMD0001 JOB  (SMP),
+//             'Usermod ZMD0001',
+//             CLASS=A,
+//             MSGCLASS=A,
+//             MSGLEVEL=(1,1),
+//             REGION=4096K
+//*
+//*********************************************************************
+//*
+//* Name: SYS1.UMODCNTL(ZMD0001)
+//*
+//* Desc: Install usermod ZMD0001
+//* Requirements: This usermod is for TK4- and will not work with TK3
+//*
+//*     Update IEECVXIT WTO message automation exit:
+//*
+//*   o If a RAKF deny on a TAPEVOL resource cancel the JOB
+//*     requesting the tape to prevent endless mount requests
+//*   o If an ENQ on VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS then issue
+//*     a 'P MMPF' to release it from MMPF (taskmon will restart MMPF)
+//*   o Remove the code to start printer and punch devices, that is
+//*     now handled by my MMPF
+//*   o INCLUDE INLINE ALL CHANGES MADE BY ZJW0006 or they
+//*     would be lost.
+//*
+//* ************* NOTE: ******************************************
+//* TK4- HAS USERMOD ZJW0006 APPLIED ON TOP OF ZUM0003 (IEECVXIT)
+//* This usermod superceeds that and includes the changes to
+//* ieecvxit made by that usermod.
+//* ************* END NOTE ***************************************
+//*
+//*       M. Dickinson, 01/2016
+//*
+//*********************************************************************
+//UPDATE  EXEC PGM=IEBUPDTE
+//SYSUT1   DD  DISP=SHR,DSN=SYS1.UMODSRC
+//SYSUT2   DD  DISP=(,PASS),UNIT=SYSDA,
+//             DCB=(LRECL=80,RECFM=FB,BLKSIZE=3120),
+//             SPACE=(TRK,(15,5),RLSE)
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+./  CHANGE NAME=IEECVXIT,NEW=PS
+         GBLC  &VNETSW             reactivation time for switched lines 00082000
+         GBLC  &VNETLS             reactivation time for leased lines   00084000
+         COPY  BSPSGLBL               , set globals                     00086000
+&VNETSW  SETC  '1'                 reactivation time for switched lines 00173000
+&VNETLS  SETC  '10'                reactivation time for leased lines   00176000
+CTAPEVOL DS    0H           , RAKF TAPEVOL DENY RAKF000A        ZMD0001 01330002
+* NOTE: because we cancel the job the user never sees RAKF000A  ZMD0001 01330003
+* RAKF0005 INVALID ATTEMPT TO ACCESS RESOURCE                   ZMD0001 01330005
+* RAKF000A  GUEST1  ,GUEST1J ,TAPEVOL ,MARK01                   ZMD0001 01330006
+* We must build the command in the dsect work area in order to  ZMD0001 01330007
+* remain re-entrant.                                            ZMD0001 01330008
+         CLC   =C'TAPEVOL',UCMMSTXT+28  ONLY C ON TAPEVOL RULE  ZMD0001 01330009
+         BNE   RETURN             Not tapevol, ignore it        ZMD0001 01330010
+*                                 else build SVC34 string here  ZMD0001 01330011
+         LA    R1,14              length of cmd in 1st AL2 fld  ZMD0001 01330012
+         STH   R1,CTAPVOLM                                      ZMD0001 01330013
+         LA    R1,0               0 in second AL2 field         ZMD0001 01330014
+         STH   R1,CTAPVOLM+2                                    ZMD0001 01330015
+         MVC   CTAPVOLM+4(2),=C'C '   Move in jobname to cmd    ZMD0001 01330016
+         MVC   CTAPVOLM+6(8),UCMMSTXT+19                        ZMD0001 01330017
+         LA    R1,CTAPVOLM            address command buffer    ZMD0001 01330018
+         DS    0H                                               ZMD0001 01330019
+         SR    R0,R0                                            ZMD0001 01330020
+         SVC   34                     issue cancel command      ZMD0001 01330021
+         B     RETURN                                           ZMD0001 01330022
+TAPEVCHK CLC   =C'VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS',UCMMSTXT+12 D0001 01330024
+         BNE   RETURN               not that dataset so ignore  ZMD0001 01330025
+         SVC34 'P MMPF'             else stop MMPF              ZMD0001 01330026
+         B     RETURN                                           ZMD0001 01330027
+./ DELETE SEQ1=01590000,SEQ2=01770000
+VARYIACT DS    0H                     vary automated terminal inactive  01770100
+*              0----+----1----+----2----+----3----+----4----+----5----+ 01770200
+*              LGN001I TSO logon in progress at MTHD terminal LUNAME    01770300
+         CLC   UCMMSTXT+33(4),=C'VTAM' is it a VTAM terminal?           01770400
+         BNE   RETURN                   -> no, don't touch it           01770500
+         LA    R3,UCMMSTXT+47         address LUNAME                    01770600
+         BAL   R1,AUTOTERM            is this an automated terminal?    01770700
+         LA    R1,VNET                point R1 to V NET,... plist       01770800
+         MVC   0(LVINACT,R1),VINACT   move SVC 34 plist to workarea     01770900
+         MVC   VINACTLU(8,R1),0(R3)   insert LUNAME into V NET command  01771000
+         SR    0,0                    setup and ..                      01771100
+         SVC   34                                  .. call SVC 34       01771200
+         B     RETURN                 exit                              01771300
+VARYACT  DS    0H                     vary automated terminal active    01771400
+*              0----+----1----+----2----+----3----+                     01771500
+*              IST105I  LUNAME   NODE NOW INACTIVE                      01771600
+         LA    R3,UCMMSTXT+9          address LUNAME                    01771700
+         BAL   R1,AUTOTERM            is this an automated terminal?    01771800
+         LA    R1,VNET                V NET,... plist in workarea       01771900
+         MVC   0(LVACT,R1),VACT       move SVC 34 plist to workarea     01772000
+         MVC   VACTLU(8,R1),0(R3)     insert LUNAME into V NET command  01772100
+         LA    R1,EXECVNET            have R2D2 execute ..              01772200
+         B     DOSRB                    .. time delayed SVC 34          01772300
+VARYFAIL DS    0H                     suppress IST073I for auto term    01772400
+*              0----+----1----+----2----+----3----+----4----+           01772500
+*              IST073I  VARY     FAILED FOR ID= T327AL11                01772600
+         LA    R3,UCMMSTXT+33         address LUNAME                    01772700
+         BAL   R1,AUTOTERM            is this an automated terminal?    01772800
+         CLC   UCMMSTXT+62(4),=C'DEAC' is it being deactivated?         01772900
+         BNE   RETURN                   -> no, leave message alone      01773000
+         MVC   UCMROUTC(2),DELROUTC     -> yes, delete ..               01773100
+         MVC   UCMDESCD(2),DELDESCD                     .. message      01773200
+         B     RETURN                 exit                              01773300
+AUTOTERM DS    0H                     check if terminal is automated    01773400
+         CLC   0(5,R3),=C'T327A'      automated 3270 terminal?          01773500
+         BNE   CHK3767                 -> no, check for 3767            01773600
+         BR    R1                      -> yes, go automate!             01773700
+CHK3767  CLC   0(5,R3),=C'T376A'      automated 3767 (TTY) terminal?    01773800
+         BNE   RETURN                  -> no, don't touch it            01773900
+         BR    R1                      -> yes, go automate!             01774000
+VACT     DC    AL2(LVACT)             SVC 34 plist..                    01774100
+         DC    AL2(0)                    .. for ..                      01774200
+         DC    C'V NET,ACT,ID='             .. v net,act command        01774300
+VACTLU   EQU   *-VACT                 offset to LUNAME                  01774400
+         DC    CL8' '                 LUNAME goes here                  01774500
+LVACT    EQU   *-VACT                 length of SVC 34 plist            01774600
+         DS    0H                                                       01774700
+VINACT   DC    AL2(LVINACT)           SVC 34 plist..                    01774800
+         DC    AL2(0)                    .. for ..                      01774900
+         DC    C'V NET,INACT,ID='           .. v net,inact command      01775000
+VINACTLU EQU   *-VINACT               offset to LUNAME                  01775100
+         DC    CL8' '                 LUNAME goes here                  01775200
+LVINACT  EQU   *-VINACT               length of SVC 34 plist            01775300
+./ DELETE  SEQ1=02560000,SEQ2=02560000
+*  We will schedule a subroutine to process the action requests. The  * 02560000
+./ DELETE  SEQ1=02580000,SEQ2=02590000
+*  If this address space is not active, no action processing will     * 02580000
+*  take place                                                         * 02586000
+./ DELETE  SEQ1=02780000,SEQ2=02790000
+* Check again if BSPPILOT is running.  If not, we cannot process the  * 02780000
+* action.  We do this by scanning the ASCB chain (again) for BSPPILOT * 02786000
+./ DELETE SEQ1=03370000,SEQ2=03370000
+         DC    CL8'IEF863I ',A(TAPEVCHK)  check if tape vsam ds ZMD0001 03380002
+         DC    CL8'RAKF000A',A(CTAPEVOL)  c if deny is TAPEVOL  ZMD0001 03380003
+         DC    CL8'LGN001I ',A(VARYIACT)     deactivate automated term  03382000
+         DC    CL8'IST105I ',A(VARYACT)      activate automated term    03384000
+         DC    CL8'IST073I ',A(VARYFAIL)     delete if automated term   03386000
+./ DELETE  SEQ1=03770000,SEQ2=03770000
+* List of messages and their canned actions                           * 03770000
+REPLYES  EQU   32                     , R XX,YES                        03863000
+EXECVNET EQU   36                     V NET,ACT,ID=<luname>             03866000
+         DC    CL8'IST183A ',A(REPLYES)                                 03955000
+*        IEECODES ID=DEL,ROUTCDE=0,DESC=0                               04002000
+DELDESCD DC    H'0'                                                     04004000
+DELROUTC DC    H'0'                                                     04006000
+./ DELETE  SEQ1=04040000,SEQ2=04040000
+* Actually, the SRB routine does not process the action requests at   * 04040000
+./ DELETE  SEQ1=04060000,SEQ2=04070000
+* which in turn will do what we need to do, namely issue a WTOR       * 04060000
+* reply or other command via SVC34                                    * 04066000
+./ DELETE  SEQ1=04570000,SEQ2=04570000
+         TITLE 'IRBROUT - IRB Routine that REALLY processes the action' 04570000
+./ DELETE  SEQ1=04660000,SEQ2=04660000
+         CLC   $REASON,=YL2(EXECVNET) is it a V NET,... request?        04660000
+         BNE   CHKPWD                  -> no, check for passwd request  04660800
+         LA    R1,VNET                point R1 to V NET,... plist       04661600
+         CLI   VACTLU+5(R1),C'S'      is it a switched terminal?        04662400
+         BE    WAITSW                  -> yes, go wait                  04663200
+         STIMER WAIT,BINTVL=VNETLS    wait &VNETLS seconds              04664000
+         B     DOVNET                 go execute                        04664800
+WAITSW   STIMER WAIT,BINTVL=VNETSW    wait &VNETSW seconds              04665600
+DOVNET   LA    R1,VNET                point R1 to V NET,... plist       04666400
+         B     DOSVC34                execute V NET,... command         04667200
+CHKPWD   CLC   $REASON,=YL2(REPLCAT)  , is it a password request?       04668000
+         B     RYES                   , 20: R XX,YES                    05255000
+RYES     EQU   *                                                        05542000
+         MVC   WTOAREA(REPLY9L),REPLY9                                  05544000
+         B     ISSUE                                                    05546000
+         SPACE                                                          05548000
+./ DELETE  SEQ1=05580000,SEQ2=05580000
+DOSVC34  SR    R0,R0                  , clear R0 for SVC 34             05580000
+REPLY9   WTO   'R XX,''YES''    <<<<<< BY BSPPILOT',DESC=(5),          +06012000
+               ROUTCDE=(1,2,11),MF=L                                    06014000
+REPLY9L  EQU   *-REPLY9                                                 06016000
+*------------------------------------------------------------------*    06018000
+VNETSW   DC    A(&VNETSW*100)      reactivation time for switched lines 06033000
+VNETLS   DC    A(&VNETLS*100)      reactivation time for leased lines   06036000
+* CTAPVOLM is for dynamically built cancel command              ZMD0001 06160001
+         DS    0H                                               ZMD0001 06160002
+CTAPVOLM DS    AL2,AL2                                          ZMD0001 06160003
+         DS    CL10'C xxxxxxxx'                                 ZMD0001 06160004
+*                 28 = NOPASSWD                                         06161000
+*                 32 = YES                                              06162000
+*                 36 = Execute delayed V NET,... command                06163000
+VNET     DS    0C                     V NET,... commands go here        06164000
+         ORG   *+LVINACT              length of V NET,... commands      06165000
+./ ENDUP
+/*
+//*
+//* Assemble
+//*
+//SMPASM  EXEC SMPASM,M=IEECVXIT
+//ASM.SYSIN DD DISP=(OLD,DELETE),DSN=*.UPDATE.SYSUT2
+//*
+//* Receive and apply
+//*
+//RECAPP  EXEC SMPAPP,COND=(0,NE)
+//SMPPTFIN DD  *
+++USERMOD(ZMD0001).
+++VER(Z038) FMID(EBB1102) PRE(TMVS805) SUP(ZJW0006).
+++MOD(IEECVXIT) TXLIB(UMODOBJ).
+//SMPCNTL  DD  *
+ REJECT S(ZMD0001).
+ RESETRC.
+ RECEIVE SELECT(ZMD0001).
+ APPLY SELECT(ZMD0001).
+/*
+//
+QQ
+//SYSUT2   DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(ZMD0001)
+//SYSIN    DD   DUMMY
+//USERMODR EXEC PGM=IEBGENER
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DATA,DLM=QQ
+//ZMD0001R JOB  (SMP),
+//             'Remove UMOD ZMD0001',
+//             CLASS=A,
+//             MSGCLASS=A,
+//             MSGLEVEL=(1,1),
+//             REGION=4096K
+//*
+//*********************************************************************
+//*
+//* Name: SYS1.UMODCNTL(ZMD0001R)
+//*
+//* Desc: Remove installed usermod ZMD0001
+//*
+//*     Revert IEECVXIT WTO message automation exit:
+//*     CLPA is required to implement
+//*
+//* Can only restore back to the base level, not remove just a single
+//* usermod here, due the the PRE and SUP requirements used all the
+//* way through. Messy but I want to ensure the TK4- updates are
+//* back at the TK4- level so I have not done it the sensible way 
+//* of removing the TK3 and TK4- usermods and just applying my own
+//*
+//* We must... 
+//*   o  restore ALL the usermods applied to this module back to the
+//*      base level
+//*   o  MANUALLY re-apply all the others to get back to where Jurgen
+//*      had TK4- positioned.
+//*
+//*       M. Dickinson, 01/2016
+//*
+//*********************************************************************
+//REJECT  EXEC SMPAPP,COND=(0,NE)
+//SMPCNTL  DD  *
+ RESTORE S(ZMD0001,ZJW0006,ZUM0003,TMVS805).
+/*
+//AOSC5 DD DISP=SHR,DSN=SYS1.AOSC5
+//*
+//* YOU MUST NOW MANUALLY RUN SYS1.UMODCNTL MEMBERS
+//*     ZUM0003
+//*     TMVS805
+//*     ZJW0006
+//
+QQ
+//SYSUT2   DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(ZMD0001R)
+//SYSIN    DD   DUMMY
+//*
+//*
+//* Submit the jobs to assemble into the install load library
+//*
 //SUBJOBS  EXEC PGM=IEBGENER,COND=(0,NE)
 //SYSPRINT DD   SYSOUT=*
 //SYSUT1   DD   DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC(TAPEMCUU)
