@@ -2,14 +2,14 @@
 //*
 //* REPLACE macro with the latest copy.
 //* If you have not already installed the macro, use a RESTART
-//* step to ADDNEW... and CHANGE THE DATASET NAME OF COURSE
+//* step to ADDNEW... and CHANGE THE DATASET NAMES OF COURSE
 //*
 //* SCRATCH THE OLD MEMBER
 //DELOLD EXEC PGM=IEHPROGM
 //SYSPRINT DD SYSOUT=*
-//DD1    DD DISP=SHR,UNIT=3350,VOL=SER=PUB000
+//DD1    DD DISP=SHR,UNIT=3350,VOL=SER=MDTSO1
 //SYSIN  DD *
- SCRATCH VOL=3350=PUB000,DSNAME=MARK.PROD.LIB.MACROS.ASM,              X
+ SCRATCH VOL=3350=MDTSO1,DSNAME=MARK.PROD.LIB.MACROS.ASM,              X
                MEMBER=EVENTHUB
 /*
 //*
@@ -97,6 +97,11 @@
 .*          an operator enters the Park command.
 .*          cmdbuff is where the text from a modify command will
 .*          be made available to the caller
+.*     Note: variable EVCNSLID is the console id of the console
+.*           that isuued the F (modify) command if the comm
+.*           area is being used, should the 'handler' only 
+.*           want to issue WTOs to the console that issued the
+.*           command instead of to all consoles.
 .*
 .*   EVENTHUB ACTION=ADD,TYPE=TIMER,HSECS=100s/secs,
 .*     HANDLER=label of handler routine
@@ -212,6 +217,7 @@ COMM     DS    F            COMM AREA address
 EVCMDBFA DS    F            Address of COMM command buffer to use
 EVCMDBFL DS    F            Length of COMM command buffer to use
 EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
+EVCNSLID DS    C            Used to save console id issuing F cmd
          LTORG
          DS    0F           Align
 .EVINITA ANOP
@@ -498,6 +504,9 @@ OPERROR  WTO     'ONLY PARK(P) AND MODIFY(F) COMMANDS ARE PERMITTED'
 MODIFY   EQU     *
          CLI     CIBVERB,CIBMODFY    * IS IT MODIFY ?
          BNE     OPERROR             * NO - ERROR
+* Save the consoleid before we drop the CIB area in case the
+* user wants it to route WTOs to a single console
+         MVC   EVCNSLID(1),CIBCONID  
 * Save the text the operator entered where the user wanted it
 * And branch to the user handler routine
          L     R6,EVCMDBFA  get address of command buffer
