@@ -93,46 +93,6 @@
 //*    I just found it more usefull to use sceen scraping
 //*    for STC/batch use than interactive use under hercules.
 //*
-//* Updates to MMPF V2 Base
-//*   2009/04/25 - added the MMPFEX utility, as I needed it
-//*                so it may be usefull to others.
-//*                Also removed the test step from the main 
-//*                mmpf assembly job, was just annoying.
-//*   2009/10/13 - Joined the TK3 mail list, so I started using
-//*                the TK3 system, bother BSPPILOT WTORs are
-//*                prefixed @ instead of *. Allowed for that.
-//*                Note: found later * or @ depends on whether
-//*                an authorised or non-authorised program
-//*                issues the message, so fix was needed
-//*
-//*                No longer on tk3 mail list as I deleted the 
-//*                yahoo mailid I had and created another and a
-//*                request to rejoin with the new mailid just
-//*                went into a black hole, guess it is no longer
-//*                active
-//*   2010/11/14 - TK3 leaves that */@ in front of messages
-//*                when they are DOMed, so use the */@ at
-//*                byte 4 (now identical to my system), some
-//*                PTF in TK3 must have changed this behaviour
-//*                as it beaved differently on my non-TK3 system
-//*   2012/07/11 - repackaged to create loadlib and doc files,
-//*                added new ,, bug to bug documentation
-//*   2013/01/20 - fixed all important bugs in message parsing and
-//*                updated the dsect used.
-//*   2014/11/21 - in a bored moment added the stats display
-//*   2015/12/18 - Changed the code handling MMPFEX rules to use
-//*                my own MDDIAG8 program instead of HERCCMD and
-//*                included it in this file, so anyone using this
-//*                does not have to run about trying to install
-//*                programs from additional sources.
-//*   2016/05/14 - Adjust so STATS command can be called BAL R1 
-//*                so the stats can be logged when MMPF exits
-//*   2016/07/21 - added a datestamp to show last restart time  
-//*                to the MMPF STATS command, as I stop/start
-//*                it a lot and the stats were getting 
-//*                meaningless without a timestamp :-)
-//*   2017/01/25 - added WTO and WTH as extra options for MMPF rules.
-//*
 //CREATE   EXEC PGM=IEFBR14
 //SYSPRINT DD   SYSOUT=*
 //* DD1 - WILL CONTAIN ALL THE SOURCE AND JCL
@@ -863,10 +823,6 @@ EXSAVWRD MVC    4(0,R5),0(R1) SAVE VARIABLE LENGTH GWWORDS IN TBL
 EXPRTFLD MVC    0(0,R7),0(R9) COPY VAR GWWORDS FROM TBL TO RESULT
 EXMSGFLD MVC    0(0,R7),GWMSGLIN  MOVE IN MSG 1ST R3 BYTES
 *
-*
-* CANT REMENBER WHY THESE ARE HERE ?, NOT REFERENCED
-*TESTMSG  DC    CL78'IEEA12A THIS IS A TEST-MESSAGE DATA = 1'
-*TESTMASK DC    CL78'I WANT &&WORD1, &&WORD5, &&WORD6 AND &&WORD3'
 DECIMAL  DC    D'0'
 DEBUGSAV DS    F
          LTORG
@@ -1153,12 +1109,20 @@ WILL THIS BREAK-ON-HYPHEN NOW
 //*            DEFAULT IS LIVE. DEBUG MODE WILL NOT PERFORM ANY
 //*            AUTOMATION BUT WILL LOG WHAT IT WOULD HAVE DONE
 //*            TO THE SYSOUT
-//*  SYSOUT=c  YOU GUESSED IT, DEFAULT IS SYSOUT=T
+//*  SYSOUT=T  YOU GUESSED IT, DEFAULT IS SYSOUT=T
 //*
 //* ******************************************************************
 //MMPF     EXEC PGM=MMPF,PARM='MMPF=&MMPF,&MODE'
 //SYSPRINT DD   SYSOUT=&SYSOUT     <== LOG ALL ACTIVITY  
-//SYSIN    DD   DSN=INSTALL.MID.MMPF.SRC,DISP=SHR ! NO MEMBER NAME !
+//*
+//* MMPFDATA: PDS CONTAINING MESSAGE AUTOMATION RULES
+//MMPFDATA DD   DISP=SHR,
+// DSN=INSTALL.MID.MMPF.SRC ! NO MEMBER NAME !
+//*
+//* STCLIST: STARTED TASKS TO KEEP RUNNING
+//STCLIST  DD   DISP=SHR,
+// DSN=INSTALL.MID.MMPF.SRC(MMPFSTCL)
+//*
 //* UNCOMMENT BELOW FOR TAPE MOUNT AUTOMATION...
 //* ... IF MY TAPEMAN3 IS INSTALLED AND CONFIGURED
 //*TAPEVOLS DD   DISP=OLD,DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
@@ -1250,6 +1214,24 @@ BSPPILOT DOM
 * KEYWORD LINE YOU SHOULD USE TO END THE DECK, SEE THE KNOWN BUGS
 * STATEMENT IN THE MAIN MMPF PROGRAM BANNER COMMENTS
 ENDDECK
+./ ADD NAME=MMPFSTCL
+*----------------------------------------------------------6   
+* STC MONITORING LIST THAT MMPF USES                           
+*                                                              
+* DATA CARDS ARE FIXED POSITION FIELDS                         
+* COMMENT CARDS MAY BE ANY FREE-FORM TEXT                      
+*                                                              
+*STC/JOB STARTCMD                                              
+*---+----1----+----2----+----3----+----4----+----5----+----6   
+* JES2 RESTART IS ONLY NEEDED IT I HAVE ABENDED IT REMOTELY    
+* TO CHANGE THE CONFIG, SO ALWAYS COLD START                   
+JES2     S JES2,PARM='FORMAT,NOREQ'                            
+TSO      S TSO.TSO                                             
+NET      S NET.NET                                             
+BSPPILOT S BSPPILOT,PARM='NOWTO'                               
+CMD1     S CMD1                                                
+MF1      S MF1                                             
+MDSCHED1 S MDSCHED1                                            
 ./ ADD NAME=MMPF 
 //MARKJ002 JOB (0),'ASSEMBLE MMPF',CLASS=A,MSGCLASS=T,
 //  MSGLEVEL=(1,1)
@@ -1311,6 +1293,8 @@ ENDDECK
 *      P XXX                - STOP TASK                               *
 *      F XXX,MMPF=nn        - LOAD CHANGED RULE FILE MMPFnn           *
 *      F XXX,STATS          - DISPLAY ACTIVITY SINCE LAST RESTART     *
+*      F XXX,STCMON=OFF     - DISABLE STC MONITORING/RESTARTING       *
+*      F XXX,STCMON=ON      - RESUME STC MONITORING/RESTARTING        *
 *                                                                     *
 * ----------- RULE FILE SYNTAX -----------                            *
 *                                                                     *
@@ -1324,55 +1308,7 @@ ENDDECK
 *                                                                     *
 * EXAMPLES: REFER TO SAMPLE PARMLIB MEMBERS MMPF00 AND MMPFEX00       *
 *                                                                     *
-* CHANGES                                                             *
-*   2007/10/20 - Initial version working with CMD function.           *
-*   2007/10/25 - Got the program PARM='MMPF=nn' working to override   *
-*                on startup, plus got the F MMPF=nn working.          *
-*   2007/10/27 - Added in test DOM and CMK types to allow changing a  *
-*                message to non-highlighted and change to non-high    *
-*                plus execute command respectively (still testing)    *
-*                Any rule involving a DOM will only be attempted if   *
-*                we have not yet issues any commands, this is because *
-*                if we issue a command we know the console will have  *
-*                rolled and we no longer have the correct line number *
-*                to be dom'ed. At this point we just pray no other    *
-*                external command has rolled the screen for CMK type  *
-*                (while no issue for DOM type, for CMK type we rely   *
-*                on the message being dom'ed before we trigger the    *
-*                command to avoid looping, may have to look at having *
-*                a table of messages undergoing CMK processing to     *
-*                redrive doms, but that will have it's own issues if  *
-*                there are more than one message of the same on the   *
-*                screen).                                             *
-*   2007/10/27 - Added assembly toggles for TK3.                      *
-*   2008/12/17 - Finally got around to iplementing the LNK option.    *
-*   2009/03/24 - Changed LNK so it DOM's the message that triggered   *
-*                the event. Avoids automation loops if the LNKed to   *
-*                program fails (repeatedly) to handle the event.      *
-*   2009/07/17 - Allowed for a PARM of DEBUG to also be               *
-*                passed, in which case we log the messages we are     *
-*                checking and any rule matched we found but do not    *
-*                actually perform any actions. And added the optional *
-*                LIVE parm also so the proc can use something other   *
-*                than debug and still work; the LIVE parm does        *
-*                nothing but is legal.                                *
-*   2009/10/13 - Non-APF program attention messages use @ instead of  *
-*                the * character so uodated to allow for those also.  *
-*   2014/11/21 - added the F XXX,STATS option because I was bored     *
-*                CRITICAL NOTE: I have pretty much maxed out the two  *
-*                base register addressing limit (I had to delete the  *
-*                initialisation OK message to make room for the stats *
-*                message to avoid addressing errors). The next        *
-*                version release will have code moved to seperate     *
-*                csects or possibly seperate modules; we will see.    *
-*   2016/05/14 - changed STATS command section so it is called BAL    *
-*                so it can be called at program exit to show the stats*
-*                Had to truncate a few more WTOs                      *
-*   2016/07/23 - added a timestamp for when MMPF started to make the  *
-*                stats message more meaningfull                       *
-*   2016/07/23 - repurpose MID007I (todo, update msg doc) and get the *
-*                WTO option working plus add WTH option (and lots     *
-*                more wto truncation to get the code to fit)          *
+* CHANGES: REFER TO THE $CHANGES MEMBER IN THE .DOC FILE              *
 *                                                                     *
 * I M P O R T A N T                                                   *
 *   This has been setup for my system which may be at a different     *
@@ -1393,9 +1329,6 @@ ENDDECK
 *   the file will now be used to stop the 'read next data block' loop *
 *   (although its not looping as such, it just does it twice rather   *
 *    than loop forever; bugger of a thing to figure out)              *
-*   --ALSO even with two base registers have hit program limit size   *
-*   and have to truncate WTOs and remove some checks to get new       *
-*   features to fit (todo: split into multiple csects)                *
 *                                                                     *
 ***********************************************************************
 *
@@ -1429,9 +1362,9 @@ R6       EQU   6
 R7       EQU   7
 R8       EQU   8
 R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
+R10      EQU   10  PROGRAM ADDRESSING
+R11      EQU   11  PROGRAM ADDRESSING
+R12      EQU   12  PROGRAM ADDRESSING
 R13      EQU   13
 R14      EQU   14
 R15      EQU   15
@@ -1480,13 +1413,15 @@ SAVE     DC    18F'0'             SAVE AREA
 SAVEAREA EQU   SAVE               MY MACROS USE SAVEAREA BY DEFAULT
          STM   R14,R12,12(R13)    SAVE REGISTERS
          LR    R12,R15            R12 = ADDR OF ENTRY POINT
-         USING MMPF,R12,R11       ADDRESABILITY TO CSECT 
+         USING MMPF,R12,R11,R10   ADDRESABILITY TO CSECT 
          LA    R11,SAVE           R11 = ADDR OF OUR SAVE AREA
          ST    R13,SAVE+4         SAVE POINTER TO CALLERS SAVE AREA
          ST    R11,8(R13)         SAVE PTR TO OUR SAVE AREA IN CALLER'S
          LR    R13,R11            R13 = ADDR OF OUR SAVE AREA
          LA    R11,4095(R12)      R11 WILL BE 
          LA    R11,1(R11)         SECOND BASE REGISTER
+         LA    R10,4095(R11)      R10 WILL BE 
+         LA    R10,1(R10)         THIRD BASE REGISTER
          SPACE 3
 ***********************************************************************
 * SEE IF ANY PARMS THAT MAY OVERRIDE THE DEFAULT RULE LIST            *
@@ -1537,17 +1472,17 @@ BLDUCMS  L     R4,16              R4 = ADDR OF CVT
          L     R7,UCMVEL          R7 = ADDR OF LAST UCM ENTRY
          LA    R8,UCMTAB+4        R8 = ADDR OF UCMTAB
          LA    R9,UCMTABE         R9 = ADDR OF END OF UCMTAB
-         XR    R10,R10            R10 = 0 (NUMBER OF VALID UCMS)
+         XR    R3,R3              R3 = 0 (NUMBER OF VALID UCMS)
 UCMLOOP  ST    R5,0(R8)           SAVE UCM ADDRESS IN UCMTAB
-         LA    R10,1(R10)         R10 = R10 + 1  (ONE MORE UCM)
+         LA    R3,1(R3)           R3 = R3 + 1  (ONE MORE UCM)
          LA    R8,4(R8)           R8 = ADDR OF NEXT UCMTAB ENTRY
          CR    R8,R9              DOES R8 POINT PAST END OF UCMTAB?
          BH    UCMDONE            YES; LEAVE LOOP
          AR    R5,R6              R5 = ADDR OF NEXT UCM ENTRY
          CR    R5,R7              DOES R5 POINT PAST UCM ENTRIES?
          BL    UCMLOOP            NOPE; KEEP GOING
-UCMDONE  LA    R10,1(R10)         ALLOW FOR ONE NON-CRT CONSOLE 
-         STH   R10,NUMUCMS        SAVE NUMBER OF UCMS FOUND
+UCMDONE  LA    R3,1(R3)           ALLOW FOR ONE NON-CRT CONSOLE 
+         STH   R3,NUMUCMS         SAVE NUMBER OF UCMS FOUND
          DROP  R4
          SPACE 3
 ***********************************************************************
@@ -1599,7 +1534,8 @@ AUTHBAD  EQU   *
          B     NEXTCNSL
 AUTHDONE EQU   *
          L     R7,DCMADTRN        R7 = ADDR OF TDCM
-         USING STRTDCM,R7
+         ST    R7,CNSLBUFA        SAVE IT, WE TRASH R7 LATER
+         DROP  R5          FREDDY
          SPACE 1
 ***********************************************************************
 *   GETMAIN A STORAGE AREA FOR THE RULES, SAVE ADDRESS                *
@@ -1619,6 +1555,53 @@ AUTHDONE EQU   *
 *                              NEEDED THROUGHOUT THE PROGRAM
          SPACE 1
 ***********************************************************************
+*   GETMAIN A STORAGE AREA FOR THE STCLIST CARDS, SAVE ADDRESS        *
+*   AND LOAD THE ENTRIES INTO THE TABLE.                              *
+*   IF ZERO ENTRIES CAN FREEMAIN THE AREA AGAIN                       *
+***********************************************************************
+         GETMAIN R,LV=STCLTBLL,SP=126
+         ST    R1,STCLTBLA          SAVE GETMAINED ADDRESS
+         LR    R7,R1                USE R7 TO ADDRESS WHILE STORING
+         XR    R6,R6                SET COUNT
+         ST    R6,STCLCNT              TO ZERO
+         ST    R6,STCLACTV          AND IF ACTIVE FLAG TO ZERO
+         LA    R8,L'STCLLINE        TBL DATA LENGTH
+         LA    R9,STCLMAX           MAX ENTRIES WE ALLOW
+         OPEN  (STCLIST,(INPUT))    OPEN FILE
+STCLNEXT GET   STCLIST              READ A LINE FROM FILE
+         CLI   0(R1),C'*'           CHECK IF IT IS A COMMENT
+         BE    STCLNEXT             YES, IGNORE
+         CLI   0(R1),C' '           BLANK LINES IGNORED AS WELL
+         BE    STCLNEXT             YES, IGNORE
+         MVC   0(L'STCLLINE,R7),0(R1) SAVE FIRST NN BYTES, DATA
+         CNOP  0,4                  DEBUG - BOUNDARY ERROR ?
+         AR    R7,R8                R7 TO ADDRESS NEXT ENTRY
+         A     R6,=F'1'             ADD ONE TO ENTRY COUNTER
+         CR    R6,R9                MAX REACHED YET ?
+         BC    GE,STCLEOF           YES, QUIETLY IGNORE THE REST
+         B     STCLNEXT             LOOP UNTIL END FILE
+STCLEOF  CLOSE (STCLIST)            CLOSE THE FILE
+         ST    R6,STCLCNT           SAVE LATEST COUNTER
+         ST    R6,STCLACTV          IF ACTIVE=0 NO CHECKS ARE DONE
+*                                   SO NO NEED FOR EXTRA CHECKS FOR
+*                                   A COUNT OF ZERO TO SET INACTIVE
+*                                   FLAG, CAN JUST SAVE COUNT HERE
+         C     R6,=F'0'
+         BE    STCLFREE             ZERO, GO FREE STORAGE
+         CVD   R6,DECIMAL           ELSE SHOW COUNT MONITORED
+         UNPK  DECIMAL(3),DECIMAL+6(2)
+         OI    DECIMAL+2,C'0'
+         MVC   STCNNWTO+25(3),DECIMAL
+         MVC   STCNNWTO+16(8),MYJOBNAM
+STCNNWTO WTO   'MID020I jjjjjjjj:... STARTED TASKS MONITORED'
+         B     CARRYON
+STCLFREE L     R7,STCLTBLA          GET GETMAINED ADDRESS
+         FREEMAIN R,A=(7),LV=STCLTBLL,SP=126
+         XR    R7,R7                SET GETMAINED ADDR TO ZERO TO
+         ST    R7,STCLTBLA           PREVENT FREEMAIN AT PGM EXIT
+         WTO2  'MID021W xxxxxxxx:STC MONITORING DISABLED'
+         SPACE 1
+***********************************************************************
 *                                                                     *
 *             I-O INITAILISATION AND SETUP STEPS HERE                 *
 *       (WE HAVE FOND A CONSOLE TO USE SO WE CAN CONTINUE)            *
@@ -1626,7 +1609,7 @@ AUTHDONE EQU   *
 ***********************************************************************
 * SET UP THE COMMUNICATION WITH THE OPERATOR CONSOLE TO
 * ACCEPT OPERATOR COMMANDS
-         LA      R4,COMM             * LOAD ADDR OF COMM...
+CARRYON  LA      R4,COMM             * LOAD ADDR OF COMM...
          EXTRACT (R4),FIELDS=COMM,   * GET THE COMM AREA               X
                MF=(E,EXTRACT1)
          L       R4,COMM             * LOAD CONTENTS OF COMM
@@ -1667,7 +1650,7 @@ SETCOUNT EQU     *
          SR    R1,R1              R1 WILL HAVE ERRORS FROM GETSYSIN
          BAL   R5,GETSYSIN        LOAD THE MESSAGE LIST
          C     R1,=F'0'           ENSURE NO ERRORS
-         BNE   EXIT04FR           IF ERRORS NO MEMBER SO STOP
+         BNE   ALLDONE            IF ERRORS NO MEMBER SO STOP
          CLC   DEBUGON(1),CHARY
          BNE   WAIT
          WTO2  'MID007I jjjjjjjj:IN DEBUG MODE'
@@ -1723,14 +1706,37 @@ STOP     EQU     *                   --- STOP REQUEST (P)
 MODIFY   EQU     *
          CLI     CIBVERB,CIBMODFY    * IS IT MODIFY ?
          BNE     OPERROR             * NO - ERROR
-* ROUTINE TO PROCESS A PROCESS THE NEWRULES COMMAND                 *
+* DETERMINE WHAT COMMAND WAS ENTERED AND HANDLE IT                  *
+         LA      R1,CIBDATA          * R1 EXPECTED BY SUBRTNS
+         CLC     CIBDATA(9),MMPFSTCN * IS IT A STCMON=ON
+         BE      ALTSTON             * YES, GO THERE   
+         CLC     CIBDATA(10),MMPFSTCF * IS IT A STCMON=OFF
+         BE      ALTSTOFF            * YES, GO THERE   
          CLC     CIBDATA(5),MMPFSTAT * IS IT A STATS REQUEST ?
          BE      SHOWSTAT            * YES, GO THERE   
          CLC     CIBDATA(5),MMPFCMD  * IS IT A RELOAD REQUEST ?
          BNE     OPERROR             * NO - ERROR THEN
-         LA      R1,CIBDATA          * OK, R1 ADRESSES CMD
          BAL     R5,NEWRULES         *   AND GO LOAD THEM
          B       OPCMDRET
+         EJECT
+* ADDED TO ALLOW STC MONITORING TO BE TURNED ON/OFF WITHOUT
+* AFFECTING THE MAIN MESSAGE AUTOMATION REQUIREMENT THIS
+* PROGRAM IS FOR.
+ALTSTON  L     R1,STCLCNT
+         C     R1,=F'0'
+         BE    ALTSTERR
+         LA    R1,1
+         ST    R1,STCLACTV
+         WTO2  'MID022I jjjjjjjj:STCMON ENABLED'
+         B     OPCMDRET
+ALTSTOFF LA    R1,0
+         ST    R1,STCLACTV
+         WTO2  'MID023W jjjjjjjj:STCMON DISABLED'
+         B     OPCMDRET
+ALTSTERR CNOP  0,4
+         WTO2  'MID024E jjjjjjjj:ZERO MONITOR ENTRIES, CANNOT ENABLE'
+         B     OPCMDRET
+         EJECT
          DS    0D                  ALIGN
 STATWRK  DS    PL8                 STATMSG WORK AREA
 SHOWSTR1 DS    F                   SAVE R1 ACROSS BAL   2016/05/14
@@ -1763,7 +1769,6 @@ OPCMDRET EQU     *
 ***********************************************************************
 *                                                                     *
 *            MOVE 21 LINES OF SCREEN IMAGE TO OUTPUT BUFFER           *
-*                                                                     *
 * NOTE: KEEP R8 AS COUNTER, USED IN CALLED ROUTINES FROM HERE         *
 *                                                                     *
 ***********************************************************************
@@ -1772,6 +1777,9 @@ SCREENIO EQU   *
          STM   R1,R8,SCRIOSAV
          SR    R1,R1
          ST    R1,CMDMADE      NO COMMANDS ISSUED YET (FOR DOM CHECKS)
+         L     R6,CNSLBUFA     GET TDCM ADDR OF CONSOLE BACK
+         USING STRTDCM,R6
+* FREDDY
          MODESET KEY=ZERO                                       
          L     R8,DCMASCRN        R8 = ADDR OF SCREEN IMAGE BUFFER
          LA    R4,BUF             R4 = ADDR OF OUTPUT BUFFER
@@ -1781,7 +1789,7 @@ MOVEBUFF ICM   R9,8,PAD           MAKE BLANK THE PAD CHARACTER
          MVCL  R4,R8              MOVE CONSOLE BUFFER TO OUTPUT BUFFER
          L     R7,DCMDOMPK        SAVE DOM TABLE ADDRESS        
          ST    R7,DOM#ADDR             FOR THIS CONSOLE         
-         DROP  R5,R6,R7
+         DROP  R6
          MODESET KEY=NZERO
          SPACE 5
 *        READ LINES FROM THE SCREEN BUFFER, GO CHECK EACH ONE
@@ -1796,7 +1804,9 @@ NEXTL    LR    R3,R1              SAVE R1 SINCE TPUT ZAPS IT
          LA    R8,1(R8)           ADD 1 TO COUNTER
          C     R8,=F'21'          HAVE WE PRINTED LAST LINE?
          BNE   NEXTL2             NO, KEEP GOING
-         LM    R1,R8,SCRIOSAV     YES, GET REGS BACK
+*                                 YES, SCREEN IO ALL DONE
+         BAL   R4,CHEKSTCL           DO THE ADDED STC RUNNING CHECKS
+         LM    R1,R8,SCRIOSAV        GET REGS BACK
          B     WAIT                  AND BACK TO THE WAIT CODE
 NEXTL2   LA    R1,80(R3)          NOPE, POINT TO NEXT LINE
 * BELOW IS NEEDED IF WE ARE READING FROM A 3270, WHICH MY CONSOLE IS
@@ -1807,14 +1817,19 @@ NOT3270  L     R0,=F'78'          LOAD LENGTH OF LINE
          B     NEXTL              PROCESS NEXT LINE
          EJECT
 ***********************************************************************
-*                                                                     *
 *                            ALL DONE - EXIT                          *
-*                                                                     *
+* FREEMAIN ALL GETMAINED AREAS                                        *
+* CLOSE ALL OPEN FILES                                                *
+* EXIT RC=00                                                          *
 ***********************************************************************
 ALLDONE  CNOP  0,4                                                  
          BAL   R1,SHOWSBAL      LOG AUTOMATION STATS         2016/05/14
-* TWO GETMAINED AREAS TO RELEASE, DO THAT FIRST
-         L     R1,ADDRRULS     FREE THE STORAGE USED BY RULE TABLE
+* THREE GETMAINED AREAS TO RELEASE, DO THAT FIRST
+         L     R1,STCLTBLA     IF STORAGE STILL USED FOR STC LIST
+         C     R1,=F'0'        THEN RELEASE THAT
+         BE    ALLDONS1        IF STILL IN USE
+         FREEMAIN R,A=(1),LV=STCLTBLL,SP=126
+ALLDONS1 L     R1,ADDRRULS     FREE THE STORAGE USED BY RULE TABLE
          FREEMAIN R,A=(1),LV=RULETLEN,SP=126
          L     R1,ADDRGETW     FREE THE STORAGE USED BY GWDSECT
          FREEMAIN R,A=(1),LV=GWAREAL,SP=126
@@ -1824,11 +1839,8 @@ ALLDONE  CNOP  0,4
          LM    R14,R12,12(R13)    RESTORE REGISTERS
          LA    R15,0
          BR    R14                RETURN TO SYSTEM
-EXIT04FR L     R1,ADDRRULS    
-         FREEMAIN R,A=(1),LV=RULETLEN,SP=126
-         L     R1,ADDRGETW   
-         FREEMAIN R,A=(1),LV=GWAREAL,SP=126
-         CLOSE (SYSPRINT)
+* EXIT04 CAN ONLY BE USED ON ERROR IF NO GETMAINED AREAS ARE IN
+* USE AS WE DO NOT FREE ANY HERE.
 EXIT04   L     R13,SAVE+4         RESTORE POINTER TO CALLER'S SAVE AREA
          LM    R14,R12,12(R13)    RESTORE REGISTERS
          LA    R15,4
@@ -1853,7 +1865,7 @@ PARSLOOP CLI   0(R3),C' '         BLANK CHARACTER?
          BNE   STORELEN           NO, FOUND LAST CHARACTER OF COMMAND
          BCTR  R3,0               YES, POINT TO PREVIOUS CHARACTER
          BCT   R2,PARSLOOP        IF R2 IS 0 ONLY NO CMD WAS ENTERED
-         WTO2  'MID004E         :NULL COMMAND IGNORED'
+         WTO2  'MID004E         :NULL SVC34 COMMAND IGNORED'
          B     MGCREX             EXIT COMMAND OP  
 STORELEN LA    R2,4(0,R2)         MAKE THE LAST CHARACTER A BLANK
          STH   R2,CMDLEN
@@ -1863,7 +1875,13 @@ STORELEN LA    R2,4(0,R2)         MAKE THE LAST CHARACTER A BLANK
          L     R0,CONSOLE         CONSOLE ID
          SVC   34
          MODESET KEY=NZERO
-*         B     NEWTIMER       (MID: NEWTIMER ?)
+* LOG (VIA WTO) THE COMMAND ISSUED
+* CMDBUFF IS 78 BYTES BUT JUST LOGGING THE FIRST 40 BYTES
+* SHOULD COVER MOST CASES
+         MVC   MGCRWTO+16(8),MYJOBNAM
+         MVC   MGCRWTO+33(40),CMDBUF
+MGCRWTO  WTO   'MID025I jjjjjjjj:COMMAND=....+....1....+....2....+....3X
+               ....+....4'
 MGCREX   LM    R1,R3,SAVEMGCR
          BR    R6      
          EJECT
@@ -1889,19 +1907,22 @@ TIMEOUT  SAVE  (14,12)
 * xxx.xx read where we have to locate the member and deblock the      *
 * records ourselves. But hey, it adds functionality.                  *
 *                                                                     *
-*                                                                     *
-* PROB -                                                              *
-*   Program is already using for addressing R3, R4, R7, R11, R12      *
-*   We need to use R2 for table addressing                            *
-*   R8 is used for getmain area addressing                            *
-*   R3 - risking it at this point, I think mainline resets it to      *
-*   the comm area. To check. Am using as record counter.              *
+* PROB - GETTING LOW ON REGISTERS                                     *
 *
-*   R4 - TABLE AREA ADDRESSING
+*   R0 - WORK REG
+*   R1 - WORK REG, MACROS USE THIS
+*   R2 - ADDRESSES RULE TABLE
+*   R3 - RECORD COUNTER
+*   R4 - RULE TABLE AREA ADDRESSING
+*   R5 - RECORD ADDRESSING WITHIN PDS DATA BLOCK
 *   R6 - ADDRESSING
 *   R7 - LRECL                                                        *
 *   R8 - GETMAINED ADDR
 *   R9 - BLKLEN                                *
+*   R12,R11,R10 USED FOR PROGRAMM ADDRESSING, LEAVE ALONE
+*   R13 - RESERVED
+*   R14 - RECOMENDED RESERVED
+*   R15 - WORK REG, MACROS USE THIS
 *                                                                     *
 *   R1 of course gets trashed in system calls anyway so...            *
 *   So we have a register shortage here. So we save lots of values    *
@@ -1929,7 +1950,7 @@ GETSYSIN STM  R0,R15,SYSINSAV
          MVC   GSWTO1+54(44),JFCBDSNM
 GSWTO1   WTO   'MID008E xxxxxxxx:MEMBER ........ NOT FOUND IN ....+....X
                1....+....2....+....3....+....4....'
-         LA    R0,=F'1'          RECORD AN ERROR
+         LA    R0,1              RECORD AN ERROR
          ST    R0,SYSINERR
          B     SYSINXIT 
 *  EXTRACT BLK & REC LENGTH, BLKNEN IS NEETED TO GETMAIN A BUFFER
@@ -1938,15 +1959,14 @@ GETSYS01 RDJFCB SYSIN
          LTR   R15,R15
          BZ    GETSYS02
          WTO2  'MID017E xxxxxxxx:RDJFCB FAILED FOR DD SYSIN'
-         LA    R0,=F'1'          RECORD AN ERROR
+         LA    R0,1              RECORD AN ERROR
          ST    R0,SYSINERR
          B     SYSINXIT 
-GETSYS02 LH    R0,JFCBLKSI           GET BLOCK LENGTH
+GETSYS02 LH    R9,JFCBLKSI           GET BLOCK LENGTH
          LH    R7,JFCLRECL           GET LRECLNGTH
-         GETMAIN  RU,LV=(0)          R1 = AREA ADDRS, R0 = STORG SIZE
+         GETMAIN  RU,LV=(9)          R1 = AREA ADDRS, R0 = STORG SIZE
          ST    R1,SYSGMAIN           SAVE GETMAINED ADDRESS
          LR    R8,R1                 R8 = AREA ADDRESS , R1 IS FREE
-         LR    R9,R0                 R9 = BLK LNGTH , R0 IS FREE
          C     R15,=F'4'             TEST RETURN CODE FOR 4
          BNE   GETSYS03              IF NOT 4, STORAGE WAS OBTAINED.
          WTO   'MID009E xxxxxxxx:INSUFFICIENT FREE STORAGE'
@@ -1954,7 +1974,6 @@ GETSYS02 LH    R0,JFCBLKSI           GET BLOCK LENGTH
          ST    R0,SYSINERR
          B     SYSINXIT
 GETSYS03 SR    R3,R3                    LINE COUNTER
-         L     R5,=F'80'                LEN OF CARD
          L     R2,ADDRRULS
          USING RULETABL,R2
          LR    R4,R2                 R4 IS ADDRESSING INTO TABLE
@@ -1978,34 +1997,34 @@ INITBLK  NI    0(R6),X'00'           RESET BLOCK TO BINARY ZEROS.
          BXLE  R6,R9,INITBLK 
          READ  D2,SF,SYSIN,(R8)   READ A BLOCK FROM MEMBER TO BUF R8
          CHECK D2                    WAIT FOR IO TO COMPLETE
-         LR    R10,R8                R10= ADDRESS OF MEMBER BLOCK, REC1
-         LR    R9,R10                use r9 to address block end
+         LR    R5,R8                R5= ADDRESS OF MEMBER BLOCK, REC1
+         LR    R9,R5                use r9 to address block end
          AH    R9,JFCBLKSI           to block end (what we getmained)
-NEXTREC  CLI   0(R10),X'00'          SKIP NULLS AT END OF BLOCK
+NEXTREC  CLI   0(R5),X'00'          SKIP NULLS AT END OF BLOCK
          BE    SKIPBLNK
 *        * WE REPORT ON ALL LINES READ FROM THE MMPFnn MEMBER
-         MVC   SYSPRLIN(80),0(R10)
+         MVC   SYSPRLIN(80),0(R5)
          ST    R1,SAVESYS1           PUT USES REGS 1,14,15
          PUT   SYSPRINT,SYSPRLIN
          L     R1,SAVESYS1
 *        * BUT WE ONLY STORE REAL RULES IN THE MEMORY TABLE
-         CLI   0(R10),C'*'           SKIP COMMENT LINES
+         CLI   0(R5),C'*'           SKIP COMMENT LINES
          BE    SKIPBLNK
-         CLI   0(R10),C' '           SKIP EMPTY LINES
+         CLI   0(R5),C' '           SKIP EMPTY LINES
          BE    SKIPBLNK
 * BUGFIX AS NOTED IN THE PROGRAM COMMENTS
-         CLC   0(7,R10),=CL7'ENDDECK'
+         CLC   0(7,R5),=CL7'ENDDECK'
          BE    EOFMMBR
 *        * ... A REAL ONE, STORE IT AND UPDATE POINTER/COUNTER
-         MVC   0(80,R4),0(R10)          SAVE IN TABLE AREA
+         MVC   0(80,R4),0(R5)          SAVE IN TABLE AREA
          A     R4,=F'80'                MOVE TO NEXT POSITION
          A     R3,ONE                   INC COUNTER
          C     R3,MAXRULES              AT MAX ?
          BNL   EOFMMBR                  YES, STOP NOW        
-SKIPBLNK AR    R10,R7                point to next record
-         CR    R10,R9                at end of buffer ???
+SKIPBLNK AR    R5,R7                point to next record
+         CR    R5,R9                at end of buffer ???
          BL    NEXTREC               no, get next record
-*SKIPBLNK BXLE  R10,R7,NEXTREC        GO THRU BLOCK RECORD BY RECORD.
+*SKIPBLNK BXLE  R5,R7,NEXTREC        GO THRU BLOCK RECORD BY RECORD.
 *                                    R7 IS THE LRECL
          B     NEXTBLK               THEN ONTO NEXT BLOCK
 EOFMMBR  DS    0H
@@ -2025,8 +2044,8 @@ SYSINXIT CLOSE (SYSIN)            CLOSE FILE
          OI    DECIMAL+2,C'0'
          MVC   SYSINWTO+25(3),DECIMAL
          MVC   SYSINWTO+16(8),MYJOBNAM
-         MVC   SYSINWTO+45(8),MEMBER  
-SYSINWTO WTO   'MID005I jjjjjjjj:... RULES READ FROM ........'
+         MVC   SYSINWTO+53(8),MEMBER  
+SYSINWTO WTO   'MID005I jjjjjjjj:... MESSAGE RULES READ FROM ........'
          LM    R0,R15,SYSINSAV
          L     R1,SYSINERR       IF ANY ERRORS REPORT BACK
          BR    R5
@@ -2200,10 +2219,6 @@ EXSTCMD  MVC   SYSCMD(0),TMPLRSLT
 *
 * LINK TO THE MODULE REQUESTED WITH THE PARMSTR PROVIDED
 *
-* B E T A   C O D E
-*  IVE FORGOTTEN WHAT THE VALUES PASSED TO THE GW PROCS
-*  MEAN AND NEED TO REVIEW.
-*
 *----------------------------------------------------------
 * 2009/03/24 moved chkalnk from the mvc zeros line up to
 *            here and did the checking on DOM actions, AND
@@ -2330,14 +2345,14 @@ NRLOAD   SR    R1,R1         NO ERROR IN R1 YET
          BE    TRYMPF00           BACKOUT TO OLD MEMBER
 *  TRY BACKOUT
          MVC   MEMBER(8),MEMBERO
-         WTO2  'MID016W jjjjjjjj:ROLLING BACK'
+         WTO2  'MID019W jjjjjjjj:ROLLING BACK'
          SR    R1,R1         NO ERROR IN R1 YET
          BAL   R5,GETSYSIN   GET THE NEW DECK
          C     R1,=F'0'      NO ERROR ?
          BE    NRULOK
 * AS A LAST RESORT LOOK FOR A MMPF00
 TRYMPF00 CLC   MEMBER(8),=CL8'MMPF00  '
-         BE    EXIT04FR                  ALREADY TRIED MMPF00
+         BE    ALLDONE                   ALREADY TRIED MMPF00
          WTO2  'MID014W jjjjjjjj:TRYING DEFAULT MMPF00'
          MVC   MEMBER(8),=CL8'MMPF00  '
          SR    R1,R1
@@ -2345,7 +2360,7 @@ TRYMPF00 CLC   MEMBER(8),=CL8'MMPF00  '
          C     R1,=F'0'      NO ERROR ?
          BE    NRULOK
 * AND IF WE GET HERE, NOTHING WORKED
-         B     EXIT04FR      EXIT RC=04
+         B     ALLDONE       EXIT RC=04
 *
 NRULOK   MVC   MEMBERO(8),MEMBER      SAVE AS A NEXT BACKOUT
          L     R5,NRRTN
@@ -2388,10 +2403,93 @@ DOMMSGEX L     R1,DOMSAV2
 DOMSAV   DS    F
 DOMSAV2  DS    F
          EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* CHEKSTCL - CHECK STC LOOP                                     *
+* LOOP FOR THE NUMBER OF STC CARDS THAT WERE READ, CALLING THE  *
+* ROUTINE TO CHECK THE TASKNAME IS ACTIVE FOR EACH.             *
+* TO BE CALLED WITH BAL R4 !.                                   *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+CHEKSTCL DS    0F
+         L     R1,STCLACTV
+         C     R1,=F'0'        TASK WATCHING ACTIVE ?
+         BNE   CHECKGO               YES, DO CHECKS        
+         BR    R4                    NO, IMMEDIATE RETURN
+CHECKGO  STM   R4,R6,SAVEACHK
+         L     R5,STCLTBLA       SET R5 TO ADDRESS TABLE
+         L     R6,STCLCNT        R6 TO COUNT WHATS LEFT
+CHEKNEXT C     R6,=F'0'          ARE WE DONE ?
+         BE    CHEKEND           YES, END CHECK LOOP
+         MVC   STCLLINE(L'STCLLINE),0(R5) SET CARD TO CHECK FOR
+         BAL   R4,ASTPARMS       DO THE SEARCH PROCESSING
+         LA    R1,L'STCLLINE     ENTRY LENGTH
+         AR    R5,R1             ADDRESS NEXT TABLE ENTRY
+         S     R6,=F'1'          DECREMENT COUNT LEFT
+         B     CHEKNEXT          AND DO THE NEXT
+CHEKEND  LM    R4,R6,SAVEACHK
+         BR    R4
+SAVEACHK DS    3F                  * SAVEAREA FOR CHEKLOOP
+         LTORG
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* ASTPARMS                                                      *
+* SEARCH THROUGH THE SYSTEM CONTROL BLOCKS FOR THE TASKNAME WE  *
+* ARE LOOKING FOR.                                              *
+* TO BE CALLED WITH BAL R4 !.                                   *
+* INPUT: STCLLINE HAS THE CONTROl CARD TO SEARCH/USE            *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ASTPARMS DS    0H
+         STM   R3,R9,SAVEAAST       SAVE REGS WE USE
+         MVC   STCLJOB(8),STCLLINE  SET TASKNAME TO SEARCH FOR
+         LA    R3,0
+         USING PSA,R3               PSA--->CVT
+         L     R4,FLCCVT
+         USING CVTMAP,R4            CVT--->ASVT
+         L     R7,CVTASVT
+         USING ASVT,R7              ASVT--->ASCB
+         XR    R8,R8                ZERO
+NEXTASID DS    0H
+         L     R5,ASVTENTY(R8)      AN ASID
+         USING ASCB,R5
+         CLM   R5,B'1000',=X'80'    IS HIGH BIT ON ?
+         BNE   INUSE                   NO, VALID
+         CLM   R5,B'0111',=XL3'0'   END OF TABLE ?
+         BE    ENDASVT                 ALL OVER
+RENTR    DS    0H
+         LA    R8,4(R8)             INCREMENT ASVTENTY ENTRY
+         B     NEXTASID
+INUSE    DS    0H
+         L     R6,ASCBJBNI          JOBNAME IF INITIATOR
+         LTR   R6,R6
+         BNZ   TESTIT
+         L     R6,ASCBJBNS          JOBNAME IF STC, ETC
+TESTIT   CLC   STCLJOB(8),0(R6)     IS THIS THE JOB ?
+         BNE   RENTR                  NO LEAVE
+*                                     YES, MATCH FOUND
+* MATCH FOUND, THE TASK IS ACTIVE, ALL OK
+         B     ASTEND
+*
+* IF HERE, THE TASK IS NOT RUNNING
+ENDASVT  DS    0H
+* TODO... latest copy is not using mgcr
+*        -- ISSUETH START COMMAND AT STCLLINE 10-39 ---
+         MVI   SYSCMD,C' '
+         MVC   SYSCMD+1(L'SYSCMD-1),SYSCMD
+         MVC   SYSCMD(29),STCLLINE+9   MOVE IN START CMD
+         BAL   R6,MGCR
+         B     ASTEND
+SAVEAAST DS    7F                   SAVEAREA FOR REGS WE TRASH
+ASTEND   LM    R3,R9,SAVEAAST
+         BR    R4
+STCLJOB  DC    CL8' '     CURRENT JOBNAME BEING SEARCHED FOR
+STCLACTV DS    F          IS TASKMON CODE ACTIVE
+STCLTBLA DS    1F         STCLTBLD GETMAINED ADDRESS TO REMEMBER
+STCLLINE DS    CL40       FOR WORKING WITH CARD IMAGE LINE, *ALSO*
+*                         USED FOR MOVING DATA ABOUT AND ADDRESSING
+STCLCNT  DS    1F         COUNTER FOR HOW MANY WE REALLY HAVE
+         LTORG
+         EJECT
          LTORG
 ***********************************************************************
-*                                                                     *
-*                         C O N S T A N T S                           *
 *                                                                     *
 ***********************************************************************
 EXSAVCRD MVC   0(0,R2),0(R1)       EX TO SAVE IN GETMAINED AREA
@@ -2425,6 +2523,7 @@ CHARY    DC    CL1'Y'              USED TO REPLACE/COMAPRE ABOVE
 DOM#ADDR DS    F                   ADDRESS OF DOM # TABLE FOR THIS CNSL
 OLDCONS  DC    F'1'                PREVIOUS CONSOLE NUMBER
 CMDMADE  DS    F                   USED TO SEE IF SAFE TO DOM
+CNSLBUFA DS    F                   FREDDY
 * KEEP THE BELOW FOUR EXACTLY IN PLACE, THEY ARE USED
 * IN THE SVC 34 ADDRESSING BUFFER.
 *   DC 0D'0',XL2'CMDLEN',XL2'00',C'COMMAND TEXT'
@@ -2469,6 +2568,8 @@ TIMEXPRM DS    F                  TIMER PARAMETER
 SECS15   DC    CL8'00001500'      FIFTEEN SECONDS
 MMPFCMD  DC    CL5'MMPF=',X'00'   NEWRULES COMMAND
 MMPFSTAT DC    CL5'STATS',X'00'   STATS COMMAND
+MMPFSTCN DC    CL9'STCMON=ON',X'00'   STCMON=ON COMMAND
+MMPFSTCF DC    CL10'STCMON=OFF',X'00' STCMON=OFF COMMAND
 EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
          EJECT   
 ***********************************************************************
@@ -2486,10 +2587,14 @@ SYSPRINT DCB   DDNAME=SYSPRINT,DSORG=PS,MACRF=PM,LRECL=132,            X
                BLKSIZE=132,RECFM=FB
 SYSPRLIN DC    CL132' '
 *
+* DCB FOR STC CARDS FOR TASKMON FUNCTION MERGE
+STCLIST  DCB   DDNAME=STCLIST,MACRF=(GL),DSORG=PS,EODAD=STCLEOF
 *
 *   D C B   B I T S   F O R   S Y S I N   P L A Y I N G
-*
-SYSIN    DCB   DDNAME=SYSIN,DSORG=PO,MACRF=R,EODAD=EOFMMBR,EXLST=EXLST
+*   WE MODIFY THIS DYNAMICALLY FOR MEMBER SELECTION
+SYSIN    DCB   DDNAME=MMPFDATA,DSORG=PO,MACRF=R,EODAD=EOFMMBR,         X
+               EXLST=EXLST
+         
 EXLST    DS    0F
          DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
 JFCBAREA DS    0CL176
@@ -2511,8 +2616,8 @@ M2BUFLEN EQU   21*80            LENGTH OF BUFFER 3278-2
          SPACE 3
          IKJTSB
          SPACE 3
-         SPACE 3
          IHAASCB
+         IHAASVT         * ASVT MAP NEEDED FOR TASK SCAN CHECKS
          EJECT
          IEERDCM
          EJECT
@@ -2547,9 +2652,18 @@ M2BUFLEN EQU   21*80            LENGTH OF BUFFER 3278-2
          DSECT
 RULETABL DS    CL3200                40*80
 RULETLEN EQU   *-RULETABL
+***********************************************************************
+*   ADDED FOR TASKMON FUNCTION MERGE                                  *
+***********************************************************************
+STCLTBLD DSECT
+         DS    0D                    FORCE CORRECT ALIGNMENT
+*              I AM ONLY USING 20 ENTRIES FOR NOW
+STCLMAX  EQU   20
+STCLTBL  DS    CL(L'STCLLINE*STCLMAX)
+STCLTBLL EQU   *-STCLTBL
          END   MMPF
 //ASM.SYSTERM DD SYSOUT=*
-//LKED.SYSLMOD DD DSN=INSTALL.MID.MMPF.LOADLIB(MMPF),DISP=SHR
+//LKED.SYSLMOD DD DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB(MMPF)
 //
 ./ ADD NAME=MMPFEX00
 * --------------------------------------------------------------------
@@ -2561,19 +2675,24 @@ RULETLEN EQU   *-RULETABL
 * library as the MMPF ruleset resides.
 * --------------------------------------------------------------------
 *
-* 00CINTREQ - Interrupt event on the 00C card reader
-* On my windows instance of hercules the card reader goes into
-* an interrupt state until a valid JCL card is submitted through
-* it (it doesn't use the socket interface). This rule will on
-* that interrupt event submit dummy.jcl (just a comment card)
-* with the EOF parm to reset the card reader.
 * MMPF event is IEE001A
 RULE:00CINTREQ
+* On a 00C intterupt use DIAG8 (LNK to MDDIAG8) submit a dummy JCL job
+* dummy.jcl is expected to exist in the hercules working directory
 LNK devinit 00C dummy.jcl eof
 * back to listening on port 3505 only on my linux server
 *LNK devinit falcon:3505 sockdev ascii trunc eof
 *
-* Always end the control file with ENDDECK
+* On an intterupt on 00D just take it offline
+RULE:00DINTREQ
+CMD V 00D,OFFLINE
+CMD S DEALLOC
+*
+* Oops, 009 is the telnet console for TK3, forgot to start it again
+RULE:009INTREQ
+WTO PLEASE START THE TELNET SESSION FOR TK3
+*
+* Always end with an ENDDECK statement
 ENDDECK
 ./ ADD NAME=MMPFEX
 //MARKJ003 JOB (0),'ASSEMBLE MMPFEX',CLASS=A,MSGCLASS=T,
@@ -2585,7 +2704,7 @@ ENDDECK
 // DD DISP=SHR,DSN=SYS1.AMODGEN
 // DD DISP=SHR,DSN=MVSSRC.SYM101.F01
 //ASM.SYSIN DD *
-         TITLE 'MMPFEX --  MMPFV2 EXTENSION --  VERSION 0.2'
+         TITLE 'MMPFEX --  MMPFV2 EXTENSION --  VERSION 0.3'
          PRINT NOGEN
 ***********************************************************************
 *                                                                     *
@@ -2666,11 +2785,12 @@ ENDDECK
 *     WOULD BE NICE TO TRAP IT, BUT I DON'T                           *
 *     TRAPS ON A DSORG=PS OK BUT WILL ABEND ON THE CARD STREAM.       *
 *     WILL NOT BE FIXED, IT IS DESIGNED TO BE CALLED ONLY FROM MMPF   *
-*     WHICH ALLOCATES THE SYSIN, AS A PDS. JUST DON'T RUN StANDALONE. *
+*     WHICH ALLOCATES THE SYSIN, AS A PDS. JUST DON'T RUN STANDALONE. *
 *                                                                     *
 * CHANGE HISTORY                                                      *
 * 0.1 - 2009/04/25 created the extension for use by MMPF              *
 * 0.2 - 2010/12/18 added the option to WTO in the control deck        *
+* 0.3 - 2017/03/28 sysin ddname changed to MMPFDATA                   *
 *                                                                     *
 ***********************************************************************
 * I NEED A CUSTOMISED WTO, INSERTING JOBNAMES INTO EACH WTO TO
@@ -3127,7 +3247,8 @@ ONE      DC    F'1'                THE NUMBER ONE, FOR ADD/DELETE
 *
 *   D C B   B I T S   F O R   S Y S I N   M O D I F Y I N G
 *
-SYSIN    DCB   DDNAME=SYSIN,DSORG=PO,MACRF=R,EODAD=EOFMMBR,EXLST=EXLST
+SYSIN    DCB   DDNAME=MMPFDATA,DSORG=PO,MACRF=R,EODAD=EOFMMBR,         X
+               EXLST=EXLST
 EXLST    DS    0F
          DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
 JFCBAREA DS    0CL176
@@ -3415,25 +3536,23 @@ R15      EQU   15
 //* LIBRARY LIST. ACTUALLY ALL LIBRARIES MUST BE IN YOUR
 //* SYSTEMS APPROPRIATE SEARCH LISTS.
 //*
-//* YES MMPF AAND MMPFEX  M U S T  BE IN A APF AUTHORISED
+//* YES MMPF AND MMPFEX  M U S T  BE IN A APF AUTHORISED
 //* LIBRARY, THEY NEED TO ISSUE CONSOLE COMMANDS IN ORDER
 //* TO AUTOMATE ANYTHING
+//* MDDIAG8 IS IN AN AUTHOURISED LIBRARY ALSO
 //* GETWORDS  M U S T  NOT BE IN AN APF AUTHORISED
 //* LIBRARY. IT DOESN'T NEED ANY SPECIAL ACCESS AND 
 //* SHOULD NOT HAVE IT.
 //*
-//* COPIES MMPF AND MMPFEX TO A APF AUTHORISED LOADLIB
+//* COPIES MMPF,MMPFEX,MDDIAG8 TO A APF AUTHORISED LOADLIB
 //* COPIES GETWORDS A NON-APF-AUTHORISED LOADLIB
 //* COPIES CONTROL MEMBERS MMPF00 AND MMPFEX00 TO PARMLIB
 //* COPIES MMPFPROC TO A PROCLIB AS MEMBER MMPF
 //*
 //* ----WARNING----
-//* I HAVEN'T ACTUALLY TESTED THIS JOB, THE SRCLIB 
-//* COPY BITS ANYWAY; AS I DON'T WANT TO ACCIDENTALLY
-//* OVERWRITE MY EXTENSIVE CUSTOMISATIONS TO THE
-//* DEFAULT PROCEDURE AND CONTROL MEMBERS
-//* IT SHOULD WORK THOUGH
-//*
+//* PROGRAMS ARE REPLACED, BUT PARMLIB AND PROCLIB COPIES
+//* DO N O T REPLACE, I DO NOT WANT TO OVERWRITE ANY OF
+//* YOUR CUSTOMISATIONS.
 //*
 //COPY     EXEC PGM=IEBCOPY
 //SYSPRINT DD   SYSOUT=*
@@ -3455,6 +3574,7 @@ R15      EQU   15
  COPY INDD=SRCLIB,OUTDD=OUT3
  SELECT MEMBER=MMPF00
  SELECT MEMBER=MMPFEX00
+ SELECT MEMBER=MMPFSTCL
  COPY INDD=SRCLIB,OUTDD=OUT4
  SELECT MEMBER=MMPFPROC
 /*
@@ -3505,11 +3625,14 @@ There should have been a .SRC, .LOADLIB and .DOC file created.
 (1) --- check the programs assempled correctly ---
 
 That job should also have assembled four modules into the install prefix 
-LOADLIB file during the dataset creation and load job. Three are required
-so check that file to ensure there have been load modules created for
- GETWORDS
- MMPF
- MMPFEX
+LOADLIB file during the dataset creation and load job.
+So check that file to ensure there have been load modules created for
+   GETWORDS
+   MMPF
+   MMPFEX
+   MDDIAG8
+Note: on RAKF systems if you have disabled the default batch PROD
+      user you will have to manually assemble each of these.
 
 
 (2) --- customise install prefix SRC member $INSTALL ---
@@ -3528,11 +3651,25 @@ the dataset names used on your system.
 Then run the job in $INSTALL.
 Check it completed OK.
 
-(3) --- start it ---
+(3) --- review the MMPF00, MMPFEX00 and MMPFSTCL members ---
 
-You are done, issue the "S MMPF" command.
+These will be in the PARMLIB dataset you selected. Make sure
+the message rules and STC jobs are relevant to your environment.
+
+(4) --- start it ---
+
+You are done, issue the "S MMPF" (or "S MMPFPROC" if you have
+not renamed the example proc) command.
 
 If it doesn't start you didn't follow the steps above.
+
+(5) --- optional ---
+
+If you have installed my TAPEMAN3 utility update the MMPF procedure
+to include the VSAM tape database DD card, uncomment the tape
+message rules in the MMPF00 parmlib member, and restart MMPF.
+(Details are in the TAPEMAN3 install documentation).
+And tape mount automation is as simple as that.
 
 **********************************************************************
 *                    END OF HOWTO INSTALL                            *
@@ -3547,6 +3684,9 @@ What is MMPF ?
 A message automation tool that automates ACTION messages waiting for
 attention on the system console.
 It only automates ACTION/ATTENTION messages !.
+
+It has also been updated to restart STC tasks you want to keep
+running that may have been stopped.
 
 It reads the system console buffer to find messages it needs to check
 for automation (based on the SPY code available from Greg Price). Thats
@@ -3613,19 +3753,24 @@ Note: reguardless of the sysout class used the actual STC job will
 
 Commands that can be issued to MMPF
 ===================================
+These examples assume you are using a started task name of MMPF
 
-P MMPF         - stop MMPF
+P MMPF            - stop MMPF
 
-F MMPF,MMPF=nn - load a new rule table, will load member MMPFnn
-                 this allows rules to be changed on the fly.
-                 if a member is selected that does not exist then
-                 the member in prior use will be rolled back to.
+F MMPF,MMPF=nn    - load a new rule table, will load member MMPFnn
+                    this allows rules to be changed on the fly
+                    if a member is selected that does not exist then
+                    the member in prior use will be rolled back to.
 
-F MMPF,STATS   - show how many messages have been automated since
-                 the MMPF task was last started.
-                 of limited use as I have to restart it daily as it
-                 has enqueues on files I want to back up daily.
+F MMPF,STATS      - show how many messages have been automated since
+                    the MMPF task was last started.
+                    of limited use as I have to restart it daily as it
+                    has enqueues on files I want to back up daily.
 
+F MMPF,STCMON=OFF - disable the STC monitoring/restart feature      
+
+F MMPF,STCMON=ON  - resume the STC monitoring/restart feature      
+                    (if STCLIST rules were loaded at startup)
 
 **********************************************************************
 *            END DOCUMENTATION FOR MMPF PROCEDURE                    *
@@ -3822,7 +3967,8 @@ Requirements
 
 Limitations
 ===========
-(1) The MMPFEX module is designed solely to issue commands
+(1) The MMPFEX module is designed solely to issue MVS commands or
+    hercules commands via diag8.
     note: a WTO option was also added later as a 'helper'.
 (2) A maximum of 5 (five) commands are permitted per rule.
 
@@ -3892,7 +4038,7 @@ CMD S DEALLOC
 RULE:009INTREQ
 WTO PLEASE START THE TELNET SESSION FOR TK3
 *
-* Allways end with an ENDDECK statement
+* Always end with an ENDDECK statement
 ENDDECK
 * ---------------------------------------------------------------------
 **********************************************************************
@@ -3900,7 +4046,7 @@ ENDDECK
 **********************************************************************
 ./ ADD NAME=BUGS
 **********************************************************************
-*                  KNOWN BUGS - 20 Jan 2013                          *
+*                  KNOWN BUGS - 28 Mar 2017                          *
 **********************************************************************
 MMPF
 ====
@@ -3918,16 +4064,107 @@ MMPF
     bother fixing this bug.
 (2) A blank comma seperated field (ie: ,,) will return , rather than
     a blank field in message parsing. I am happy with that as I would
-    home somthing is always returned for a field; documented here as
+    have somthing always returned for a field; documented here as
     it may not be what you expect.
 
 MMPFEX
 ======
 (1) The repeat read error for MMPF applies, you must have an ENDDECK
     statement in your MMPFEXnn parmlib member.
+(2) Not really an issue, I just do not test that the MMPFDATA is
+    a PDS. If 'dd data' card stream is used MMPFEX will ABEND S013-BC
+    as it simply cannot do PDS directory searches into a card stream.
+    Just always use a PDS dataset for the MMPFDATA DD card.
 **********************************************************************
 *                      END OF KNOWN BUGS                             *
 **********************************************************************
+./ ADD NAME=$CHANGES
+Change History
+
+MMPF Changes
+============
+   2007/10/20 - Initial version working with CMD function.           
+   2007/10/25 - Got the program PARM='MMPF=nn' working to override   
+                on startup, plus got the F MMPF=nn working.          
+   2007/10/27 - Added in test DOM and CMK types to allow changing a  
+                message to non-highlighted and change to non-high    
+                plus execute command respectively.                   
+                Any rule involving a DOM will only be attempted if   
+                we have not yet issued any commands, this is because 
+                if we issue a command we know the console will have  
+                rolled and we no longer have the correct line number 
+                to be dom'ed. At this point we just pray no other    
+                external command has rolled the screen for CMK type  
+                (while no issue for DOM type, for CMK type we rely   
+                on the message being dom'ed before we trigger the    
+                command to avoid looping, may have to look at having 
+                a table of messages undergoing CMK processing to     
+                redrive doms, but that will have it's own issues if  
+                there are more than one message of the same on the   
+                screen).                                             
+   2007/10/27 - Added assembly toggles for TK3.                      
+   2008/12/17 - Finally got around to iplementing the LNK option.    
+   2009/03/24 - Changed LNK so it DOM's the message that triggered   
+                the event. Avoids automation loops if the LNKed to   
+                program fails (repeatedly) to handle the event.      
+   2009/04/25 - added the MMPFEX utility, as I needed it
+                so it may be usefull to others.
+                Also removed the test step from the main
+                mmpf assembly job, was just annoying.
+   2009/07/17 - Allowed for a PARM of DEBUG to also be               
+                passed, in which case we log the messages we are     
+                checking and any rule matched we found but do not    
+                actually perform any actions. And added the optional 
+                LIVE parm also so the proc can use something other   
+                than debug and still work; the LIVE parm does        
+                nothing but is legal.                                
+   2009/10/13 - Non-APF program attention messages use @ instead of  
+                the * character so updated to allow for those also.  
+   2010/11/14 - TK3 leaves that */@ in front of messages
+                when they are DOMed, so use the */@ at
+                byte 4 (now identical to my system), some
+                PTF in TK3 must have changed this behaviour
+                as it behaved differently on my non-TK3 system
+   2012/07/11 - repackaged to create loadlib and doc files,
+                added new ,, bug to bug documentation
+   2013/01/20 - fixed all important bugs in message parsing and
+                updated the dsect used.
+   2014/11/21 - in a bored moment added the stats display
+   2015/12/18 - Changed the code handling MMPFEX rules to use
+                my own MDDIAG8 program instead of HERCCMD and
+                included it in this file, so anyone using this
+                does not have to run about trying to install
+                programs from additional sources.
+   2016/05/14 - Adjust so STATS command can be called BAL R1
+                so the stats can be logged when MMPF exits
+   2016/07/21 - added a datestamp to show last restart time
+                to the MMPF STATS command, as I stop/start
+                it a lot and the stats were getting
+                meaningless without a timestamp :-)
+   2017/01/25 - added WTO and WTH as extra options for MMPF rules
+   2017/03/28 - had to change to use three base registers,
+                added STC monitor/start facility to each poll interval
+                so I could retire my seperate task monitor utility,
+                added new STCLIST DD card to support that.
+                Added messages 020,021,022,023 and 024 for messages
+                relating to the new STC monitoring function.
+                CHANGED SYSIN DD to be MMPFDATA DD in the hope that
+                more clearly identifies it must be a datafile and
+                not a card stream (mmpf, mmpfex programs updated, and
+                mmpfproc updated).
+                Changed msgnumber 016W to 019W as I had two 016's.
+                Added msg 025 to log(wto) commands issued by mmpf.
+Pending changes
+... still to check the new messages added on 2017/03/28 are not used
+    by any other of my programs
+
+MMPFEX Changes
+==============
+Ver   Date       Description
+0.1 - 2009/04/25 created the extension for use by MMPF              *    
+0.2 - 2010/12/18 added the option to WTO in the control deck 
+0.3 - 2010/12/18 sysin DD name changed to MMPFDATA as it MUST match
+                 the DD name used by MMPF.
 ./ ENDUP
 ZZ
 //*

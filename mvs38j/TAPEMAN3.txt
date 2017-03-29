@@ -1,5 +1,4 @@
-//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T,
-// USER=MARK,PASSWORD=MVS38J
+//MARKSAVE JOB  (0),'SAVE TAPEMAN V3',CLASS=A,MSGCLASS=T
 //* **************************************************************
 //*
 //*         INSTALLATION JOB FOR TAPEMAN3
@@ -73,12 +72,7 @@
 //     UNIT=3350,VOL=SER=SRCMD1,
 //     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
 //     SPACE=(TRK,(2,1,5))
-//DD5 DD DSN=INSTALL.TAPEMAN3.SAMPLIB,
-//     DISP=(NEW,CATLG,DELETE),
-//     UNIT=3350,VOL=SER=SRCMD1,
-//     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
-//     SPACE=(TRK,(8,1,5))
-//DD6 DD DSN=INSTALL.TAPEMAN3.SRC,
+//DD5 DD DSN=INSTALL.TAPEMAN3.SRC,
 //     DISP=(NEW,CATLG,DELETE),
 //     UNIT=3350,VOL=SER=SRCMD1,
 //     DCB=(LRECL=80,DSORG=PO,BLKSIZE=3120,RECFM=FB),
@@ -93,6 +87,27 @@
 //SYSUT1 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
 //SYSUT2 DD DISP=SHR,DSN=INSTALL.TAPEMAN3.SRC
 //SYSIN DD DATA,DLM=QQ
+./ ADD NAME=MMPFCYCL
+***********************************************************************
+* BSPPILOT SCRIPT : MUST BE PLACED IN SYS1.PARMLIB FOR TK3 AND TK4-   *
+*                                                                     *
+* USED TO RECYCLE (STOP/WAIT/START) MMPF                              *
+* TRIGGERED BY MY CUSTOMISED IEECVXIT WHEN THERE IS A DATASET ENQUEUE *
+* ON THE VSAM DATABASE USED BY MMPF. MY IEECVXIT WILL ISSUE A         *
+* "F BSPPILOT,SCRIPT=MMPFCYCL"                                        *
+***********************************************************************
+PARM NOECHO
+PARM NOREPLYU
+IF MMPF
+   COM P MMPF
+ENDIF
+WAIT 5
+IF MMPF
+   MSG MMPF COULD NOT BE STOPPED
+ELSE
+   WAIT 10
+   COM S MMPF
+ENDIF
 ./ ADD NAME=DBREC
          MACRO
 &NAME    DBREC
@@ -223,11 +238,6 @@ DBSLEN   EQU   *-RECTMPL
 **********************************************************************
          EJECT    
 **********************************************************************
-*                                                                    *
-*                                                                    *
-* WHY A STARTED TASK PROC ?                                          *
-* Because IEECVXIT cannot do any disk IO (any IO) so it needs to be  *
-* offloaded, kicking off a started task seems the easiest.           *
 *                                                                    *
 * KNOWN BUGS                                                         *
 *    1.  With the OS. If this is triggered                           *
@@ -3384,6 +3394,9 @@ R15      EQU   15
 *            THE USER WILL NEVER SEE THE RAKF000A MESSAGE
 *            SO ADMINS NEED TO GUESS IT IS A TAPE RESOURCE
 * left a commented IEF176I example of how to highlight a msg
+* 2017 Mar   CHANGED 'P MMPF' TO
+*            'F BSPPILOT,SCRIPT=MMPFCYCL' TO HANDLE
+*            CHANGED REQUIREMENTS DUE TO MMPF CHANGES
 *
 *  --------------------------------------------------------
 *  As noted above on TURNKEY3 systems you should SMP 
@@ -3576,7 +3589,7 @@ NUKECNSL DS    0H                     , WTO buffer shortage triggered
 TAPEVCHK DS    0H
          CLC   =C'VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS',UCMMSTXT+12
          BNE   RETURN                 , not that dataset so ignore
-         SVC34 'P MMPF'               , stop MMPF
+         SVC34 'F BSPPILOT,SCRIPT=MMPFCYCL'  bounce MMPF
          B     RETURN                                  
          SPACE 2
          TITLE 'Process table of messages to be suppressed'
@@ -4618,9 +4631,9 @@ ISSUE 4. IS A DESIGN LIMITATION, NOT A BUG
  AND USE AUTOMATION TO SHUTDOWN MMPF WHEN A UTILITY PROGRAM WANTS
  TO ACCESS THE DATABASES (AND AUTOMATION RESTARTS MMPF WHEN DONE)
  THAT WORKS FOR ME, SO I WILL NOT BE FOLOWING UP THIS ISSUE.
- - IEECVXIT DOES A 'P MMPF' IF A JOBS 'WAITING ON DATASET' MESSAGE
-   CONTAINS THE TAPEMAN3 VSAM DATABASE, AND MY TASKMON PROGRAM STARTS
-   IT AGAIN, UP TO YOU HOW YOU DO IT.
+ - IEECVXIT DOES A 'F BSPPILOT,SCRIPT=MMPFCYCL' IF A JOBS
+   'WAITING ON DATASET' MESSAGE CONTAINS THE TAPEMAN3 VSAM DATABASE,
+   WHICH STOPS/WAITS/STARTS MMPF TO WORK AROUND THE LOCK.
 
 4. (LOW) NOT A BUG, A LIMITATION
    TAPEMSCR (DAILY SCRATCH JOB) REPORTS ON THE NUMBER OF FREE SCRATCH
@@ -4642,8 +4655,9 @@ TAPEMAN.SRC
      TAPEMEXP  - manually alter a tape expiry, for testing expiry
      TAPEMUTL  - vsam database update utility
      TAPEMSCR  - daily scratch program
-     IEECVXIT  - an example of my IEECVXIT with a rule to 'P MMPF'
-                 on dsn enqueues (if you use my MMPF utility) plus
+     IEECVXIT  - an example of my IEECVXIT with a rule to 
+                 'F BSPPILOT,SCRIPT=MMPFCYCL' on tape catalog
+                 dsn enqueues (if you use my MMPF utility) plus
                  a rule to cancel any job that RAKF denies a tape
                  resource to (to prevent the OS requesting endless
                  'retry' tape mounts until the tapeman scratch pool
@@ -4672,8 +4686,7 @@ TAPEMAN.INSTALL
                  the $INSTALL in the TAPEMAN.DOC file.
      CREATEDB  - create the vsam database
      PROC      - example proc to place into your system proclib
-     CUTILS    - copy tapemscr and tapemutl between linklibs
-     CTAPEMAN  - copy tapeman3 between linklibs
+     CTAPEMAN  - copy load modules to your system libraries
 
 TAPEMAN.CONTROL
   These are sample jobs to manage the tape database.
@@ -4717,15 +4730,16 @@ All the tasks are covered in detail after this index.
 1. Preparation - gather information you will need
 2. Create a 'tapes' directory and create some .aws tape files
    in it. You will need to initialise them also.
-4. Install TAPEMAN, TAPEMCUU, MDDIAG8 (into APF authorised library)
-5. Install the utility programs (not APF authorised)
-6. Create the VSAM 'volser' database
-7. Load some tape volsers into the VSAM database
-8. Ensure some tape units are online after an IPL
-8.1 - update the hercules config file
-8.2 - ensure they are varied online at IPL time
-9. Update the hercules config file (again)
-10. Automate the messages using MMPF
+3. Copy the programs to your system libraries
+4. Create the VSAM 'volser' database
+5. Load some tape volsers into the VSAM database
+6. Ensure some tape units are online after an IPL
+6.1 - update the hercules config file
+6.2 - ensure they are varied online at IPL time
+7. Update the hercules config file (again)
+8. Automate tape mount messages using MMPF
+8.1 Add the required message rules to MMPF parmlib member(s)
+8.2 Update your MMPF procedure
 
     The below is required only if you do not have a vsam
     dataspace area already assigned at your site.
@@ -4808,46 +4822,15 @@ Appendix D - user exit changes, manual for TK3 usermod for TK4-
                    INSTALL THE PROGRAMS
 ---------------------------------------------------------------
 
-3. Obsolete, HERCCMD is no longer required, replaced by MDDIAG8
-
-4. Install the TAPEMAN3, TAPEMCUU, MDDIAG8 programs into a APF
-   library. Two options here...
-   Either
-     a) Customise CTAPEMAN in <pref>.TAPEMAN3.INSTALL and run the job
-        to copy the programs to an APF authorised library.
-   OR
-     b) assemble from source, so you know what you are getting. The
-        job to assemble the programs are in <pref>.TAPEMAN3.SRC and
-        named TAPEMAN3, TAPEMCUU and MDDIAG8
-        Update the jobdecks to assemble it into an APF authorised
-        library in your site.
-   **NOTE** if using under DOS/WIN you should probably re-assemble
-            to change the tapes/ to tapes\. Also of you want your
-            tapes anywhere other than in a 'tapes' directory you
-            should change the code here (and rework step 2 as you
-            just changed the rules if you changed tapes).
-
-
-5. Install the TAPEMAN utility programs
-   These DO NOT have to go into an APF authorised library.
-   Three options here...
-   Run ONE of these from <pref>.TAPEMAN.INSTALL...
-     a) if your target library is the same blocksize as the linklib
-        I have shipped, use member <pref>.TAPEMAN3.INSTALL(CUTILS)
-        to copy the modules to your program library.
-     b) or compile them from source. The source jobsare in the file
-        <pref>.TAPEMAN.SRC and are the two members TAPEMSCR and
-        TAPEMUTL.
-   OR
-     c) You could just STEPLIB all your jobs to the installation
-        <pref>.TAPEMAN.LINKLIB provided.
+3. Copy the program modules into your system libraries.       
+   Install job CTAPEMAN will do this.
 
 
 ---------------------------------------------------------------
               CREATE THE DATA FILES NEEDED
 ---------------------------------------------------------------
 
-6. Create the VSAM 'volser' database
+4. Create the VSAM 'volser' database
 
    The tape volser database is an indexed VSAM file. You need
    to have identified a file prefix (alias) and a volume with
@@ -4867,7 +4850,7 @@ Appendix D - user exit changes, manual for TK3 usermod for TK4-
    Then run the job.
 
 
-7. Populate your VSAM 'volser' database with entries
+5. Populate your VSAM 'volser' database with entries
 
    OK. You have an empty database by now, but there are no
    scratch tapes in it yet.
@@ -4885,9 +4868,9 @@ Appendix D - user exit changes, manual for TK3 usermod for TK4-
    latest backup tapes in the first add job.
 
 
-8. Ensure some tape units are online after an IPL
+6. Ensure some tape units are online after an IPL
 
-8.1 - update the hercules config file
+6.1 - update the hercules config file
 
    In your hercules configuration file add some (all you want to be
    automated) tape unit device number entries as per the below
@@ -4896,7 +4879,7 @@ Appendix D - user exit changes, manual for TK3 usermod for TK4-
 0310    3420    *
 0311    3420    *
 
-8.2 - ensure they are varied online at IPL time
+6.2 - ensure they are varied online at IPL time
 
    In SYS1.PARMLIB, member COMMND00 you should vary the devices online
    so they are available immediately after IPL time. Just add lines
@@ -4909,7 +4892,7 @@ V 311,ONLINE
             CUSTOMISE THE HERCULES CONFIG FILE
 ---------------------------------------------------------------
 
-9. Update the hercules config file (again)
+7. Update the hercules config file (again)
 
   Yes, I could have included that in the earlier update step of
   this file, but I'm trying to do this in an order that will cause
@@ -4937,33 +4920,30 @@ SHCMDOPT DISABLE
                 AUTOMATE THE TAPE MOUNT MESSAGES
 ---------------------------------------------------------------
 
-11. Automate the messages using MMPF
+8. Automate the messages using MMPF
 
-  From version 3 onward TAPEMAN3 cannot be triggered by IEECVXIT.
-  You must use my MMPF product.
+8.1 Update your MMPF procedure
 
-  All the surperflous code in TAPEMAN (which was all the message
-  field parsing) that supported being triggered via IEECVXIT
-  has been removed from TAPEMAN version 3 onward, as all my
-  message parsing is now done by my MMPF utility.
+  To use TAPEMAN from MMPF simply add the extra DD card to your
+  MMPF procedure to enable MMPF to use the tape catalog. The
+  filename is the name of the VSAM file you created earlier.
+  //TAPEVOLS DD   DISP=OLD,
+  //  DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS
 
-  To use TAPEMAN from MMPF simply 
-  (1) add an extra DD card to the MMPF proc you use, it should be
-      using the filename you selected, the example here is what
-      is used on my system
-//TAPEVOLS DD   DSN=VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS,DISP=OLD
-      Yes, disp must be old !. shr will run in mmpf ok but then
-      all other utilities trying to share the database will get
-      IO errors on sharing violations.
+  Yes, disp must be old !. shr will run in mmpf ok but then
+  all other utilities trying to share the database will get
+  IO errors on sharing violations.
 
-  (2) add the five lines below to your MMPF configuration
-      file (or a new test one if you are not ready
-      to go live yet) and activate the new rules with
-          F MMPF,MMPF=xx
-      where nn is the number/characters of your MMPF member
-      being used.
+8.2 Add the required message rules to MMPF parmlib member(s)
 
-       The five lines to add to the MMPF control file are
+  add the five lines below to your MMPF configuration
+  file (or a new test one if you are not ready
+  to go live yet) and activate the new rules with
+      F MMPF,MMPF=xx
+  where nn is the number/characters of your MMPF member
+  being used.
+
+  The five lines to add to the MMPF control file are
 * THE NEXT THREE ARE TAPE MOUNT REQUESTS THAT TRIGGER AUTOMATIC MOUNTS
 IEC501A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD8
 IEF233A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD6
@@ -4982,6 +4962,15 @@ TAP005A  CMK CANCEL &WORD8
                   require you playing with assembler code in
                   IEECVXIT and filling your dump datasets :-)
 
+8.3 Optional (BUT RECOMENDED), IEECVXIT changes
+
+  Any attempt to update the tape catalog will enqueue on the
+  file while MMPF is using it. For 'lights out' use an entry
+  should be added to IEECVXIT to terminate mmpf... and of 
+  course it needs to be restarted again externally to ieecvxit.
+
+  Refer to Appendix D which details what changes are required
+  to IEECVXIT and options available.
 
 ---------------------------------------------------------------
       APPENDIX A - If needed create a VSAM volume
@@ -5146,32 +5135,74 @@ Appendix C - installation checksheet
 Appendix D - user exit changes, manual for TK3 usermod for TK4-
 ---------------------------------------------------------------
 
-Turnkey3 users should refer to the IEECVXIT member and merge
-the required changes made there with any changes you may have
-already made for your own customistaion.
+These are the IEECVXIT changes required to use TAPEMAN3 under
+MMPF (which is the only supported way of running it).
 
-TK4- users, if they have not already customised IEECVXIT 
-themselves, can run the job to install usermod ZMD0001
-A F T E R changing the TK3 VSAM database name to the name
-you have chosen to install the database as
-(search on VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS)
+The first requirement is that with MMPF holding the tape
+catalog dataset any batch jobs will enqueue on the dataset,
+so mmpf must be automatically stopped/started as needed to
+work around that.
+TK3 and TK4- have BSPPILOT running and I use that, to issue
+a 'F BSPPILOT,SCRIPT=MMPFCYCL' which stops/waits/starts mmpf.
+(An example MMPFCYCL member is in the .SRC dataset; if you
+use that it needs to be copied to SYS1.PARMLIB as bsppilot
+only runs scripts from there).
+If you have another way that works for you you should use
+it, this should fit in with your system not replace it :-)
 
+Another issue is that if RAKF denies a tape volume mount
+there is an endless loop of tape mount requests. THIS IS
+NOT A TAPEMAN3 ISSUE, it happens for any mount denied by
+RAKF and any site runing RAKF should already have code in
+IEECVXIT to cancel any job that trigers that condition.
+
+
+The hard way, manual changes
+============================
 If doing the changes manually for your customised IEECVXIT
-user exit the changes you must make are
+user exit the minimum changes you must make are
 * for a RAKF deny on a tape volser you must cancel the job
   requesting the mount or there will be an endless loop of
   mount requests being rejected by RAKF ... this is needed
   even if you do not use my tapeman3 utility as it is
   jolly old RAKF causing that
 * for an enqueue (waiting for dataset) on the tape volser
-  catalog file you must 'P MMPF' assuming you are using
+  catalog file you must stop MMPF, assuming you are using
   my MMPF utility of course (this documentation assumes
-  you are) to release the file... 
-  ...batch jobs (database update jobs) cause this...
-  ...it is expected you have a external way of restarting 
-  MMPF after a few seconds, I use 'taskmon' for this
-  which should be available from the website you obtained
-  this file from.
+  you are) to release the file. A simple batch job to
+  list tapes will cause an enqueue. Oh, and you need a
+  way of starting it again of course, which is why I use
+  a bsppilot script.
+
+TK3 - Manual changes required
+=============================
+An EXAMPLE IEECVXIT member for TK3 is provided, you should
+merge the changes with any customisations you have already
+made to your own TK3 exit.
+And re-running SYS1.UMODSRC(ZUM0003) to apply your updates
+should work just fine.
+
+TK4- - Changes via SMP only
+===========================
+The TK4- release has had usermods TMVS805 and ZJW0006 applied
+on top of the TK3 base ZUM0003; so you cannot just rerun the
+ZUM0003 usermod for TK4-.
+
+I have provided usermod ZMD0001 which merges the changes
+made in those usermods with the changes needed for TK4-.
+If you have made any customisations to the TK4- IEECVXIT
+yourself you will have to do a lot of work... beter in
+that case to review my usermod changes and merge them with
+yours... assuming you used a usermod, which you really
+should have if changing IEECVXIT under TK4-.
+If using my usermod FIRST CHANGE the VSAM database name
+used in the enqueue test :-).
+(search on VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS)
+
+Also provided is ZMD0001J which rolls back my usermod
+plus the two Jurgen applied that locked zmu0003, and
+also backs out zmu0003, it lists the usermods that
+have to be applied to get back to tk4- level.
 ./ ADD NAME=TAPEMCUU
 TAPEMCUU - a TAPEMAN Utility Program
 ====================================
@@ -5462,31 +5493,24 @@ QQ
 //*   MDDIAG8  - NEEDS TO SWITCH TO SUPERVISOR
 //*              MODE TO ISSUE DIAGNOSE 0008 TO
 //*              PASS COMMANDS TO THE CP.
+//*
+//* AND
+//*
+//* COPY THE TAPEMAN UTILITY PROGRAMS THAT DO NOT NEED
+//* TO BE APF AUTHORISED INTO A PROGRAM LIBRARY THAT IS
+//* IN THE DEFAULT SEARCH LINKLST.
 //* -----------------------------------------------
 //STEP1    EXEC PGM=IEBCOPY
 //SYSPRINT DD   SYSOUT=*
 //SYSUT1   DD   DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
-//SYSUT2   DD   DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
+//AUTHLIB  DD   DSN=SYS9.LINKLIB.APFAUTH,DISP=SHR
+//USERLIB  DD   DSN=SYS9.LINKLIB,DISP=SHR
 //SYSIN    DD   *
- COPY INDD=SYSUT1,OUTDD=SYSUT2
+ COPY INDD=SYSUT1,OUTDD=AUTHLIB
  SELECT MEMBER=TAPEMAN3
  SELECT MEMBER=TAPEMCUU
  SELECT MEMBER=MDDIAG8 
-/*
-//
-./ ADD NAME=CUTILS
-//MARKCOPY JOB (0),'COPY',CLASS=A,MSGCLASS=T
-//* --------------------------------------------------------
-//* COPY THE TAPEMAN UTILITY PROGRAMS THAT DO NOT NEED
-//* TO BE APF AUTHORISED INTO A PROGRAM LIBRARY THAT IS
-//* IN THE DEFAULT SEARCH LINKLST.
-//* --------------------------------------------------------
-//STEP1    EXEC PGM=IEBCOPY
-//SYSPRINT DD   SYSOUT=*
-//SYSUT1   DD   DSN=INSTALL.TAPEMAN3.LINKLIB,DISP=SHR
-//SYSUT2   DD   DSN=SYS9.LINKLIB,DISP=SHR
-//SYSIN    DD   *
- COPY INDD=SYSUT1,OUTDD=SYSUT2
+ COPY INDD=SYSUT1,OUTDD=USERLIB
  SELECT MEMBER=TAPEMSCR
  SELECT MEMBER=TAPEMUTL
  SELECT MEMBER=TAPEMDES
@@ -5827,7 +5851,7 @@ CTAPEVOL DS    0H           , RAKF TAPEVOL DENY RAKF000A        ZMD0001 01330002
          B     RETURN                                           ZMD0001 01330022
 TAPEVCHK CLC   =C'VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS',UCMMSTXT+12 D0001 01330024
          BNE   RETURN               not that dataset so ignore  ZMD0001 01330025
-         SVC34 'P MMPF'             else stop MMPF              ZMD0001 01330026
+         SVC34 'F BSPPILOT,SCRIPT=MMPFCYCL'  bounce MMPF        ZMD0001 01330026
          B     RETURN                                           ZMD0001 01330027
 ./ DELETE SEQ1=01590000,SEQ2=01770000
 VARYIACT DS    0H                     vary automated terminal inactive  01770100
@@ -5962,8 +5986,6 @@ VNET     DS    0C                     V NET,... commands go here        06164000
 ++VER(Z038) FMID(EBB1102) PRE(TMVS805) SUP(ZJW0006).
 ++MOD(IEECVXIT) TXLIB(UMODOBJ).
 //SMPCNTL  DD  *
- REJECT S(ZMD0001).
- RESETRC.
  RECEIVE SELECT(ZMD0001).
  APPLY SELECT(ZMD0001).
 /*
