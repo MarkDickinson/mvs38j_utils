@@ -1,7 +1,7 @@
 //ZMD0001 JOB  (SMP),
 //             'Usermod ZMD0001',
 //             CLASS=A,
-//             MSGCLASS=A,
+//             MSGCLASS=T,
 //             MSGLEVEL=(1,1),
 //             REGION=4096K
 //*
@@ -11,25 +11,32 @@
 //*
 //* Desc: Install usermod ZMD0001
 //* Requirements: This usermod is for TK4- and will not work with TK3
+//*               It uses the TK4- customised IEECVXIT as a base
 //*
 //*     Update IEECVXIT WTO message automation exit:
 //*
+//*   o INCLUDE INLINE ALL CHANGES MADE BY ZJW0006 or they
+//*     would be lost.
+//*   o but remove the 'shutdown' code that bsppilot is
+//*     supposed to trigger, as it did not do the job anyway
 //*   o If a RAKF deny on a TAPEVOL resource cancel the JOB
 //*     requesting the tape to prevent endless mount requests
 //*   o If an ENQ on VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS then issue
-//*     a 'P MMPF' to release it from MMPF (taskmon will restart MMPF)
+//*     a 'F BSPPILOT,SCRIPT=MMPFCYCL' to stop/wait/start MMPF 
+//*     to release the dataset temporarily 
 //*   o Remove the code to start printer and punch devices, that is
 //*     now handled by my MMPF
-//*   o INCLUDE INLINE ALL CHANGES MADE BY ZJW0006 or they
-//*     would be lost.
+//*   o Change $HASP093 (spool > 80%+ full) from an informational
+//*     to a critical message so MMPF can trigger to do some  
+//*     spool cleanup.
 //*
 //* ************* NOTE: ******************************************
 //* TK4- HAS USERMOD ZJW0006 APPLIED ON TOP OF ZUM0003 (IEECVXIT)
-//* This usermod superceeds that and includes ass changes to
+//* This usermod superceeds that and includes the changes to
 //* ieecvxit made by that usermod.
 //* ************* END NOTE ***************************************
 //*
-//*       M. Dickinson, 01/2016
+//*       M. Dickinson, 01/2016, last updated 2017/04/21
 //*
 //*********************************************************************
 //UPDATE  EXEC PGM=IEBUPDTE
@@ -39,7 +46,7 @@
 //             SPACE=(TRK,(15,5),RLSE)
 //SYSPRINT DD  SYSOUT=*
 //SYSIN    DD  *
-./  CHANGE NAME=IEECVXIT,NEW=PS
+./ CHANGE NAME=IEECVXIT,NEW=PS
          GBLC  &VNETSW             reactivation time for switched lines 00082000
          GBLC  &VNETLS             reactivation time for leased lines   00084000
          COPY  BSPSGLBL               , set globals                     00086000
@@ -67,8 +74,9 @@ CTAPEVOL DS    0H           , RAKF TAPEVOL DENY RAKF000A        ZMD0001 01330002
          B     RETURN                                           ZMD0001 01330022
 TAPEVCHK CLC   =C'VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS',UCMMSTXT+12 D0001 01330024
          BNE   RETURN               not that dataset so ignore  ZMD0001 01330025
-         SVC34 'P MMPF'             else stop MMPF              ZMD0001 01330026
+         SVC34 'F BSPPILOT,SCRIPT=MMPFCYCL'  bounce mmpf        ZMD0001 01330026
          B     RETURN                                           ZMD0001 01330027
+./ DELETE SEQ1=01340000,SEQ2=01400000
 ./ DELETE SEQ1=01590000,SEQ2=01770000
 VARYIACT DS    0H                     vary automated terminal inactive  01770100
 *              0----+----1----+----2----+----3----+----4----+----5----+ 01770200
@@ -131,20 +139,23 @@ LVINACT  EQU   *-VINACT               length of SVC 34 plist            01775300
 ./ DELETE  SEQ1=02780000,SEQ2=02790000
 * Check again if BSPPILOT is running.  If not, we cannot process the  * 02780000
 * action.  We do this by scanning the ASCB chain (again) for BSPPILOT * 02786000
-./ DELETE SEQ1=03370000,SEQ2=03370000
+./ DELETE SEQ1=03370000,SEQ2=03380000
          DC    CL8'IEF863I ',A(TAPEVCHK)  check if tape vsam ds ZMD0001 03380002
          DC    CL8'RAKF000A',A(CTAPEVOL)  c if deny is TAPEVOL  ZMD0001 03380003
          DC    CL8'LGN001I ',A(VARYIACT)     deactivate automated term  03382000
          DC    CL8'IST105I ',A(VARYACT)      activate automated term    03384000
          DC    CL8'IST073I ',A(VARYFAIL)     delete if automated term   03386000
+*        Make the HASP093 spool > 80% full an action message    ZMD0001 03590001
+         DC    CL8'$HASP093',A(ACTDESCD)                        ZMD0001 03590002
 ./ DELETE  SEQ1=03770000,SEQ2=03770000
 * List of messages and their canned actions                           * 03770000
 REPLYES  EQU   32                     , R XX,YES                        03863000
 EXECVNET EQU   36                     V NET,ACT,ID=<luname>             03866000
          DC    CL8'IST183A ',A(REPLYES)                                 03955000
-*        IEECODES ID=DEL,ROUTCDE=0,DESC=0                               04002000
-DELDESCD DC    H'0'                                                     04004000
-DELROUTC DC    H'0'                                                     04006000
+*        IEECODES ID=DEL,ROUTCDE=0,DESC=0                       ZMD0001 04000001
+DELDESCD DC    H'0'                                             ZMD0001 04000002
+DELROUTC DC    H'0'                                             ZMD0001 04000003
+         IEECODES ID=ACT,ROUTCDE=1,DESC=2                       ZMD0001 04000004
 ./ DELETE  SEQ1=04040000,SEQ2=04040000
 * Actually, the SRB routine does not process the action requests at   * 04040000
 ./ DELETE  SEQ1=04060000,SEQ2=04070000
