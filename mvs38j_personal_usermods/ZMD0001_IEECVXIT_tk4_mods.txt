@@ -4,7 +4,6 @@
 //             MSGCLASS=T,
 //             MSGLEVEL=(1,1),
 //             REGION=4096K
-//*
 //*********************************************************************
 //*
 //* Name: SYS1.UMODCNTL(ZMD0001)
@@ -13,12 +12,10 @@
 //* Requirements: This usermod is for TK4- and will not work with TK3
 //*               It uses the TK4- customised IEECVXIT as a base
 //*
-//*     Update IEECVXIT WTO message automation exit:
+//*     Update (TK4- level) IEECVXIT WTO message automation exit:
 //*
 //*   o INCLUDE INLINE ALL CHANGES MADE BY ZJW0006 or they
 //*     would be lost.
-//*   o but remove the 'shutdown' code that bsppilot is
-//*     supposed to trigger, as it did not do the job anyway
 //*   o If a RAKF deny on a TAPEVOL resource cancel the JOB
 //*     requesting the tape to prevent endless mount requests
 //*   o If an ENQ on VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS then issue
@@ -29,6 +26,17 @@
 //*   o Change $HASP093 (spool > 80%+ full) from an informational
 //*     to a critical message so MMPF can trigger to do some  
 //*     spool cleanup.
+//*   o Change &C3PO from BSPPILOT as CMD1 is a 'master' subsystem
+//*     that can keep running after JES2 is shutdown. This change
+//*     is to allow JES2 to be shutdown as part of the system
+//*     shutdown (not possible using bsppilot as the autopilot as 
+//*     bsppilot has to be stopped before jes2 can be shutdown)
+//*     I have added $HASP099 (jes2 all functions complete)
+//*     to issue the $PJES2 then stop CMD1... so JES2 will stop
+//*     without manual intervention now
+//*   o Removed lots of hard coded 'bsppilot' strings and replaced
+//*     with the &C3PO constant which was only being used 
+//*     infrequently instead of everywhere as it should be
 //*
 //* ************* NOTE: ******************************************
 //* TK4- HAS USERMOD ZJW0006 APPLIED ON TOP OF ZUM0003 (IEECVXIT)
@@ -36,7 +44,7 @@
 //* ieecvxit made by that usermod.
 //* ************* END NOTE ***************************************
 //*
-//*       M. Dickinson, 01/2016, last updated 2017/04/21
+//*       M. Dickinson, 01/2016, last updated 2017/05/02
 //*
 //*********************************************************************
 //UPDATE  EXEC PGM=IEBUPDTE
@@ -50,6 +58,7 @@
          GBLC  &VNETSW             reactivation time for switched lines 00082000
          GBLC  &VNETLS             reactivation time for leased lines   00084000
          COPY  BSPSGLBL               , set globals                     00086000
+&C3PO    SETC  'CMD1'                                           ZMD0001 00140000
 &VNETSW  SETC  '1'                 reactivation time for switched lines 00173000
 &VNETLS  SETC  '10'                reactivation time for leased lines   00176000
 CTAPEVOL DS    0H           , RAKF TAPEVOL DENY RAKF000A        ZMD0001 01330002
@@ -76,7 +85,13 @@ TAPEVCHK CLC   =C'VSAM.INSTALL.TAPEMAN3.VVDS.VOLSERS',UCMMSTXT+12 D0001 01330024
          BNE   RETURN               not that dataset so ignore  ZMD0001 01330025
          SVC34 'F BSPPILOT,SCRIPT=MMPFCYCL'  bounce mmpf        ZMD0001 01330026
          B     RETURN                                           ZMD0001 01330027
-./ DELETE SEQ1=01340000,SEQ2=01400000
+         SVC34 'P BSPPILOT'                                     ZMD0001 01350000
+         SVC34 '$P'                                             ZMD0001 01360000
+./ DELETE SEQ1=01370000,SEQ2=01390000
+STOPSYS  DS    0H                                               ZMD0001 01400001 
+         SVC34 '$PJES2'                                         ZMD0001 01400002
+         SVC34 'P CMD1'                                         ZMD0001 01400003
+         B     RETURN                                           ZMD0001 01400004
 ./ DELETE SEQ1=01590000,SEQ2=01770000
 VARYIACT DS    0H                     vary automated terminal inactive  01770100
 *              0----+----1----+----2----+----3----+----4----+----5----+ 01770200
@@ -137,9 +152,11 @@ LVINACT  EQU   *-VINACT               length of SVC 34 plist            01775300
 *  If this address space is not active, no action processing will     * 02580000
 *  take place                                                         * 02586000
 ./ DELETE  SEQ1=02780000,SEQ2=02790000
-* Check again if BSPPILOT is running.  If not, we cannot process the  * 02780000
-* action.  We do this by scanning the ASCB chain (again) for BSPPILOT * 02786000
-./ DELETE SEQ1=03370000,SEQ2=03380000
+* Check again if CMD1     is running.  If not, we cannot process the  * 02780000
+* action.  We do this by scanning the ASCB chain (again) for CMD1     * 02786000
+CHKIT    CLC   0(8,R7),=CL8'&C3PO'    , Autopilot task?         ZMD0001 03030000
+./ DELETE SEQ1=03370000,SEQ2=03370000
+         DC    CL8'$HASP099',A(STOPSYS)   JES2 all funcs comp   ZMD0001 03380001
          DC    CL8'IEF863I ',A(TAPEVCHK)  check if tape vsam ds ZMD0001 03380002
          DC    CL8'RAKF000A',A(CTAPEVOL)  c if deny is TAPEVOL  ZMD0001 03380003
          DC    CL8'LGN001I ',A(VARYIACT)     deactivate automated term  03382000
@@ -182,7 +199,15 @@ RYES     EQU   *                                                        05542000
          SPACE                                                          05548000
 ./ DELETE  SEQ1=05580000,SEQ2=05580000
 DOSVC34  SR    R0,R0                  , clear R0 for SVC 34             05580000
-REPLY9   WTO   'R XX,''YES''    <<<<<< BY BSPPILOT',DESC=(5),          +06012000
+REPLY1   WTO   'R XX,''NOHOLD'' <<<<<< BY &C3PO',DESC=(5),             +05700000
+REPLY2   WTO   'R XX,''U''      <<<<<< BY &C3PO',DESC=(5),             +05740000
+REPLY3   WTO   'R XX,''GO''     <<<<<< BY &C3PO',DESC=(5),             +05780000
+REPLY4   WTO   'R XX,''POST''   <<<<<< BY &C3PO',DESC=(5),             +05820000
+REPLY5   WTO   'R XX,''WAIT''   <<<<<< BY &C3PO',DESC=(5),             +05860000
+REPLY6   WTO   'R XX,''SIC''    <<<<<< BY &C3PO',DESC=(5),             +05900000
+REPLY7   WTO   'R XX,''CANCEL'' <<<<<< BY &C3PO',DESC=(5),             +05940000
+REPLY8   WTO   'R XX,''NOPASSWD'' <<<<<< BY &C3PO',DESC=(5),           +05980000
+REPLY9   WTO   'R XX,''YES''    <<<<<< BY &C3PO',DESC=(5),             +06012000
                ROUTCDE=(1,2,11),MF=L                                    06014000
 REPLY9L  EQU   *-REPLY9                                                 06016000
 *------------------------------------------------------------------*    06018000
