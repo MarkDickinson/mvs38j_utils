@@ -1351,6 +1351,13 @@ MDSCHED1 S MDSCHED1
 &L3      DS    0H
          SVC   35
          MEND
+         SPACE 2
+* HELPER MACRO TO SPACE FILL STRING WORK AREAS
+         MACRO
+&NAME    SPACEOUT &A
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEND
          EJECT
 R0       EQU   0
 R1       EQU   1
@@ -2188,12 +2195,14 @@ STODATA  ST    R6,STOSAVR6
          ST    R1,STOSAVR1
          L     R6,ADDRGETW       R6 TO ADDRESS GWDSECT STORAGE
          USING GWAREA,R6
+         SPACEOUT GWMSGLIN
+         SPACEOUT GWMSKLIN
+         SPACEOUT GWRESULT
          GWSTMSG MSG=$MSGOFST(R1),LEN=66   STORE MESSAGE IN GWDSECT
          GWSTMASK MASK=13(R5),LEN=67  STORE MASK IN GWDSECT
          GWEXEC REG=R6                POPULATE THE TEMPLATE FROM MSG
          GWGETTXT DEST=TMPLRSLT       GET THE POPULATED COMMAND
-         MVI   SYSCMD,C' '
-         MVC   SYSCMD(L'SYSCMD-1),SYSCMD
+         SPACEOUT SYSCMD
          L     R7,GWRESLEN
          ST    R7,SAVEGLEN            SAVE, NEEDED AFTER DSECT DROPPED
          EX    R7,EXSTCMD
@@ -4044,9 +4053,9 @@ ENDDECK
 **********************************************************************
 *              DOCUMENTATION FOR MMPFEXnn MEMBER                     *
 **********************************************************************
-./ ADD NAME=BUGS
+./ ADD NAME=$BUGS
 **********************************************************************
-*                  KNOWN BUGS - 28 Mar 2017                          *
+*                  KNOWN BUGS - 6 May 2017                           *
 **********************************************************************
 MMPF
 ====
@@ -4066,6 +4075,14 @@ MMPF
     a blank field in message parsing. I am happy with that as I would
     have somthing always returned for a field; documented here as
     it may not be what you expect.
+(3) Some times after MMPF starts commands/repiles issued contain
+    garbage at the end of the command, obviously I am not clearing
+    a buffer somewhere. As this is intermittent, and simply stopping
+    and restarting MMPF clears the problem, this is proving extremely
+    difficult to track down, the issue can disapear for months and
+    suddenly come back again, so making a change I think has fixed
+    it may not have, won't know for months. Yet again I think I have
+    fixed it, anybodies guess.
 
 MMPFEX
 ======
