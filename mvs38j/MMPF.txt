@@ -4,9 +4,14 @@
 //*   My MPF / Marks MPF / MVS 3.8J console automation 
 //*      without IEECVXIT (almost, see notes below)
 //*
+//*  This is now being assembled for my use using TK4- rather than 
+//*  TK3, it seems to allow for larger programs to assemble than
+//*  TK3 does; if you have issues on TK3 let me know.
+//*
 //*   This job will create source and loadlib files, load all
 //*   the required files into the source library, and will also
-//*   submit jobs to assemble the programs into the loadlib.
+//*   submit jobs to assemble the programs into the loadlib (which
+//*   if you have rakf installed look at step 6 below).          
 //*   It will not touch your existing datasets, there is a seperate
 //*   $install member in the source file that must be used to copy
 //*   the assembled modules into place after you have reviewed
@@ -19,14 +24,10 @@
 //*      U S E   A   G L O B A L   C H A N G E
 //*      AS THAT WILL ALSO CORRECTLY UPDATE ALL THE JOBS THAT
 //*      WILL USE THOSE DATASETS AND SAVE YOU A LOT OF TIME LATER
-//*   3. OPTION A
-//*         GLOBALLY CHANGE SYS9.LINKLIB.APFAUTH TO ONE OF YOUR
-//*         APF AUTHORISED LIBRARIES
-//*         GLOBALLY CHANGE SYS9.LINKLIB TO ONE OF YOUR
-//*         NON-APF-AUTHORISED LIBRARIES
-//*      OPTION B - THE FILENAMES ONLY EXIST IN THE INSTALL MEMBER
-//*         JUST EDIT THE INSTALL MEMBER AFTER YOU HAVE RUN THIS
-//*         JOB TO UPDATE FILENAMES.
+//*   3. GLOBALLY CHANGE SYS9.LINKLIB.APFAUTH TO ONE OF YOUR
+//*      APF AUTHORISED LIBRARIES
+//*      GLOBALLY CHANGE SYS9.LINKLIB TO ONE OF YOUR
+//*      NON-APF-AUTHORISED LIBRARIES
 //*   4. TURNKEY3 USERS
 //*      -- IN 2, YOU WILL HAVE PROBABLY USED HERC01 AND 
 //*         CHANGED THE UNIT/VOL IN THE CREATE STEP TO
@@ -142,7 +143,7 @@ GWAREA   DSECT
 .GWDSKIP ANOP
 GWAREAS  EQU   *
 GWWRDMAX EQU   20            WE ONLY ALLOW UP TO 20 GWWORDS
-GWWRDCHL EQU   12            MAX LENGTH OF EACH WORD
+GWWRDCHL EQU   44            MAX LENGTH OF EACH WORD (A DSN CAN BE 44)
 GWWRDCNT DS    F             THE NUMBER OF GWWORDS IN TOTAL
 GWRESLEN DS    F             LENGTH OF RESULT LINE
 GWMSGLIN DS    CL78          THE CONSOLE MESSAGE LINE
@@ -152,8 +153,8 @@ GWLENTXT DS    CL3           RESULT LEN AS TEXT VALUE
          DS    0F            MUST WORD ALIGN, EACH NEW
 *                             ENTRY MUST BE WORD ALIGNED SO
 *                             GWWRDCHL MUST BE MULTIPLE OF 4
-*GWWORDS  DS  CL16*GWWRDMAX 4 BYTES LEN + 12 BYTES DATA * 20 ENTRIES
-GWWORDS  DS    CL320
+*GWWORDS = (4 BYTES LEN + 44 BYTES DATA) * 20 ENTRIES
+GWWORDS  DS    CL960
 GWRDSLEN EQU   *-GWWORDS       LEN OF GWWORDS TABLE
 GWAREAL  EQU   *-GWAREAS
          MEND
@@ -372,7 +373,7 @@ GWX7&SYSNDX CNOP 0,4
 *     DSECT AREA TO BE USED, THIS PROGRAM COULD BE CALLED MULTIPLE   *
 *     TIMES FROM A PROGRAM SO RATHER THAN HAVE THIS GETMAIN/FREEMAIN *
 *     EACH INVOKATION THERE IS MUCH LESS OVERHEAD IN HAVING THE      *
-*     CALLER DO IT ONCE AND KEEP RE-USING IT UNTIL CALLER EXIST.     *
+*     CALLER DO IT ONCE AND KEEP RE-USING IT UNTIL CALLER EXITS.     *
 *                                                                    *
 *                                                                    *
 * ********************************************************************
@@ -1223,7 +1224,7 @@ ENDDECK
 *                                                              
 *STC/JOB STARTCMD                                              
 *---+----1----+----2----+----3----+----4----+----5----+----6   
-* JES2 RESTART IS ONLY NEEDED IT I HAVE ABENDED IT REMOTELY    
+* JES2 RESTART IS ONLY NEEDED IF I HAVE ABENDED IT REMOTELY    
 * TO CHANGE THE CONFIG, SO ALWAYS COLD START                   
 JES2     S JES2,PARM='FORMAT,NOREQ'                            
 TSO      S TSO.TSO                                             
@@ -2907,9 +2908,9 @@ GOTPARM  CNOP  0,4
          C     R3,ZEROS           
          BNE   INITOK                YES, SOMETHING TO DO
          MVC   GOTPARME+16(8),MYJOBNAM   NO, ERROR WTO NEEDED
-         MVC   GOTPARME+44(30),PARMDATA+3
+         MVC   GOTPARME+44(60),PARMDATA+3
 GOTPARME WTO   'MID021E xxxxxxxx NO MMPFEX RULE FOR ....+....1....+....X
-               2....+....3'
+               2....+....3....+....4....+....5....+....6'
          B     ALLDONE
 INITOK   DS    0F
 ***********************************************************************
@@ -3607,8 +3608,161 @@ R15      EQU   15
 //         DD   DSN=INSTALL.MID.MMPF.SRC(MMPF),DISP=SHR
 //         DD   DSN=INSTALL.MID.MMPF.SRC(MMPFEX),DISP=SHR
 //         DD   DSN=INSTALL.MID.MMPF.SRC(MDDIAG8),DISP=SHR
+//         DD   DSN=INSTALL.MID.MMPF.SRC(MMPFMSG),DISP=SHR
 //SYSUT2   DD   SYSOUT=(A,INTRDR)
 //SYSIN    DD   DUMMY
+//
+./ ADD NAME=MMPFMSG
+//MARKJ005 JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=T,MSGLEVEL=(1,1)
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=3350
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//SYSIN    DD  *
+MMPFMSG  CSECT
+*******************************************************************
+*                                                                 *
+* MMPFMSG  : MARK DICKINSON, WTO AN ATTENTION MESSAGE             *
+*                                                                 *
+* PURPOSE. WTO AN ATTENTION MESSAGE TO THE CONSOLES THAT CAN BE   *
+*          PICKED UP BY MMPF TO TEST MMPF CHANGES IN              *
+*          - MESSAGE PARSING CHANGES                              *
+*          - MMPFEX CHANGES                                       *
+*          - WTO REWRITE CHANGES .... ETC                         *
+*                                                                 *
+* REQUIRED DD CARDS                                               *
+*          NONE                                                   *
+*                                                                 *
+* PARM REQUIRED                                                   *
+*          A MESSAGE TO BE TESTED AGAINST THE MMPF RULES, A       *
+*          MAXIMUM OF 70 BYTES.                                   *
+*                                                                 *
+* EXAMPLE USAGE                                                   *
+*   //TEST EXEC PGM=MMPFMSG,                                      *
+*   //  PARM='MSGNUMBR AND TEXT MATCHING MESSAGE TO TEST'         *
+*   //STEPLIB DD DISP=SHR,                                        *
+*   // DSN=INSTALL.MID.MMPF.LOADLIB 
+*                                                                 *
+* .......Important notes......                                    *
+* Any attention or action messages written to a console are       *
+* automatically cleared by the operating system when the job      *
+* ends, this would of course not give MMPF time to process a      *
+* test message as batch jobs end pretty quickly.                  *
+* To work around that this test program will start a timer and    *
+* hang around for 10 minutes while you test and fine-tune the     *
+* new rule you are trying to test. You can always cancel the job  *
+* if you finish testing before then.                              *
+*                                                                 *
+*******************************************************************
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+         L     R1,0(R1)         ADDR OF PARAMETER LIST
+         LH    R3,0(R1)         GET PARM LENGTH
+         LTR   R3,R3            IF ZERO THERE IS NO PARM
+         BZ    NOPARM
+         C     R3,=F'60'        IF PARMLEN > 70 THEN TRUNCATE IT
+         BNH   PARMOK               OK, USE LEN PROVIDED
+         WTO   'PARM DATA TRUNCATED TO 70 BYTES'
+         LA    R3,70                ELSE SET TO 70
+PARMOK   MVC   WTOBUF+8(70),SPACES
+         LA    R4,2(R1)         ADDR OF PARM DATA 
+         EX    R3,MOVEPARM      MOVE THE PARM DATA TO THE WTO BUFFER
+*...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
+WTOBUF   WTO   '....+....1....+....2....+....3....+....4....+....5....+X
+               ....6....+....7',DESC=(2)
+         XC      TIMERECB,TIMERECB     CLEAR THE STIMER EXIT'S ECB
+         LA      R15,TIMERECB          LOAD ADDRESS OF TIMER ECB
+         ST      R15,TIMEXPRM          STORE IT FOR TIMER EXIT TO POST
+         STIMER REAL,TIMEOUT,DINTVL=SECS600
+         LA      R3,TIMERECB           POINT TO THE STIMER ECB
+         ST      R3,ECBLIST            PUT THAT IN THE ECB LIST
+         OI      ECBLIST,X'80'         MARK END OF LIST
+         WAIT    1,ECBLIST=ECBLIST     WAIT FOR TIMER TO EXPIRE
+         B     EXIT
+*
+NOPARM   WTO   'MO PARM DATA PROVIDED, PERFORMING NO ACTIONS'
+*
+EXIT     EQU   *
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         SPACE 2
+* ********************************************************************
+* CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
+* PROCEDURE DEFINED TO THE STIMER CALL.
+* IT ISSUES A POST ON THE TIMER EXPIRY EVENT WHICH WILL BE PICKED UP
+* BY THE MAINLINE WAIT ON THE ECB LIST (THE POST TRIGGERS THE TIMER
+* ENTRY MATCH IN THE ECB LIST).
+* ********************************************************************
+TIMEOUT  SAVE  (14,12)
+         L     R2,TIMEXPRM
+         POST  (2)
+         RETURN (14,12)
+         SPACE 2
+SAVEAREA DS    18F
+MOVEPARM MVC   WTOBUF+8(0),0(R4)  EX CODE MASK
+SPACES   DC    CL80' '
+TIMERECB DS    F                  THE STIMER ECB
+ECBLIST  DS    F                  ECB LIST FOR STIMER
+TIMEXPRM DS    F                  TIMER PARAMETER
+SECS600  DC    CL8'00060000'      SIX HUNDERD SECONDS
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+LT       EQU   4 -                 A LOW
+*
+         END
+/*
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.MID.MMPF.LOADLIB(MMPFMSG),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,DELETE,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=INSTALL.MID.MMPF.LOADLIB,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(MMPFMSG)
+ ENTRY MMPFMSG
+ NAME MMPFMSG(R)
+/*
+//TESTIT EXEC PGM=MMPFMSG,COND=(0,NE),
+// PARM='MDMMPF01 TEST DSN=INSTALL.MID.MMPF.LOADLIB AND MORE WORDS'
+//STEPLIB DD DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB
 //
 ./ ENDUP
 ZZ
@@ -3679,6 +3833,8 @@ to include the VSAM tape database DD card, uncomment the tape
 message rules in the MMPF00 parmlib member, and restart MMPF.
 (Details are in the TAPEMAN3 install documentation).
 And tape mount automation is as simple as that.
+Obviously only do that if you have installed my rather complex
+TAPEMAN3 application first.
 
 **********************************************************************
 *                    END OF HOWTO INSTALL                            *
@@ -4095,6 +4251,39 @@ MMPFEX
 **********************************************************************
 *                      END OF KNOWN BUGS                             *
 **********************************************************************
+./ ADD NAME=MMPFMSG
+**********************************************************************
+*                 MMPFMSG - A TESTING UTILITY                        *
+**********************************************************************
+
+The MMPFMSG program is available to aid in testing of the MMPF rules
+you may be working on.
+
+It is often inconvenient to wait for an error or action condition to
+write an attention message to the console when you want to test a
+new rule. The MMPFMSG utility is designed to alleviate that wait.
+
+It will write as an attention message any data provided to the PARM
+value for the program when run. This allows to to use any message
+number and message text as suits you to generate messages to be
+parsed/tested by MMPF.
+
+It is important to note that the operating system will automatically
+clear any outstanding messages for a job that stops, and batch jobs
+normally stop fairly quickly. To get around this issue the MMPFMSG
+program will start a timer and wait for 10 minutes before it stops.
+This gives you 10 minutes to test your new rules, and of course if
+you need longer than that you can just run MMPFMSG again.
+
+Usage is simple
+
+//STEPA EXEC PGM=MMPFMSG,
+// PARM='MSGNUMBR ANY TEXT ASSOCIATED WITH THE NORMAL MESSAGE'
+//STEPLIB DD DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB
+
+**********************************************************************
+*                 END OF MMPFMSG DOCUMENTATION                       *
+**********************************************************************
 ./ ADD NAME=$CHANGES
 Change History
 
@@ -4171,9 +4360,14 @@ MMPF Changes
                 mmpfproc updated).
                 Changed msgnumber 016W to 019W as I had two 016's.
                 Added msg 025 to log(wto) commands issued by mmpf.
+   2019/11/14 - Increased word max size from 12 bytes to 44 bytes so 
+                a parsed word can contain a full dataset name. Also
+                included the MMPFMSG program so testing against
+                messages can be done without waiting for an OS error
+                or action consition to raise one.
 Pending changes
-... still to check the new messages added on 2017/03/28 are not used
-    by any other of my programs
+... still to check the new message numbers added on 2017/03/28 are
+    not used by any other of my programs
 
 MMPFEX Changes
 ==============

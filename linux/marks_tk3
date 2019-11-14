@@ -7,6 +7,8 @@
 #    Start my MVS3.8J Turnkey3 system on a headless server without
 #    any intervention being needed by me.
 #
+# REQUIRES: packages ==> screen x3270 x3270-x11 x3270-text procps-ng net-tools nmap-ncat telnet hostname
+#
 # Copy script to /etc/init.d/marks_tk3 and
 #  'chkconfig --add marks_tk3' then 'chkconfig marks_tk3 on'
 #  All the links in rc3.d and rc5.d etc will be created by
