@@ -1,7 +1,7 @@
 //MARKASMJ JOB  (0),'ASSEMBLE MDMOVEDS',CLASS=A,MSGCLASS=T
 //*
 //* To assemble the program
-//*   Change SYS9.LINKLIB to your load library
+//*   Change MARK.LIB.LOAD to your load library
 //*   Customise the TESTIT1 step as below   <===important
 //*   Run this job 
 //*
@@ -63,7 +63,8 @@
 *               jobs submitted via intrdr will run under
 *               // USER=xxx,PASSWORD=xxx
 *               The details should be for a admin user as noted
-*               in comments below
+*               in comments below... if you do not use RAKF
+*               you can delete the block of code using this
 *    INTRDR   - JOB SUBMITION IE:'SYSOUT=(A,INTRDR)'
 *               If you do not want to submit jobs you can just assign
 *               this DD card to SYSOUT=* so you can see what jobs
@@ -148,6 +149,10 @@
 *            accepted if the user was dumb enough to try. Also added
 *            code to count directory blocks for PDS dsets and removed
 *            the hard coded value.
+* 2022/11/17 Bug reported with the prefix length check, fixed.
+*            Thanks Mike for reporting that.
+*            Added lots of debugging msgs as a result of that,
+*            assembler toggle to turn them on and off. &USEDBG toggle.
 *
 * *********************************************************************
          EJECT
@@ -162,6 +167,9 @@
          IEFZB4D0    DSECT FOR REQ BLK, TEXT UNIT, ETC
          IEFZB4D2    TABLE OF EQUATES FOR TEXT UNIT KEYS
          EJECT
+*
+         LCLB  &USEDEBG
+&USEDEBG SETB  0         1=USE DEBUG MSGS, 0=NO DEBUG MSGS
 MDMOVEDS CSECT
          B     100(R15)            BRANCH AROUND SAVE AREA
          DC    CL9'MDMOVEDS'
@@ -199,6 +207,8 @@ PRM00001 CR    R4,R5         AT END OF PARM STRING ?
          BNL   NOPARM        YES, NO VALUE
          CLI   0(R4),C'='    AT EQUALS SEPERATOR ?
          BE    PRM00002
+         CLI   0(R4),B'00000000' ZEROS ?, UNEXPECTED END OF BUFFER
+         BE    PRMEXIT2      YES, ABORT OUT
          A     R4,=F'1'
          B     PRM00001
 PRM00002 LR    R6,R4         SAVE POSITION OF EQUALS
@@ -214,7 +224,6 @@ PRM00004 EQU   *
          A     R6,=F'1'      MOVE PAST = TO FIRST BYTE
          LR    R7,R4         END OF VALUE
          SR    R7,R6         LESS START OF VALUE IS LEN
-         S     R7,=F'1'      IS REQD. DUNNO WHY THOUGH
          CLI   0(R3),C'P'    PREFIX ?
          BE    PRMEXECP
          CLI   0(R3),C'V'    VOL ?
@@ -236,7 +245,7 @@ PRMEXECV C     R7,=F'6'      VOLSER LEN MUST NOT BE > 6
          B     PRM00005
 PRMEXECU C     R7,=F'20'     ONLY ALLOW 20 BYTES (ESOTERIC)
          BH    PARMSCNE      IF > 20 A BAD PARM
-         LA    R8,DSDESTU    SAVE IN DEST VOSLER FIELD
+         LA    R8,DSDESTU    SAVE IN DEST UNIT FIELD
          ST    R7,DSDESTUL   SAVE LENGTH OF VOLSER
 PRM00005 EX    R7,PRMMOVE    SAVE VALUE
          CLI   0(R4),B'00000000' ZEROS ?, END OF BUFFER
@@ -248,6 +257,8 @@ PRM00005 EX    R7,PRMMOVE    SAVE VALUE
          BL    PRM00001      NO, LOOP BACK FOR NEXT PARM
          B     PRMDONE       SKIP DEBUG LINE
 PRMEXIT  WTO   'DEBUG:PARMSCAN EXIT ON ZEROS INSTEAD ADDR, LOGIC-ERR'
+         B     PRMDONE
+PRMEXIT2 WTO   'DEBUG:PARMSCAN EXIT ON ZEROS ON = SCAN, LOGIC-ERR'
 PRMDONE  EQU   *
          EJECT
 * ---------------------------------------------------------------------
@@ -275,6 +286,33 @@ AUTHOK   CLOSE (AUTHCARD)
          MVC   SYSPLINE+43(7),=CL7'PREFIX='
          MVC   SYSPLINE+50(L'DSPREFIX),DSPREFIX
          PUT   SYSPRINT,SYSPLINE 
+*
+         AIF    (&USEDEBG EQ 0).NODEBG1
+* OK, SOME DEBUG INFO
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(14),=CL14'PREFIX LEN=nnn'
+         L     R7,DSPREFIL   GET LENGTH OF PREFIX
+         CVD   R7,DBGBUF1
+         UNPK  DBGBUF1(3),DBGBUF1+6(2)
+         OI    DBGBUF1+2,C'0'
+         MVC   SYSPLINE+11(3),DBGBUF1
+         PUT   SYSPRINT,SYSPLINE 
+         MVC   DBGPSAVE(3),DBGBUF1    SAVE IT, USED IN DEBUG MSGS
+         MVC   SYSPLINE(14),=CL14'VOLSER LEN=nnn'
+         L     R7,DSDESTVL   GET LENGTH OF VOLSER
+         CVD   R7,DBGBUF1
+         UNPK  DBGBUF1(3),DBGBUF1+6(2)
+         OI    DBGBUF1+2,C'0'
+         MVC   SYSPLINE+11(3),DBGBUF1
+         PUT   SYSPRINT,SYSPLINE 
+         MVC   SYSPLINE(14),=CL14'UNIT   LEN=nnn'
+         L     R7,DSDESTUL   GET LENGTH OF UNIT   
+         CVD   R7,DBGBUF1
+         UNPK  DBGBUF1(3),DBGBUF1+6(2)
+         OI    DBGBUF1+2,C'0'
+         MVC   SYSPLINE+11(3),DBGBUF1
+         PUT   SYSPRINT,SYSPLINE 
+.NODEBG1 ANOP
          EJECT
 * ---------------------------------------------------------------------
 * SCAN THE TIOT FOR ALL DD CARDS, WE WANT TO LOCATE AND PROCESS ALL
@@ -358,9 +396,20 @@ READDSC1 READ  DECB1,SF,DD0001,DSCB1,'S'   START READ FOR VTOC
          BNE   READDSC1              NO, SO LOOP
 * COMPARE START OF DATASET NAME AGAINST PREFIX WE ARE CHECKING
 * FOR THE VARIABLE LENGTH OF THE PREFIX WE WERE PROVIDED.
+         AIF    (&USEDEBG EQ 0).NODEBG2
+* MID: MORE DEBUGGING
+         SPACEOUT SYSPLINE
+         MVC   SYSPLINE(66),=CL66'COMPARE                      TO      X
+               .               FOR nnn BYTES'
+         MVC   SYSPLINE+57(3),DBGPSAVE
+         MVC   SYSPLINE+8(16),DSPREFIX
+         MVC   SYSPLINE+32(16),DSCB1
+         PUT   SYSPRINT,SYSPLINE
+.NODEBG2 ANOP
          L     R7,DSPREFIL           LENGTH OF PREFIX PROVIDED
+         S     R7,=F'1'              *** DEBUGGING
          EX    R7,COMPARDS           COMPARE WITH DSNAME FOUND
-         BNE   READDSC1              NO, IS OK, GET NEXT
+         BNE   READDSC1              NO, IS NO MATCH, GET NEXT
 *-------------------------------------------------------------
          MVC   DSNAME(44),DSCB1      SAVE DATASET NAME
 * DETERMINE DSORG, USED TO DETERMINE SPACE ALLOCATION REQD.
@@ -479,7 +528,9 @@ JCL02    PUT   INTRDR,CARDLINE
          MVC   CARDLINE+20(6),DSDESTV   VOLSER IN
          MVC   CARDLINE+32(20),DSDESTU  UNIT IN
          LA    R1,CARDLINE+32           COMMA AFTER UNIT ENDS
-JCL03    CLI   0(R1),C' '
+JCL03    CLI   0(R1),C' ' 
+         BE    JCL04
+         CLI   0(R1),B'00000000'        HMM, FDD
          BE    JCL04
          A     R1,=F'1'
          B     JCL03
@@ -733,7 +784,9 @@ DSDESTUL DC    F'3'               DEST UNIT LENGTH
 PRMMOVE  MVC   0(0,R8),0(R6)      SAVE VALUE
 CARDLINE DS    CL80               DATA CARD LINE
 AUTHDATA DS    CL80               THE JOB USER/PASSWORD CARD
-SYSPLINE DS    CL132              SYSPRINT REPORT LINE
+SYSPLINE DC    CL132'X'           SYSPRINT REPORT LINE
+DBGBUF1  DC    D'0'               WORK AREA TO GET 3BYTE NUMBERS
+DBGPSAVE DS    CL3                PREFIX LEN FOE DEBUG MSGS
 MOVEMSG  DC    CL75'V=vvvvvv -> vvvvvv, ORG=nn, DS=....+....1....+....2X
                ...+....3....+....4....'
          DS    0F
@@ -746,12 +799,12 @@ AUTHCARD DCB   DDNAME=AUTHCARD,MACRF=(GL),DSORG=PS,EODAD=EOFAUTH
 * ---------------------------------------------------------------------
 * The JCL lines needed to move the dataset
 * ---------------------------------------------------------------------
-CARD01   DC    C'//MOVEDSET JOB  (0),''MOVE DSET'',CLASS=A,MSGCLASS=A,'
+CARD01   DC    C'//MOVEDSET JOB  (0),''MOVE DSET'',CLASS=A,MSGCLASS=T,'
 * CARD02 WAS HARDCODED, REPLACED BY AUTHCARD DD INPUT
 * STEP 1, UNCATALOG OLD DATASET
 CARD03   DC    C'//MOVE0001 EXEC PGM=IEFBR14'  
 CARD04   DC    C'//DD1 DD DISP=(OLD,UNCATLG,DELETE),'
-CARD05   DC    C'// DSN=d'
+CARD05   DC    CL80'// DSN=d                                          '
 * STEP 2, COPY TO NEW DATASET ON NEW VOLSER,
 *         PLUS DELETE ORIGIONAL
 CARD06PO DC    C'//MOVE0002 EXEC PGM=IEBCOPY'  
@@ -760,7 +813,8 @@ CARD07   DC    C'//SYSPRINT DD   SYSOUT=*'  --- DO NOT REDEFINE
 CARD08   DC    C'//SYSUT1   DD   VOL=REF=*.MOVE0001.DD1,'
 CARD09   DC    C'// DISP=(OLD,DELETE,DELETE),'
 *CARD05  DC    C'// DSN=d'                 --- DO NOT REDEFINE
-CARD10   DC    C'//SYSUT2 DD VOL=SER=??????,UNIT=????,'
+* NOTE: if the below does not have padded spaces junk ends up in it
+CARD10   DC    CL80'//SYSUT2 DD VOL=SER=??????,UNIT=????,             '
 CARD11   DC    C'// DCB=*.SYSUT1,'
 CARD12PO DC    C'// SPACE=(TRK,(00000,1,000)),'  PRI-EXT AND DIR CHANGE
 CARD12PS DC    C'// SPACE=(TRK,(00000,1)),'      PRI-EXT WILL CHANGE
@@ -851,14 +905,14 @@ TUDDNU1  DC    AL2(DUNDDNAM)   KEY FOR DDNAME UNALLOC
          END
 ZZ
 //ASM.SYSTERM DD SYSOUT=*
-//LKED.SYSLMOD DD DSN=SYS9.LINKLIB(MDMOVEDS),DISP=SHR
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(MDMOVEDS),DISP=SHR
 //*
 //* ===================================================================
 //* TEST THE PROGRAM
 //* ===================================================================
 //TESTIT1  EXEC PGM=MDMOVEDS,COND=(0,NE),
 // PARM='PREFIX=GUEST3,VOL=MDTSO1,UNIT=3350'
-//STEPLIB  DD   DISP=SHR,DSN=SYS9.LINKLIB
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
 //SYSPRINT DD   SYSOUT=*
 //* --- AUTHCARD CONTAINS THE USERID/PASSWORD JCL CARD
 //*     APPENDED AFTER THE JOBCARD
@@ -867,9 +921,15 @@ ZZ
 ZZ
 //* --- INTRDR, BELOW SUBMITS JOB TO INTRDR CLASS A
 //*INTRDR   DD   SYSOUT=(A,INTRDR)
+//* --- OR USE THE BELOW FOR TESTING SO YOU CAN REVIEW WHAT WOULD
+//*     BE SUBMITTED
 //INTRDR   DD   SYSOUT=*
-//* --- A LIST OF VOLSERS TO BE VTOC SCANNED FOR PREFIX DSETS
+//*
+//* --- PROVIDE A LIST OF VOLSERS TO BE VTOC SCANNED FOR PREFIX DSETS
+//*     A DDCARD IS NEEDED PER VOLSER FOR DYNALLOC (WHICH MAY FAIL
+//*     ON PRIVATE/RESERVED VOLSERS BUT NEEDED FOR THE REST ANYWAY)
 //DD1      DD   DISP=SHR,UNIT=3390,VOL=SER=MDTSO2
 //DD2      DD   DISP=SHR,UNIT=3380,VOL=SER=PUB012
 //DD3      DD   DISP=SHR,UNIT=3350,VOL=SER=SRCMD1
+//DD4      DD   DISP=SHR,UNIT=3350,VOL=SER=SRCCAT
 //

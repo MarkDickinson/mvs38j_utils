@@ -5097,7 +5097,7 @@ Appendix B - preparation datasheet
 | MMPF Proc to customise known    :                           |
 |                                                             |
 | MMPF is available at                                        |
-| http://www.mdickinson.dyndns.org/hercules/downloads/mmpf.php|
+| http://mdickinson.dyndns.org/hercules/downloads/mmpf.php    |
 |                                                             |
 +-------------------------------------------------------------+
 
