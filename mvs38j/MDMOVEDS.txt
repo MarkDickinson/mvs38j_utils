@@ -111,7 +111,9 @@
 *    made freely available on the CBT tapes. It is also active in
 *    the TK4- distribution by default.
 *    This means jobs submitted via intrdr must have userid/password,
-*    (unless you have not locked down the default 'batch' class)
+*    (unless you have not locked down the default 'batch' class ...
+*    I have locked out the default class so batch jobs need credentials
+*    which is the only point of the authcard DD)
 *    so to avoid hard coding in the program the JCL card containing 
 *    the user/password combination must be provided via the
 *    AUTHCARD DD, that should be a RAKF secured PDS containing
@@ -134,6 +136,8 @@
 *    I would recomend NOT using partial prefixes like prefix=SYS
 *    or there will be a major mess as non-enqueued SYS1 (and SYSn)
 *    datasets are moved about to prevent future IPLs.
+*    Which would ne be a problem if you wisely use shadow files
+*    and just delete them to get back to a working state.
 *
 * Change History
 * ==============
@@ -153,6 +157,12 @@
 *            Thanks Mike for reporting that.
 *            Added lots of debugging msgs as a result of that,
 *            assembler toggle to turn them on and off. &USEDBG toggle.
+* 2022/11/19 Changed prefix len check to match the length of the data 
+*            field so expanding the len check can simply be a case of
+*            increasing the size of the data field. Moved the hard
+*            coded debug WTOs debug msg under checks for the debug flag
+*            toggle created in the above change as I am the only one
+*            curious about what I do not understand there.
 *
 * *********************************************************************
          EJECT
@@ -208,7 +218,7 @@ PRM00001 CR    R4,R5         AT END OF PARM STRING ?
          CLI   0(R4),C'='    AT EQUALS SEPERATOR ?
          BE    PRM00002
          CLI   0(R4),B'00000000' ZEROS ?, UNEXPECTED END OF BUFFER
-         BE    PRMEXIT2      YES, ABORT OUT
+         BE    PRMEXIT       YES, ABORT OUT
          A     R4,=F'1'
          B     PRM00001
 PRM00002 LR    R6,R4         SAVE POSITION OF EQUALS
@@ -231,8 +241,8 @@ PRM00004 EQU   *
          CLI   0(R3),C'U'    UNIT ?
          BE    PRMEXECU
          B     NOPARM        ELSE A BAD PARM
-PRMEXECP C     R7,=F'16'     MAX PREFIX LEN IS 8
-         BH    NOPARM        IF > 16 A BAD PARM
+PRMEXECP C     R7,L'DSPREFIX MAX PREFIX LEN IS LEN OF DATA FIELD 
+         BH    NOPARM        IF > FIELD LEN THEN A BAD PARM
          C     R7,=F'2'      SAFETY NET, MUST HAVE > 2
          BNH   NOPARM        IF < 3 TO UNSAFE TO RISK
          LA    R8,DSPREFIX   SAVE IN PREFIX FIELD
@@ -256,9 +266,11 @@ PRM00005 EX    R7,PRMMOVE    SAVE VALUE
          CR    R4,R5         AT END OF PARM STRING ?
          BL    PRM00001      NO, LOOP BACK FOR NEXT PARM
          B     PRMDONE       SKIP DEBUG LINE
-PRMEXIT  WTO   'DEBUG:PARMSCAN EXIT ON ZEROS INSTEAD ADDR, LOGIC-ERR'
+PRMEXIT  EQU   *
+         AIF   (&USEDEBG EQ 0).SKIPER1
+         WTO   'DEBUG:PARMSCAN EXIT ON ZEROS INSTEAD ADDR, LOGIC-ERR'
          B     PRMDONE
-PRMEXIT2 WTO   'DEBUG:PARMSCAN EXIT ON ZEROS ON = SCAN, LOGIC-ERR'
+.SKIPER1 ANOP
 PRMDONE  EQU   *
          EJECT
 * ---------------------------------------------------------------------
