@@ -1,0 +1,387 @@
+//MARKMAC JOB (0),'STORE MACROS',CLASS=A,MSGCLASS=T,
+//  USER=MVSUSERN,PASSWORD=MVSPASSW,RESTART=CREATE
+//*
+//* ======================================================
+//*
+//*  This job creates the macro library used to enable
+//*  ease of use with my CSA usage implementation.
+//*
+//* ======================================================
+//*
+//DELETE EXEC PGM=IEFBR14
+//DD1      DD   DSN=MARK.LIB.MACROS.CSA,DISP=(OLD,DELETE,DELETE)
+//CREATE EXEC PGM=IEFBR14
+//DD1      DD   DSN=MARK.LIB.MACROS.CSA,DISP=(NEW,CATLG,DELETE),
+// UNIT=3350,VOL=SER=MDTSO1,
+// SPACE=(TRK,(5,5,10)),
+// DCB=(DSORG=PO,LRECL=80,RECFM=FB,BLKSIZE=1600)
+//LOAD     EXEC PGM=IEBUPDTE
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD   DSN=MARK.LIB.MACROS.CSA,DISP=SHR
+//SYSUT2   DD   DSN=MARK.LIB.MACROS.CSA,DISP=SHR
+//SYSIN    DD   DATA,DLM=@@
+./ ADD NAME=$$INDEX
+MDCSADAT   - Data areas needed and dsect mapping for the table
+MDCSAGET   - User programs use this to allocate CSA memory and
+             update our CVTUSER addressed CSA table 
+MDCSAREL   - User programs use this to release CSA memory and
+             update our CVTUSER addressed CSA table 
+MDCSALOC   - Return the memory address of the getmained area that
+             matched the slot location being searched for. User
+             programs should use this to locate where to map their
+             data dsects to.
+./ ADD NAME=MDCSADAT
+         MACRO
+&LABEL   MDCSADAT &CVT=YES
+.* ********************************************************************
+.* Should contain all the variables and lengths needed to manage
+.* the table created. 
+.* Having them all here means they only need to change in this one
+.* place when I make a change to the table.
+.* ********************************************************************
+* CSA memory to be allocated needs to depend on LISTMAX for now
+* Table format is expected to BE
+LISTMAX  EQU   11                MAX OF 11 ENTRIES (10 USEABLE)
+CSAFLAG  DC    CL4'CSAL'
+         DS    0F
+CSAENTLN DC    F'12'             SIZE OF EACH TABLE ENTRY
+CSAADR   DS    F                 WORK BUFFER FOR ADDR STORAGE
+* Below is the full table size overlay
+MEMAREA  DSECT
+         DS    0D               FORCE CORRECT ALIGNMENT
+MEMDATA  DS    (LISTMAX*3)F     THREE WORKDS PER TABLE ENTRY
+MEMDATAE DS    3F              ONE EXTRA ENTRY TO END THE LIST
+MEMDATAL EQU   *-MEMDATA      WITH LISTMAX=10 THIS IS ((10 * 3)*4) + 12
+*              which should be 132 but it shows as 123 bytes
+* update to 11 inlistmax so should be ((11 * 3)*4) + 12
+*              which should be 144 but it shows as 135 bytes
+* Below is used to map an entry
+MDCSAMAP DSECT
+         DS    0D                FORCE CORRECT ALIGNMENT
+SLOTID   DS    CL4
+SLOTADDR DS    F
+SLOTMEMZ DS    F
+         AIF   ('&CVT' NE 'YES').NOCVT
+         CVT   DSECT=YES
+.NOCVT   ANOP
+         LTORG
+         MEXIT
+         MEND
+./ ADD NAME=MDCSAGET
+         MACRO
+&LABEL   MDCSAGET &ID=,&SIZE=,&CHKAUTH=YES
+.* ********************************************************************
+.* 
+.*  MDCSAGET - Allocate CSA memory and register it with a slot-id,
+.*             address and allocation size in our CVTUSER addressed
+.*             CSA table.
+.*
+.*  It wil first search for a slot-id matching the one provided in
+.*  case one has been reserved, and if one is found AND it is not
+.*  in use that will be used.
+.*  If no match is found a search will be done for a 'FREE' slot
+.*  which will be used and updated with the new slot-id and
+.*  CSA allocation details.
+.*
+.*  Note: if called with a allocation size of zero no memory is
+.*        allocated, just a free slot changed to an id of slot-id;
+.*        this can be used to reserve a slot for future use.
+.* 
+.* Requires 
+.*  ID       - a register addressing a fout byte character slot-id
+.*  SIZE     - register containing the size of memory to allocate in
+.*             CSA storage
+.*  CHKAUTH  - can be set to NO when called by programs that have 
+.*             already tested thet are APF authorized. The test is
+.*             only in here to catch those that do not already check.
+.* 
+.* Returns  
+.*      R1 is zero if there were no errors
+.*      R1 is one if there were errors
+.* 
+.* ********************************************************************
+         AIF   ('&ID' EQ '').MDCERR1
+         AIF   ('&SIZE' EQ '').MDCERR1
+         AIF   ('&CHKAUTH' EQ '').MDCERR1
+         B     MD1&SYSNDX           SKIP SAVEAREAS
+MDD&SYSNDX DS   8F            SAVEAREAS
+MDM&SYSNDX DS   F             USED BY GETMAIN
+MD1&SYSNDX ST    &ID,MDD&SYSNDX
+         ST    &SIZE,MDD&SYSNDX+4
+         STM   R2,R7,MDD&SYSNDX+8
+*
+         AIF   ('&CHKAUTH' EQ 'NO').NOAUTH1
+* MUST BE APF AUTHORISED
+         TESTAUTH FCTN=1
+         LTR   R15,R15
+         BNZ   MDC&SYSNDX
+.NOAUTH1 ANOP
+*
+         L     R2,16                CVT
+         USING CVT,R2
+         L     R3,CVTUSER
+         DROP  R2
+*
+         USING MDCSAMAP,R4          ADDRESS ENTRIES BY FIELD NAME
+*
+         LR    R4,R3                R4 TO ADDR OF TABLE
+         CLC   SLOTID(L'SLOTID),CSAFLAG
+         BNE   MDE&SYSNDX
+MD3&SYSNDX A   R4,CSAENTLN          SKIP CURRENT ENTRY
+         L     R5,0(R4)
+         C     R5,=F'0'             IF ZERO END OF TABLE
+         BE    MD4&SYSNDX           RESCAN FROM START FOR 'FREE'
+         L     R5,MDD&SYSNDX        ADDR OF ID BACK INTO R5
+         CLC   SLOTID(L'SLOTID),0(R5)
+         BE    MD2&SYSNDX           SLOT WITH THIS NAME FOUND
+         B     MD3&SYSNDX        
+MD4&SYSNDX LR  R4,R3                BACK TO START OF TABLE
+MD5&SYSNDX A   R4,CSAENTLN          SKIP CURRENT ENTRY
+         L     R5,0(R4)
+         C     R5,=F'0'             IF ZERO END OF TABLE
+         BE    MD6&SYSNDX           NO 'FREE' SLOTS
+         CLC   SLOTID(L'SLOTID),=CL4'FREE'    IS IT FREE ?
+         BE    MD2&SYSNDX           YES, SLOT FOUND
+         B     MD5&SYSNDX           NO, CHECK NEXT SLOT
+* Matching ID found, slot addressed by R4 (using dsect)
+MD2&SYSNDX L     R7,SLOTADDR      MAKE SURE NO ADDRESS STORED YET
+         C     R7,=F'0'
+         BNE   MDA&SYSNDX        IF NOT ZERO IT IS  IN USE
+         L     R5,MDD&SYSNDX+4   GET SIZE BACK
+         C     R5,=F'0'          IF NO SPACE ALLOC THEN SKIP ALLOC
+         BE    MD7&SYSNDX
+         GETMAIN EC,LV=(R5),SP=241,A=MDM&SYSNDX
+         LTR   R15,R15
+         BNZ   MD8&SYSNDX      GETMAIN FAILED
+         B     MD9&SYSNDX      UPDATE TABLE
+* Size and Addr to remain as zero, we are just naming a slot ID
+MD7&SYSNDX LA R6,0
+         ST    R6,MDM&SYSNDX   SET GETMAINED ADDR TO 0 AS WE SKIPPED IT
+         LA    R5,0            LEN WAS 0
+* Update slot with updated values
+MD9&SYSNDX CNOP  0,4 
+         MODESET MODE=SUP,KEY=ZERO   SUPERVISOR MODE TO WRITE TO CSA
+         L     R6,MDM&SYSNDX     GET GETMAINED ADDR 
+         ST    R6,SLOTADDR       SAVE GETMAINED ADDR IN TABLE
+         ST    R5,SLOTMEMZ      SAVE LEN IN TABLE
+         L     R6,MDD&SYSNDX     ADDRESS ID
+         MVC   SLOTID(L'SLOTID),0(R6)    SAVE ID IN TABLE
+         MODESET MODE=PROB,KEY=NZERO          OUT OF SUPERVISOR MODE
+         LA    R1,0             MACRO TO EXIT RC 0
+         B     MDX&SYSNDX
+*
+         DROP  R4
+* No free slots
+MD6&SYSNDX WTO 'NO FREE SLOTS IN TABLE'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+* Table not in expected format ot some other error
+MDE&SYSNDX WTO  'TABLE NOT INITIALISED'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+* no CSA storage available
+MD8&SYSNDX WTO   'CSA STORAGE NOT AVAILABLE'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+* slot already in use
+MDA&SYSNDX L   R5,MDD&SYSNDX
+           MVC MDB&SYSNDX+16(4),0(R5)
+MDB&SYSNDX WTO   'SLOT ID xxxx ALREADY ACTIVE'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+         AIF   ('&CHKAUTH' EQ 'NO').NOAUTH2
+MDC&SYSNDX WTO   'NOT APF AUTHOURISED'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+.NOAUTH2 ANOP
+.* Macro Exit point 
+MDX&SYSNDX CNOP  0,4
+         LM    R2,R7,MDD&SYSNDX+8
+         MEXIT
+.MDCERR1 MNOTE 12,'**** MISSING PARAMETERS ****'
+         LTORG
+         MEND
+./ ADD NAME=MDCSAREL
+         MACRO
+&LABEL   MDCSAREL &ID=,&CHKAUTH=YES
+.* ********************************************************************
+.* 
+.*  MDCSAREL - Release a getmained area of CSA memory previously  
+.*             allocated by MDCSAGET. The address and size are     
+.*             obtained from our CSA table.
+.*
+.*  It will search for a slot-id matching the one provided 
+.*  If found it will 
+.*      is size > 0 perform the freemain and update the table
+.*      set the slot-id back to FREE
+.*
+.* Requires 
+.*  ID       - a register addressing a fout byte character slot-id
+.*  CHKAUTH  - can be set to NO when called by programs that have 
+.*             already tested thet are APF authorized. The test is
+.*             only in here to cach those that do not already check.
+.* 
+.* ********************************************************************
+         AIF   ('&ID' EQ '').MDCERR1
+         AIF   ('&CHKAUTH' EQ '').MDCERR1
+         B     MD1&SYSNDX           SKIP SAVEAREAS
+MDD&SYSNDX DS   7F            SAVEAREAS
+MDM&SYSNDX DS   F             USED BY FREEMAIN
+MD1&SYSNDX ST    &ID,MDD&SYSNDX
+         STM   R2,R7,MDD&SYSNDX+4
+*
+         AIF   ('&CHKAUTH' EQ 'NO').NOAUTH1
+* MUST BE APF AUTHORISED
+         TESTAUTH FCTN=1
+         LTR   R15,R15
+         BNZ   MDC&SYSNDX
+.NOAUTH1 ANOP
+*
+         L     R2,16                CVT
+         USING CVT,R2
+         L     R3,CVTUSER
+         DROP  R2
+*
+         USING MDCSAMAP,R4          ADDRESS ENTRIES BY FIELD NAME
+*
+         LR    R4,R3                R4 TO START OF TABLE
+         CLC   SLOTID(L'SLOTID),CSAFLAG
+         BNE   MDE&SYSNDX
+MD3&SYSNDX A   R4,CSAENTLN          SKIP CURRENT ENTRY
+         L     R5,0(R4)
+         C     R5,=F'0'             IF ZERO END OF TABLE
+         BE    MD4&SYSNDX           SO NO MATCH FOUND
+         L     R5,MDD&SYSNDX        ADDR OF ID TO R5
+         CLC   SLOTID(L'SLOTID),0(R5)
+         BE    MD2&SYSNDX           SLOT WITH THIS NAME FOUND
+         B     MD3&SYSNDX           NOT YET, KEEP SEARCHING
+*
+MD4&SYSNDX L    R5,MDD&SYSNDX   SLOT-ID WE SEARCHED FOR
+         MVC MDF&SYSNDX+13(4),0(R5)
+MDF&SYSNDX WTO 'SLOT .... NOT IN USE, SO NOT RELEASED'
+         B     MDX&SYSNDX           SKIP REST OF THE CODE
+*
+* Matching ID found, slot addressed by R4 (using dsect)
+MD2&SYSNDX L     R7,SLOTADDR     DOES IT HAVE STORAGE DETAILS
+         C     R7,=F'0'
+         BE    MD7&SYSNDX        IF ZERO NO ALLOCATION TO FREE
+         ST    R7,MDM&SYSNDX     SAVE ADDRESS IN DATA AREA
+         L     R5,SLOTMEMZ       GET SIZE ALLOCATED
+         FREEMAIN EC,LV=(R5),SP=241,A=MDM&SYSNDX
+* Check the freemain worked
+         LTR   R15,R15
+         BE    MD7&SYSNDX
+* Unable to freemain CSA storage 
+         MVC   MD8&SYSNDX+32(4),SLOTID
+MD8&SYSNDX WTO   'CSA FREEMAIN FAILED FOR ...., STORAGE NOT RELEASED'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+* Set size and addr to zero, slotid to FREE
+MD7&SYSNDX LA R6,0
+         MODESET MODE=SUP,KEY=ZERO   SUPERVISOR MODE TO WRITE TO CSA
+         ST    R6,SLOTADDR           GETMAINED ADDR TO ZERO
+         ST    R6,SLOTMEMZ           GETMAINED SIZE TO ZERO
+         MVC   SLOTID(L'SLOTID),=CL4'FREE'   SLOT-IT TO FREE
+         MODESET MODE=PROB,KEY=NZERO          OUT OF SUPERVISOR MODE
+         LA    R1,0             MACRO TO EXIT RC 0
+         B     MDX&SYSNDX
+*
+         DROP  R4
+* Table not in expected format ot some other error
+MDE&SYSNDX WTO  'TABLE NOT INITIALISED'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+*
+         AIF   ('&CHKAUTH' EQ 'NO').NOAUTH2
+MDC&SYSNDX WTO   'NOT APF AUTHOURISED'
+         LA    R1,1             MACRO TO EXIT RC 1
+         B     MDX&SYSNDX
+.NOAUTH2 ANOP
+.* Macro Exit point 
+MDX&SYSNDX CNOP  0,4
+         LM    R2,R7,MDD&SYSNDX+4
+         MEXIT
+.MDCERR1 MNOTE 12,'**** MISSING PARAMETERS ****'
+         LTORG
+         MEND
+./ ADD NAME=MDCSALOC
+         MACRO
+&LABEL   MDCSALOC &ID=
+.* ********************************************************************
+.* 
+.*  MDCSALOC - Locate the address of the CSA getmained memory  
+.*             associated with the slot-id provded.
+.*
+.*  It will search for a slot-id matching the one provided 
+.*  If found it will 
+.*      return the address of the memory area in R1
+.*      return the size of the memory area in R2
+.*  If NOT found it will 
+.*      return zeros in R1 and R2
+.*
+.*  Ideally the caller would check R2 to make sure the buffer is
+.*  as large as they expected; thats up to the caller.
+.*
+.* Requires 
+.*  ID       - a register addressing a four byte character slot-id
+.* 
+.* ********************************************************************
+         AIF   ('&ID' EQ '').MDCERR1
+         B     MD1&SYSNDX           SKIP SAVEAREAS
+MDD&SYSNDX DS   5F            SAVEAREAS
+MDM&SYSNDX DS   F             USED BY FREEMAIN
+MD1&SYSNDX ST    &ID,MDD&SYSNDX
+         STM   R3,R6,MDD&SYSNDX+4
+*
+         L     R2,16                CVT
+         USING CVT,R2
+         L     R3,CVTUSER
+         DROP  R2
+*
+         USING MDCSAMAP,R4          ADDRESS ENTRIES BY FIELD NAME
+*
+         LR    R4,R3                R4 TO START OF TABLE
+         CLC   SLOTID(L'SLOTID),CSAFLAG
+         BNE   MDE&SYSNDX
+MD3&SYSNDX A   R4,CSAENTLN          SKIP CURRENT ENTRY
+         L     R5,0(R4)
+         C     R5,=F'0'             IF ZERO END OF TABLE
+         BE    MD4&SYSNDX           SO NO MATCH FOUND
+         L     R5,MDD&SYSNDX        ADDR OF ID TO R5
+         CLC   SLOTID(L'SLOTID),0(R5)
+         BE    MD2&SYSNDX           SLOT WITH THIS NAME FOUND
+         B     MD3&SYSNDX           NOT YET, KEEP SEARCHING
+*
+MD4&SYSNDX L    R5,MDD&SYSNDX   SLOT-ID WE SEARCHED FOR
+         MVC MDF&SYSNDX+13(4),0(R5)
+MDF&SYSNDX WTO 'SLOT .... NOT IN USE, NO MEMORY ALLOCATED YET'
+         LA    R1,0             MACRO TO EXIT WITH ZEROS
+         LA    R2,0             MACRO TO EXIT WITH ZEROS
+         B     MDX&SYSNDX           SKIP REST OF THE CODE
+*
+* Matching ID found, slot addressed by R4 (using dsect)
+MD2&SYSNDX L     R1,SLOTADDR     ADDRESS OF MEMORY AREA
+         C     R1,=F'0'
+         BE    MD4&SYSNDX        IF ZERO NOT IN USE
+         L     R2,SLOTMEMZ       GET SIZE ALLOCATED
+         C     R2,=F'0'          IF ZERO, A GETMAIN OF 0 WAS BAD
+         BNE     MDX&SYSNDX      ELSE ALL GOOD AND REGS SET
+*
+         DROP  R4
+*
+* Table not in expected format ot some other error
+MDE&SYSNDX WTO  'TABLE NOT INITIALISED'
+         LA    R1,0             MACRO TO EXIT WITH ZEROS
+         LA    R2,0             MACRO TO EXIT WITH ZEROS
+         B     MDX&SYSNDX
+*
+.* Macro Exit point 
+MDX&SYSNDX CNOP  0,4
+         LM    R2,R6,MDD&SYSNDX+4
+         MEXIT
+.MDCERR1 MNOTE 12,'**** MISSING PARAMETERS ****'
+         LTORG
+         MEND
+./ ENDUP
+@@
+//

@@ -1,0 +1,436 @@
+//MARKMGR  JOB (0),'ASM',CLASS=A,MSGCLASS=T,
+// USER=MVSUSERN,PASSWORD=MVSPASSW
+//*
+//* A WORK IN PROGRESS
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB 
+// DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+// DD DISP=SHR,DSN=MARK.LIB.MACROS.CSA
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//ASM.SYSIN DD *
+***********************************************************************
+*
+* If run with a PARM='REQUEST=IPLINIT' will allocate CSA storage and
+* initialise a table addressed by CVTUSER that can be used by other
+* programs I might want to use shared CSA memory to track their
+* allocations.
+* This table in CSA remains in memory after the program stops, so
+* this should be run at IPL time to initialise the table.
+* NOTE: If the table is already initialised it will refuse to
+*       do it again.
+*
+* If no parameter is passed it will check that the table in CSA has
+* been initialised correctly and will go into an interactive mode
+* to allow commands
+*   F jobname,DISPLAY - display table slot usage
+*   F jobname,WIPECSA - wipe the created table IF no applications
+*                       have started using slots, and if the 
+*                       reply to the WTOR to confirm the request
+*                       is replied to correctly
+*   F jobname,END     - exit the interactive program
+*   P jobname         - exit the interactive program
+*
+*  BUGS:
+*     If WIPECSA is used it correctly refuses to freemain
+*     the table but S0C4s after writing the WTO. Cannot see
+*     where the return register is being clobered for that
+*     one request. Even changed it to R8 (routine wipecsat)
+*     Really needs an abend handler to DOM the inetractive
+*     message when it abends.
+*
+*  LOGIC
+*  -----
+*  A - Check running APF authourised
+*           fail -> exit cc 04
+*  B - if we are initialising the CSA list
+*      B1 - Check CVTUSER is zeros (not already used)
+*      B3 - if OK allocate CSA and initialise empty table 
+*      B4 - Done
+*  C - Interactive mode, we require an existing CSA list
+*      C1 - Check CVTUSER is NOT zeros (is already used)
+*      C2 - interactive (modify) until stopped; commands available
+*             + wait on events until operator asks we stop (park)
+*             + display table list
+*             + freemain CSA table and clear CVTUSER, WTOR will
+*               ask for confirmation
+*             + think about C3
+*      C3 - TRY to see if we can force CSA storage allocated by   
+*           another program to be released...
+*           ...need a macro library for everything I may use that
+*           refers to anythig in CSA storage to detect that, in
+*           every program before I test destroying things
+*
+*    ALSO - split code into macros for anything that any other
+*           program is likely to use. That is being tested in here.
+*
+* Requires:
+*    SYS1.AMODGEN for the CVT macro
+*    MARK.LIB.MACROS.PROD for my macros
+*        - TODEC8
+*        - EVENTHUB   (eventhub is also in this github repo seperately)
+*    MARK.LIB.MACROS.CSA  (created by the MACLIB.txt file)
+*        - all the macros that interact with the table so far
+*
+***********************************************************************
+         EJECT      
+MDCSAMGR CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+*======================================================================
+* This section is invoked if the PARM indicates we are expected to be
+* performing the initialisation of the CSA allocation list.
+* The only valid parm is REQUEST=IPLINIT
+* or no parm at all assume interactive mode and go directly there
+*======================================================================
+         L     R1,0(R1)              ADDRESS OF THE PARAMETER LIST
+         LH    R3,0(R1)              GET PARM LENGTH
+         LTR   R3,R3                 IF LENGTH ZERO WE HAVE NO PARM
+         BZ    INTERACT              NO PARM, ASSUME INTERACTIVE
+         LA    R4,2(R1)              ADDRESS OF PARM VALUE
+         CLC   0(15,R4),=CL15'REQUEST=IPLINIT'  oops, len 1st then reg
+         BE    CHKAUTH
+BADPARMM WTO   'MIDC011E INVALID PARM DATA PROVIDED'
+         B     EXITCC4
+*
+***********************************************************************
+* Only authorised programs can modify CVTUSER and write into CSA
+* storage.
+***********************************************************************
+CHKAUTH  TESTAUTH FCTN=1
+         LTR   R15,R15
+         BZ    CHKUSER      AUTHORISED, CHECK CVTUSER
+         WTO   'MIDC005I MDCSAMGR MUST RUN AUTHOURISED'
+         B     EXITCC4
+*
+***********************************************************************
+* If CVTUSER is already in use we do not want to overwrite it !.
+***********************************************************************
+CHKUSER  WTO   'MIDC017I CREATING CVTUSER ADDRESSED TABLE'
+         L     R2,16    ADDRESS CVT
+         USING CVT,R2
+         L     R3,CVTUSER
+         C     R3,HEXZEROS
+         BE    INITLIST     NOTHING IN CVTUSER YET   
+         C     R3,HEXONES
+         BE    INITLIST     NOTHING IN CVTUSER YET
+         WTO   'MIDC006E CVTUSER IS ALREADY IN USE'
+         B     EXITCC4
+*
+***********************************************************************
+* Initialise the "list"
+*  CVTUSER must point to the list
+*  Entry1 MUST be ID "CSAL" describing the getmained list itself
+*  so anything looking at the list can
+*  clearly identify that this is the list created in my site format.
+*  The other entries will be initialised as "FREE"+X'00000000' which is
+*  the default not in use identifier and a NULL address.
+*  The final entry MUST be three words F'00'+F'00'+F'00' to show the
+*  end of the list.
+***********************************************************************
+*
+***********************************************************************
+* Getmain and CSA mucking about
+***********************************************************************
+* If we cannot allocate storage in CSA then no point in continuing
+INITLIST GETMAIN EC,LV=MEMDATAL,SP=241,A=CSAADR
+         LTR   R15,R15
+         BZ    GOTCSA
+         WTO   'MIDC007E CSA STORAGE NOT AVAILABLE'
+         B     EXITCC4
+GOTCSA   CNOP  0,4
+         MODESET MODE=SUP,KEY=ZERO   SUPERVISOR MODE TO WRITE TO CSA
+         L     R3,CSAADR             UPDATE CVTUSER WITH MEM ADDR
+         ST    R3,CVTUSER
+*
+         LR    R4,R3                 R4 To ADDRESS INTO TABLE
+         MVC   0(4,R4),CSAFLAG           ID IS CSAL-ist
+         ST    R3,4(R4)               ADDR OF THIS TABLE
+         LA    R1,MEMDATAL               STORE SIZE ALSO
+         ST    R1,8(R4)
+* Initialise all the remaining entries
+         LA    R5,LISTMAX            USE R5 TO COUNT THRU TABLE
+         S     R5,FULL1              WE HAVE USED THE FIRST SLOT
+INITNEXT A     R4,CSAENTLN          MOVE TO NEXT SLOT
+         MVC   0(4,R4),=CL4'FREE'        SLOT IDENTIFYER
+         LA    R6,0                      ZEROS FOR NEXT FIELDS
+         ST    R6,4(R4)               ADDR OF ANY STORAGE
+         ST    R6,8(R4)               LEN OF ANY STORAGE
+         S     R5,FULL1
+         C     R5,=F'0'            LOOP UNTIL AT ZERO
+         BH    INITNEXT
+* Table end entry is all binary zeros
+         A     R4,CSAENTLN          MOVE TO NEXT SLOT
+         LA    R6,0                      ZEROS FOR NEXT FIELDS
+         ST    R6,0(R4)    SLOT IDENTIFYER
+         ST    R6,4(R4)                  ADDR OF ANY STORAGE
+         ST    R6,8(R4)                  LEN OF ANY STORAGE
+         MODESET MODE=PROB,KEY=NZERO          OUT OF SUPERVISOR MODE
+         DROP  R2
+         B     EXITNOOP
+*
+*======================================================================
+* Interactive mode now
+*======================================================================
+***********************************************************************
+* Make sure that the table has been initialised correctly.
+* Write a critical MSG saying we are in interactive mode (it is DOMed
+* when the program exits).
+* Loop waiting for operator commands (via eventhub)
+* Exit when asked to exit, or when WIPECSA is used as we must exit
+* if the table no longer exists in memory.
+***********************************************************************
+         LTORG
+INTERACT CNOP  0,4
+* Only run in interactive mode if the CSA table has been initialised
+         L     R2,16    ADDRESS CVT
+         USING CVT,R2
+         L     R3,CVTUSER      GET ADDR OF TABLE/LIST
+         DROP  R2
+         C     R3,HEXZEROS
+         BE    NOINTERA
+         C     R3,HEXONES
+         BE    NOINTERA
+         CLC   CSAFLAG(L'CSAFLAG),0(R3)  1st 4bytes must be our header
+         BNE   NOINTERB
+* Put the jobname in the WTO so people know what the jobname raising
+* the alert is.
+         LA    2,16                ADDR OF CVT POINTER
+         L     2,0(2)              ADDR OF CVT
+         L     2,0(2)              ADDR OF TCBS
+         L     2,4(2)              ADDR OF 2ND TCB
+         L     2,180(2)            ADDR OF JSCB
+         L     2,260(2)            ADDR OF JCT PREFIX
+         LA    2,24(2)             ADDR OF JOBNAME IN JCT
+         MVC   ALERTWTO+16(8),0(2)  STORE JOB NAME
+ALERTWTO WTO   'WARNING:jjjjjjjj RUNNING MDCSAMGR IN INTERACTIVE MODE',X
+               DESC=(2)
+         ST    R1,WTOALERT       SAVE ID OF HIGHLIGHTED MSG TO DOM
+*
+* Initialise with COMM area, operator F and P commands are accepted
+         EVENTHUB ACTION=CREATE,HANDLER=OPCMD,EOF=EXITEVNT,CMDBUF=OPCMDX
+               BUF
+*
+* wait for any event trigger now. The generated code will
+* be in control until either
+*    (a) a park command is issued by the operator
+*    (b) the reply 'END' is given to the WTOR
+         EVENTHUB ACTION=WAIT
+*
+NOINTERA WTO   'MIDC012E MEMORY TABLE NOT INITIALISED, INTERACTIVE NOT X
+               PERMITTED'
+         B     EXITCC4 
+NOINTERB MVC   NOINTERC+17(4),0(R3)   DEBUG: LOG WHAT WE GOT
+NOINTERC WTO   'MIDC013E ....    ADDRESSES AN UNMANAGED TABLE'
+         B     EXITCC4 
+*
+***********************************************************************
+* Exit Handling
+***********************************************************************
+         LTORG 
+* EXITEVNT is used if we were running in interactive mode and
+* need to clean up any outstanding eventhub tasks
+EXITEVNT CNOP  0,4
+*     cleanup any outstanding eventhub actiona
+         EVENTHUB ACTION=DESTROY
+* EXITNOOP is used when there are no cleanup actions required
+* from anything we may have done.
+EXITNOOP L     R1,WTOALERT    IF WE WROTE A HIGHLIGHTED ALERT
+         C     R1,=F'0'       THIS IS NON ZERO SO WE WILL...
+         BE    EXITNOO2
+         DOM   MSG=(R1)       ...DOM THE ALERT
+EXITNOO2 L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+* EXITCC4 is only called if an error occurred prior to any
+* actions that need to be backed out.
+EXITCC4  CNOP  0,4
+         L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         LA    R15,4              COND CODE 4
+         BR    R14
+         EJECT
+*
+***********************************************************************
+* Handle operator modify (F) and park (P) commands
+* Ia a WTO is needed WTO only to the console that issues the command
+***********************************************************************
+OPCMDBUF DS    CL80
+OPSAVER1 DS    F
+CONSOLID DS    F
+OPCMD    ST    R1,OPSAVER1
+         CLC   OPCMDBUF(3),=CL3'END'
+         BE    EXITEVNT
+         CLC   OPCMDBUF(7),=CL7'WIPECSA'
+         BE    OPWIPECS
+         CLC   OPCMDBUF(7),=CL7'DISPLAY'
+         BE    OPDISPLY
+         SR    R0,R0
+         ST    R0,CONSOLID
+         MVC   CONSOLID+3(1),EVCNSLID
+         L     R0,CONSOLID
+OPWTO    WTO   'MIDC010W ONLY END, DISPLAY OR WIPECSA ARE ALLOWED',    X
+               MCSFLAG=(REG0,RESP)
+OPWTOR   L     R1,OPSAVER1
+         BR    R1          --- back to caller
+*
+OPWIPECS BAL   R7,WIPEWTOR
+         B     OPWTOR      --- back to normal opcmd exit
+*
+OPDISPLY BAL   R7,DSPLYCSA
+         B     OPWTOR      --- back to normal opcmd exit
+*
+***********************************************************************
+* Handling for the WTOR
+* We only expect WIPECSA as a reply in confirmation to do just that
+***********************************************************************
+WTSAVER1 DS    F
+WTSAVER7 DS    F
+WTORECB1 DS    1F
+WTORREP1 DC    CL30' '
+WTOREX1  ST    R1,WTSAVER1
+         ST    R7,WTSAVER7
+         CLC   WTORREP1(7),=CL7'WIPECSA'
+         BNE   WTOR1CAN
+         BAL   R8,WIPECSAT
+WTOR1CAN L     R1,WTSAVER1
+         L     R7,WTSAVER7
+         BR    R1
+*
+***********************************************************************
+* Wiping out all CSA memory allocated is now a seperate command
+* Go through the table and free any slots allocated ONLY IF no slots 
+* have been used.
+***********************************************************************
+         LTORG
+WIPEWTOR CNOP  0,4
+         WTOR  'MIDC009A REPLY WIPECSA TO CONFIRM',WTORREP1,L'WTORREP1,X
+               WTORECB1
+         EVENTHUB ACTION=ADD,TYPE=WTOR,ID=R1,HANDLER=WTOREX1,          X
+               ECB=WTORECB1
+         BR    R7
+*
+WIPECSAT CNOP  0,4
+* MUST scan all entries in the table to make sure none have been
+* used before we delete the table.
+         L     R2,16    ADDRESS CVT
+         USING CVT,R2
+         L     R3,CVTUSER      GET ADDR OF TABLE/LIST
+         LR    R4,R3           USE R4 TO WALK THE TABLE
+*
+WIPE000  A     R4,CSAENTLN   NEXT ENTRY
+         L     R5,0(R4)      ID CHECK
+         C     R5,FULL0
+         BE    WIPE001       END OF CHAIN
+         L     R5,4(R4)      ADDR CHECK
+         C     R5,FULL0      IF OK NOT UN USE, CHECK NEXT
+         BE    WIPE000
+         WTO   'MIDC014E TABLE HAS ACTIVE ENTRIES, WIPE REFUSED'
+         BR    R8         IMMEDIATE EXIT
+*
+* Clear the CVTUSER field we had updated
+WIPE001  L     R3,CVTUSER      SAVE ADDR BEFORE WE CHANGE IT
+         ST    R3,CSAADR
+         MODESET MODE=SUP,KEY=ZERO   SUPERVISOR MODE TO WRITE TO CSA
+         LA    R3,0
+         ST    R3,CVTUSER
+         MODESET MODE=PROB,KEY=NZERO          OUT OF SUPERVISOR MODE
+         DROP  R2
+* freemain the table area, csaadr set above from cvtuser
+         FREEMAIN EC,A=CSAADR,LV=MEMDATAL,SP=241 
+         WTO   'MIDC015I ALL OPERATIONS ENDED'
+         B     EXITEVNT
+         LTORG
+*
+***********************************************************************
+* Display the values in the table we have created and manage.
+***********************************************************************
+DSPLYCSA L     R2,16    ADDRESS CVT
+         USING CVT,R2
+         L     R3,CVTUSER      GET ADDR OF TABLE/LIST
+         LR    R4,R3           USE R4 TO WALK THE TABLE
+DSPLY000 L     R5,0(R4)      ID CHECK
+         C     R5,FULL0
+         BE    DSPLY002      END OF CHAIN
+*
+* POPULATE ALL WTO FIELDS APART FROM STATE
+         MVC   DSPLYWTO+20(4),0(R4)   SLOT ID INTO WTO
+*        USING AND TRASHING R6 AND R8 HERE, CANNOT USE R4 OR R7
+         L     R6,4(R4)
+         ST    R6,HEXBIN
+         BAL   R6,BIN2HEX
+         MVC   DSPLYWTO+43(8),HEXDIS
+         L     R6,8(R4)
+         LA    R8,DSPLYWTO+58
+         TODEC8 REG=R6,BUF=R8,MF=R
+*
+* NOW WE CAN POPULATE THE STATE FIELD BASED ON IF INUSE OR NOT
+         L     R5,4(R4)      ADDR CHECK
+         C     R5,FULL0      IF NOT ZERO IN USE
+         BNE   DSPLYACT
+         MVC   DSPLYWTO+31(6),=CL6'SPARE '
+         B     DSPLYWTO
+DSPLYACT MVC   DSPLYWTO+31(6),=CL6'ACTIVE'
+DSPLYWTO WTO   'MIDC016I ID=xxxx STATE=SPARE  ADDR=........ BYTES=.....X
+               ...'
+         A     R4,CSAENTLN   TO NEXT SLOT
+         B     DSPLY000
+DSPLY002 BR    R7
+*
+***********************************************************************
+***********************************************************************
+BIN2HEX  UNPK   HEXDIS(L'HEXDIS+1),HEXBIN(L'HEXBIN+1)
+         TR     HEXDIS,HEXTRT       HEXDIS is displayable value
+         BR     R6                  RETURN
+         CNOP  0,4                 Fullword alignment.
+HEXTRT   EQU   *-X'F0'             16 Byte Translate Table.
+         SPACE ,
+*                   0 1 2 3 4 5 6 7 8 9 A B C D E F
+         SPACE ,
+         DC    XL16'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'  F0 - FF
+HEXBIN   DS    XL4                 4 Byte Binary Field.
+         DS    X                   1 Byte Pad for UNPK.
+HEXDIS   DS    CL8                 8 Byte Displayable Hex Field.
+         DS    C                   1 Byte Pad for UNPK.
+*
+***********************************************************************
+* Data and DSECTS
+***********************************************************************
+         LTORG
+SAVEAREA DS    18F
+FULL0    DC    F'0'
+FULL1    DC    F'1'
+HEXZEROS DC    X'00000000'
+HEXONES  DC    X'11111111'
+WTOALERT DC    F'0'   DEFAULT IS NO ALERT WTO
+         LTORG
+*
+* Data areas I use for CVT mapping
+         MDCSADAT CVT=YES
+* MUST BE LAST
+         EVENTHUB ACTION=DSECTS
+         YREGS
+         END
+/*
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD.APFAUTH(MDCSAMGR),DISP=SHR
+//*
+//TESTIT2  EXEC PGM=MDCSAMGR,COND=(0,NE),PARM='REQUEST=IPLINIT'
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//SYSUDUMP DD   SYSOUT=*
+//SYSABEND DD   SYSOUT=*
+//TESTIT3  EXEC PGM=MDCSAMGR,COND=(0,NE),TIME=1440
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//SYSUDUMP DD   SYSOUT=*
+//SYSABEND DD   SYSOUT=*
+//

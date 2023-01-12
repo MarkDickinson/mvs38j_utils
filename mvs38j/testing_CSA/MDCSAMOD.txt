@@ -1,0 +1,290 @@
+//MARKRES JOB (0),'ASM',CLASS=A,MSGCLASS=T,
+// USER=MVSUSERN,PASSWORD=MVSPASSW
+//*
+//* NO WAY THIS WILL WORK YET
+//* ONLY RUN THIS ON A SYSTEM YOU CAN IPL REPEATEDLY.
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB 
+// DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+// DD DISP=SHR,DSN=MARK.LIB.MACROS.CSA
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//ASM.SYSIN DD *
+***********************************************************************
+*
+*  MDCSAMOD - Must be APF authourised
+*
+*  This is another useful debugging program. I use it to test that
+*  the CSA memory GETMAIN and FREEMAIN is working as expected as far
+*  as the table being updated correctly is concerned.
+*  (as other programs also use the same macros tested here and can
+*  write/read data from the storage allocated plus no errors from
+*  the getmain and freemain calls I am assuming that everything
+*  tested here is working).
+*
+*  It will refuse to do anything if the CVTUSER table has not been 
+*  initialised in the format I expect.
+*
+*  If my allocation table has been hung off CVTUSER already this
+*  program can perform the following modifications to it.
+*     - "ADD" assign a slot-id to a free slot and getmain memory to
+*       be used by programs that reference that slot-id, updating
+*       the slot with the id, address of getmained memory in CSA,
+*       and tyhe size of memory allocated. 
+*       This function can also be called with a memory allocation
+*       request of 0 (zero) bytes in which case it will hust update
+*       the slot-id field to reserve a slot (to remove the 'FREE' tag)
+*       if you know it will be needed later (if the slot-id has no
+*       getmained memory associated with it a program can request
+*       allocation for it later by id, so allocation with zero bytes
+*       just stops other programs filling uo the free slots first)
+*       slot-ids MUST be unique 
+*     - "REL" will use the getmained memory address and length stored
+*       in the table to perform a freemain of the memory in CSA and
+*       mark the slot free for other uses.
+*       NO SANITY CHECKING IS DONE TO SEE IF ANYTHING IS USING THE
+*       MEMORY. 
+*
+*  A MAX OF 4096 BYTES CAN BE ALLOCATED (HARD CODED IN HERE) AT PRESENT
+*  UNTIL I DECIDE ON WHAT I MIGHT USE CSA FOR AND SET A NEW LIMIT.
+*  That limit is enforced by the hard coded value in this program, if
+*  you are calling the macros from your own programs you are trusted
+*  to now what you are doing.
+*
+*    SYS1.AMODGEN for the CVT macro
+*    MARK.LIB.MACROS.PROD for my macros
+*        - TODEC8
+*    MARK.LIB.MACROS.CSA  (created by the MACLIB.txt file)
+*        - all the macros that interact with the table so far
+*
+*  DATA CARD FORMAT - DDNAME IS 'CSATABLE'
+*       '*' in column 1 is a comment
+*       'ADD CCCC nnnn'
+*            find a free slot and allocate CCCC as the slot-id
+*            and getmain nnnn bytes of memory for that slot
+*            (currently MAX nnnn is coded as 4096)
+*       'ADD CCCC 0   '
+*            find a free slot and allocate CCCC as the slot-id,
+*            as memory request is 0 it only updated (reserves)
+*            the slot-id name. MUST be spaces after the 0.
+*       'REL CCCC'
+*            find the slot-id matching CCCC, freemain the
+*            address and number of byted recorded in the table
+*            for it, set the addr and size back to 0 and the
+*            slot-id back to 'FREE'
+*
+***********************************************************************
+MDCSAMOD CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+***********************************************************************
+* Only authorised programs can modify CVTUSER and write into CSA
+* storage.
+***********************************************************************
+         TESTAUTH FCTN=1
+         LTR   R15,R15
+         BZ    CHKUSER      AUTHORISED, CHECK CVTUSER
+         WTO   'MIDC018E MDCSAMOD MUST RUN AUTHOURISED'
+         B     EXITCC4
+*
+***********************************************************************
+* If CVTUSER is not initialised in the format we expect we must not
+* do anything.
+***********************************************************************
+CHKUSER  L     R2,16    ADDRESS CVT
+         USING CVT,R2
+         L     R3,CVTUSER
+         C     R3,HEXZEROS
+         BE    CHKUSERE                   NOT INITIALISED
+         CLC   CSAFLAG(L'CSAFLAG),0(R3)   TABLE START MUST BE OUT FLAG
+         BNE   CHKUSERE                   NOT IN REQUIRED FORMAT
+         B     READPARM
+CHKUSERE WTO   'CSA TABLE IS UNINITIALISED OR IN AN INVALID FORMAT'
+         B     EXITCC4
+*
+***********************************************************************
+* If a DDCARD is provided we can EDIT the ID field in the list with
+* something other than FREE to reserve entries for applications
+* I know I will want to use them.
+***********************************************************************
+READPARM RDJFCB CSATABLE            SEE IF WE HAVE A CSATABLE DD CARD
+         LTR   R15,R15
+         BZ    HAVEDD
+         WTO   'MIDC019E NO CSATABLE DD CARD PROVIDED'
+         B     EXITNOOP
+HAVEDD   OPEN  (CSATABLE,(INPUT))
+         LTR   R15,R15
+         BZ    CARD0OK
+         WTO   'MIDC020E IO-ERR ON CSATABLE DD CARD'
+         B     EXITCC4 
+CARD0OK  GET   CSATABLE
+         LR    R6,R1                 SAVE R1, WE OVERWRITE IT A LOT
+         CLI   0(R1),C'*'            IS IT A COMMENT CARD ?
+         BE    CARD0OK               READ AGAIN
+         LR    R4,R1                 USE R4 TO ADDRESS DATA CARD
+         CLC   0(3,R4),=CL3'ADD'     ARE WE ALLOCATING MEMORY ?
+         BE    CARDADD
+         CLC   0(3,R4),=CL3'REL'     ARE WE RELEASING MEMORY ?
+         BE    CARDREL
+CARDBWTO MVC   CARDBAD+30(19),0(R4)
+CARDBAD  WTO   'MIDC021W INVALID CARD:... .... ....+....1 (IGNORED)'
+         B     CARD0OK       JUST GO AND GET THE NEXT
+*
+CARDADD  CNOP  0,4
+         A     R4,=F'4'     ADDR SLOT ID FIELD
+         MVC   SLOTSAVE(L'SLOTSAVE),0(R4)
+         A     R4,=F'5'     ADDR START OF NUMBER FIELD
+*        CHECK FOR A CODED ZERO HERE, AS THE CONVERSION WILL RETURN
+*        ZERO OF AN INVALID NUMBER WAS PROVIDED SO IF WE EXPECT IT
+*        NO FURTHER CHECKS NEEDED
+         LA    R5,0                 DEFAULT OF 0
+         ST    R5,SIZESAVE          SAVE IT
+         CLC   0(4,R4),=CL4'0   '   IF ONLY 0 THEN ZERO
+         BE    CARDADD4
+*        ELSE CONVERT SIZE TO A NUMBER
+         LR    R5,R4                R5 TO FIND THE END OF IT
+CARDADD1 CLI   0(R5),C' '
+         BE    CARDADD2
+         A     R5,FULL1
+         B     CARDADD1
+CARDADD2 SR    R5,R4                R5-R4 IS LEN
+         C     R5,=F'10'            IF > 10 BYTES DO NOT BE STUPID
+         BL    CARDADD3
+         LR    R4,R1                RESET R4 TO CARD
+         B     CARDBWTO             SO WE CAN USE SAME ERROR MSG
+CARDADD3 LR    R6,R1                WE ARE ABOUT TO TRASH R1
+         STRTOBIN STRTYPE=R,STR=R4,LENTYPE=R,LEN=R5
+         LR    R5,R1                NUMBER RETURNED IN R1
+         ST    R5,SIZESAVE
+         C     R5,=F'4097'          IF > 4096 BYTES DO NOT BE STUPID
+         BL    CARDADD4
+         LR    R4,R6               RESET R4 TO CARD (WE SAVED R1 IN R6)
+         B     CARDBWTO             SO WE CAN USE SAME ERROR MSG
+CARDADD4 LR    R4,R6           GET BACK SAVED R1 IN CASE NEEDED FOR WTO
+         BAL   R7,CHEKSLOT
+         LTR   R1,R1
+         BNZ   CARDBWTO
+* OK, DEBUG, WHAT ARE WE DOING HERE
+         LA    R4,SLOTSAVE 
+         MVC   DBGWTO1+31(4),0(R4)
+         L     R6,SIZESAVE
+         LA    R8,DBGWTO1+41
+         TODEC8 REG=R6,BUF=R8,MF=R
+DBGWTO1  WTO   'DEBUG: ALLOCATING SLOT:nnnn SIZE:nnnnnnnn (MAYBE)'
+* OK, TRY IT
+         LA    R4,SLOTSAVE
+         L     R5,SIZESAVE
+         MDCSAGET ID=R4,SIZE=R5,CHKAUTH=NO   R1 IS ZERO IF NO ERROR
+         LTR   R1,R1
+         BZ    CARD0OK          WAS OK, GET THE NEXT CARD
+         MVC   FAILADD+45(4),SLOTSAVE
+FAILADD  WTO   'MIDC022E MEMORY ALLOCATION ERROR FOR ...., CONTINUING'
+         B     CARD0OK          WAS OK, GET THE NEXT CARD
+CARDREL  CNOP  0,4
+         A     R4,=F'4'     ADDR SLOT ID FIELD
+         MVC   SLOTSAVE(L'SLOTSAVE),0(R4)
+         LR    R4,R6        IN CASE NEEDED FOR WTO
+         BAL   R7,CHEKSLOT
+         LTR   R1,R1
+         BNZ   CARDBWTO
+         LA    R4,SLOTSAVE
+         MDCSAREL ID=R4,CHKAUTH=NO              R1 IS ZERO IF NO ERROR
+         B     CARD0OK          GET THE NEXT CARD
+* Address jumped to when last card from input is read
+SYSINEOF CLOSE (CSATABLE)
+         B    EXITNOOP
+*
+***********************************************************************
+* Very minimal checking on the slot ID to make sure it has no spaces
+* in it anywhere.
+***********************************************************************
+CHEKSLOT STM   R4,R6,CHEKSAVE
+         LA    R4,SLOTSAVE
+         CLI   0(R4),C' '
+         BE    CHEKERR
+         A     R4,FULL1
+         CLI   0(R4),C' '
+         BE    CHEKERR
+         A     R4,FULL1
+         CLI   0(R4),C' '
+         BE    CHEKERR
+         A     R4,FULL1
+         CLI   0(R4),C' '
+         BE    CHEKERR
+         LA    R4,SLOTSAVE
+         CLC   0(4,R4),=CL4'FREE'
+         BE    CHEKRESV
+         CLC   CSAFLAG,0(R4)
+         BE    CHEKRESV
+         SR    R1,R1      0 ALL OK
+         BR    R7
+CHEKRESV WTO   'YOU CANNOT USE A RESERVED SLOT-ID NAME'
+CHEKERR  LA    R1,1       NOT OK
+         BR    R7
+CHEKSAVE DS    3F
+*
+***********************************************************************
+* Exit Handling
+***********************************************************************
+EXITNOOP L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+* EXITCC4 is only called if an error occurred prior to any
+* actions that need to be backed out.
+EXITCC4  CNOP  0,4
+         L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         LA    R15,4              COND CODE 4
+         BR    R14
+         EJECT
+***********************************************************************
+* Data and DSECTS
+***********************************************************************
+         LTORG
+SAVEAREA DS    18F
+FULL0    DC    F'0'
+FULL1    DC    F'1'
+HEXZEROS DC    X'00000000'
+SLOTSAVE DS    CL4
+SIZESAVE DS    F
+CSATABLE DCB   DDNAME=CSATABLE,DSORG=PS,MACRF=(GL),EODAD=SYSINEOF,     X
+               EXLST=EXLST
+         DS    0F
+EXLST    DC    0F'0',X'87',AL3(JFCB)
+JFCB     DS    CL176
+*
+* Data areas I use for CVT mapping
+         MDCSADAT CVT=YES
+         YREGS
+         END
+/*
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD.APFAUTH(MDCSAMOD),DISP=SHR
+//*
+//*
+//TESTIT2  EXEC PGM=MDCSAMOD,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//SYSUDUMP DD   SYSOUT=*
+//SYSABEND DD   SYSOUT=*
+//CSATABLE DD   *
+* FORMAT
+*    ADD SLOT-ID CSA-MEMORY-SIZE-TO-ALLOCATE
+*    REL SLOT-ID 
+*ADD BLUE 512
+*REL PINK
+REL BLUE
+/*
+//* QUERY THE SLOT TABLE
+//MDCSAQ02 EXEC PGM=MDCSAQRY,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//

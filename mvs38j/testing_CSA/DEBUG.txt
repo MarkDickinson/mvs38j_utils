@@ -1,0 +1,188 @@
+//MARKTEST JOB (0),'ASM',CLASS=A,MSGCLASS=T,
+// USER=MVSUSERN,PASSWORD=MVSPASSW
+//*
+//* TESTING
+//*    PGM1 allocates storage and writes a test string to CSA
+//*    PGM2 reads the test sting from CSA
+//*    Query the slots
+//*    Run PGM1 to allocate CSA memory and write data to it
+//*    Run PGM2 (non-authorized) to read the data from CSA
+//*    Query the slots
+//*    Run the MOD program to release the memory
+//*    Query the slots
+//*
+//* ===================================================================
+//* PGM1 : Into authorized library, only programs in supervisor
+//*        mode can write into CSA storage
+//* Member name - MARK.LIB.LOAD.APFAUTH(DELME)
+//* ===================================================================
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=1'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB 
+// DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+// DD DISP=SHR,DSN=MARK.LIB.MACROS.CSA
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//ASM.SYSIN DD *
+***********************************************************************
+* Allocate memory in the CSA table, add test data into it
+***********************************************************************
+DELETME  CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+*        ALLOCATE A 80 BYTE BUFFER, STORE "TESTDATA" INTO IT
+         LA    R2,80       ALLOC 80 BYTES
+         LA    R3,SLOTNAME
+         MDCSAGET ID=R3,SIZE=R2,CHKAUTH=YES
+         C     R1,=F'0'
+         BNE   EXITCC4
+         LA    R3,SLOTNAME
+         MDCSALOC ID=R3
+         C     R1,=F'0'    IF ZERO NO SLOT/ADDRESS FOUND
+         BE    EXITCC4
+         C     R2,=F'80'   WE WANTED TO ALLOCATE 80 BYTES
+         BE    EXITCC8
+*
+         LR    R4,R1       USE R4 TO ADDRESS DATA BUFFER
+         MODESET MODE=SUP,KEY=ZERO   SUPERVISOR MODE TO WRITE TO CSA
+         MVC   0(8,R4),=CL8'TESTDATA'
+         MODESET MODE=PROB,KEY=NZERO          OUT OF SUPERVISOR MODE
+         B     EXIT
+*
+***********************************************************************
+* Exit Handling
+***********************************************************************
+EXIT     L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+EXITCC4  L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         LA    R15,4
+         BR    R14
+EXITCC8  WTO   'STORAGE AREA MISMATCH'
+         L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         LA    R15,8
+         BR    R14
+         EJECT
+***********************************************************************
+* Data and DSECTS
+***********************************************************************
+         LTORG
+SAVEAREA DS    18F
+SLOTNAME DC   CL4'DELM'
+         MDCSADAT
+         YREGS
+         END
+/*
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD.APFAUTH(DELETME),DISP=SHR
+//*
+//*
+//*
+//* ===================================================================
+//* PGM2 : Into NON-authorized library
+//*        must ensure normal programs can read the data
+//* Member name - MARK.LIB.LOAD(DELME)
+//* ===================================================================
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0',COND=(0,NE)
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS2.MACLIB 
+// DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+// DD DISP=SHR,DSN=MARK.LIB.MACROS.CSA
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//ASM.SYSIN DD *
+***********************************************************************
+* Find the slot by slot-id.
+* Read the test data.
+***********************************************************************
+DELETME  CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+         LA    R3,SLOTNAME     SLOT TO SEARCH FOR
+         MDCSALOC ID=R3
+         C     R1,=F'0'    IF ZERO NO SLOT/ADDRESS FOUND
+         BE    EXITCC4
+         C     R2,=F'80'   WE WANTED TO ALLOCATE 80 BYTES
+         BE    EXITCC8
+*
+         LR    R4,R1       USE R4 TO ADDRESS DATA BUFFER
+         CLC   0(8,R4),=CL8'TESTDATA'
+         BE    GOTIT
+         WTO   'NO MATCH ON TESTDATA'
+         B     EXITCC4
+GOTIT    WTO   'WE READ THE DATA EXPECTED'
+*
+***********************************************************************
+* Exit Handling
+***********************************************************************
+EXIT     L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+EXITCC4  L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         LA    R15,4
+         BR    R14
+EXITCC8  WTO   'STORAGE AREA SIZE MISMATCH'
+         L     R13,SAVEAREA+4
+         LM    R14,R12,12(R13)
+         LA    R15,8
+         BR    R14
+         EJECT
+***********************************************************************
+* Data and DSECTS
+***********************************************************************
+         LTORG
+SAVEAREA DS    18F
+SLOTNAME DC   CL4'DELM'
+         MDCSADAT
+         YREGS
+         END
+/*
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(DELETME),DISP=SHR
+//*
+//*
+//* Run the tests
+//*
+//* GET STORAGE FOR SLOT-ID DELM AND WRITE DATA INTO THE
+//* STORAGE OBTAINED
+//ADDDATA  EXEC PGM=DELETME,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//*
+//* CHECK WE CAN READ THE DATA FROM THE AREA ADDRESSED BY DELM SLOT-ID
+//SHOWDATA EXEC PGM=DELETME,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//*
+//* QUERY THE SLOT TABLE
+//MDCSAQ02 EXEC PGM=MDCSAQRY,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//*
+//* RELEASE THE MEMORY GIVEN TO THAT SLOT
+//RELDATA  EXEC PGM=MDCSAMOD,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//CSATABLE DD   *
+REL DELM
+/*
+//*
+//* QUERY THE SLOT TABLE
+//MDCSAQ02 EXEC PGM=MDCSAQRY,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//

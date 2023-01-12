@@ -1,0 +1,27 @@
+One known bug.
+Two items to note.
+
+(1) In the main MDCSAALC program
+ a- If a reply other than WIPECSA is given to the WTOR prompting
+    to confirm the request it correctly refuses to do anything
+    but then SOC4s, so I have clobered the return address somewhere
+ b- If WIPECSA refuses to run due to slots being in use it correctly
+    refuses to do anything but then SOC4s, so I have clobered the
+    return address somewhere
+ The b check runs after the a so a coomon issue probably caused
+ prior to a... does not impact memory management
+
+(2) Hmmm, more of a note
+    The MDCAREL macro was failing to release memory with a error
+    on the FREEMAIN. ...BUT... it just suddenly started working
+    after I put debug statements in and kept working after I took
+    the debug statements out; no changes anywhere else.
+    So it is not a bug, but still in tjis list as I do not know
+    what was happening.
+
+(3) Another note
+    I have tested only with the slots near the top of the table,
+    I have not tested all the way thru to table full logic and
+    releasing memory from slot-ids out of order.
+    THIS IS STILL A WORK IN PROGRESS.    
+

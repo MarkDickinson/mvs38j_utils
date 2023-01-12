@@ -1,0 +1,160 @@
+//MARKQRY JOB (0),'ASM MDCSAQRY',CLASS=A,MSGCLASS=T,
+// USER=MVSUSERN,PASSWORD=MVSPASSW
+//* USER=MVSUSERN,PASSWORD=MVSPASSW,RESTART=MDCSAQRY
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+// DD DISP=SHR,DSN=SYS1.AMODGEN
+//ASM.SYSIN DD *
+         PRINT NOGEN
+***********************************************************************
+*
+* MDCSAQRY
+*
+* Origionally just used to query how the CVTUSER field is used by TK4-
+* (It wasn't used).
+*
+* Now it checks and displays slots in the table I hang off CVTUSER to
+* show what slots are in-use and free.
+* This is primarily a debugging tool. I use it in job steps around
+* jobs I use to test the operation of the macros and MDCSAMOD to
+* make sure the expected changes are reflected in the table.
+* It uses 'WTO' to display the table.
+* It is just a debugging aid, it can make no changes to the table.
+*
+* Requires:
+*    SYS1.AMODGEN for the CVT macro
+*    MARK.LIB.MACROS.PROD for my macros
+*        - TODEC8
+*    MARK.LIB.MACROS.CSA  (created by the MACLIB.txt file)
+*        - all the macros that interact with the table so far
+*
+* The recomendation for shared CSA is that CVTUSER is set to a list
+* of entries in the format of first word is an ID then second word as 
+* the address in CSA with getmained storage in CSA for that ID
+*
+***********************************************************************
+MDCSAQRY CSECT
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+         SPACE 3
+***********************************************************************
+* LOCATE CVTUSER FIELD AND WTO IT
+***********************************************************************
+*         LA    R3,16                    ADDRESS CVT POINTER
+*         L     R2,0(R3)                 LOAD ADDRESS OF CVT
+*         USING CVTDATA,R2               MAP THE CVT
+* ABOVE IS WHAT I WOULD USE, BELOW IS FROM MANUAL, CONFUSING
+         L     R2,16                     LOAD WITH CVT ADDR
+         USING CVT,R2                    USE R2 AS REG FOR CVT DSECT
+* CVTUSER FIELD IS DEFINED AS A(0), A WORD AVAILABLE TO USER, 4 BYTES ?
+         L     R4,CVTUSER                ADDR STORED IN CVTUSER
+*
+         ST    R4,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   PRTWTO+28(8),HEXDIS
+PRTWTO   WTO   'MIDC001I CVTUSER IS ....+...',DESC=(5)
+         C     R4,=F'1111'
+         BE    PRTWTO2
+         C     R4,=F'0000'
+         BE    PRTWTO2
+* RECOMENDATION IS THAT CVTUSER REFERENCES A LIST OF ADDRESSES
+* OF CVT AREAS USED AS 
+*    FIRST WORD IS AN IDENTIFIER
+*    SECOND WORD IS ADDRESS OF CSA DATA AREA USED BY ID
+*    END OF LIST ENTRIES IS F'0000' OR F'1111'
+         L     R3,CVTUSER          USE ADDRESS IN CVTUSER
+*
+         LR    R6,R3               USE R6 TO WALK THE LIST
+WTONEXT  L     R5,0(R6)
+         C     R5,=F'0'            IF 0 END OF LIST
+         BE    EXIT
+         MVC   DEBUG1+22(4),0(R6)
+         L     R4,4(R6)
+         ST    R4,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   DEBUG1+32(8),HEXDIS
+*
+*
+         L     R4,8(R6)
+         ST    R4,HEXBIN
+         BAL   R7,BIN2HEX
+         MVC   DEBUG1+47(8),HEXDIS
+         L     R4,8(R6)
+         TODEC8 REG=R4,BUF=NUMAREA,MF=L
+         MVC   DEBUG1+47(8),NUMAREA
+*
+DEBUG1   WTO   'MIDC003I SLOT:.... ADDR:xxxxxxxx BYTES:xxxxxxxx ',     X
+               DESC=(5)       DESC 5 TO LOG ONLY
+         A     R6,=F'12'
+         B     WTONEXT
+*
+PRTWTO2  WTO   'MIDC004I CVTUSER FIELD HAS NOT BEEN USED'
+*
+***********************************************************************
+*                            ALL DONE - EXIT                          *
+***********************************************************************
+EXIT     CNOP  0,4
+         L     R13,SAVEAREA+4     RESTORE POINTER TO CALLER'S SAVE AREA
+         LM    R14,R12,12(R13)    RESTORE REGISTERS
+         SLR   R15,R15            EXIT CODE 0
+         BR    R14                RETURN TO SYSTEM
+         SPACE 3 
+***********************************************************************
+***********************************************************************
+BIN2HEX  UNPK   HEXDIS(L'HEXDIS+1),HEXBIN(L'HEXBIN+1)
+         TR     HEXDIS,HEXTRT       HEXDIS is displayable value
+         BR     R7                  RETURN
+         CNOP  0,4                 Fullword alignment.
+         DS    CL240   Code area to small to walk back add so PAD
+         CNOP  0,4                 Fullword alignment.
+HEXTRT   EQU   *-X'F0'             16 Byte Translate Table.
+         SPACE ,
+*                   0 1 2 3 4 5 6 7 8 9 A B C D E F
+         SPACE ,
+         DC    XL16'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'  F0 - FF
+HEXBIN   DS    XL4                 4 Byte Binary Field.
+         DS    X                   1 Byte Pad for UNPK.
+HEXDIS   DS    CL8                 8 Byte Displayable Hex Field.
+         DS    C                   1 Byte Pad for UNPK.
+***********************************************************************
+*        D A T A   A R E A   B I T S
+***********************************************************************
+SAVEAREA DC    18F'0'             MAIN PROGRAM SAVE AREA
+NUMAREA  DS    CL8
+*        CVT   DSECT=YES,PREFIX=NO
+         CVT   DSECT=YES
+         SPACE 3
+* STANDARD REGISTER EQUATES HERE
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   MDCSAQRY
+/*
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DSN=MARK.LIB.LOAD(MDCSAQRY),DISP=SHR
+//*
+//* RUN THE TEST CODE
+//MDCSAQRY EXEC PGM=MDCSAQRY,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//
