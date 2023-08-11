@@ -1,4 +1,7 @@
-//MARKA JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=A
+//MARKA JOB (0),'ASSEMBLE',CLASS=A,MSGCLASS=T,
+// USER=MVSUSERN,PASSWORD=MVSPASSW
+//* The above user/pswd are replaced by the macro I use to
+//* netcat jobs to the card reader
 //*
 //ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
 //             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
@@ -9,9 +12,6 @@
 //ASM.SYSIN DD *
          TITLE 'MID3503D - DISPLAY COMMAND EXTENTIONS'
 *********************************************************************** 
-*                                                                     * 
-* *BUGGER* NOW INVALID COMMANDS JUST RETURN, THE RC=04 IS IGNORED     * 
-*          IN THE TEST WE OUT IN IEE2503D, CORRUPTED SOMETHING IN HERE*
 *                                                                     * 
 *  MODULE NAME  =  MID3503D                                           * 
 *                                                                     * 
@@ -46,18 +46,7 @@
 *                  TIME (WTO IS USED, TPUT NOT YET IMPLEMENTED)       * 
 *                                                                     * 
 *  KNOWN BUGS   =  <------- READ THE SECTION BELOW ----------------   * 
-*    (Buggy 1)     The intent is that these additional commands       * 
-*                  should only be entered at a console,               * 
-*                  The current status is commands respond OK if       * 
-*                  entered at a console BUT IF USED FROM SPY OR THE   * 
-*                  IMON OPERATOR INTERFACE TAKES A DUMP TO A SYSTEM   * 
-*                  DUMP DATASET or displays the command not found     * 
-*                  error... after displaying command results, so      * 
-*                  there is obviously additional return handling      * 
-*                  needed for when commands are issued under tso      * 
-*    (Buggy 2)     The 'D SMF' command also takes a system dump after * 
-*                  displaying the correct results; so I definately    * 
-*                  have an issue with return handling in general.     * 
+*                  Currently no known bugs.                           * 
 *  KNOWN BUGS   =  <------- READ THE SECTION ABOVE ----------------   * 
 *                                                                     * 
 *  REMOVED FEATURES =  <------- READ THE SECTION BELOW ------------   * 
@@ -72,7 +61,7 @@
 *                  size (and there are no spare REGs to setup a       *
 *                  second base register)... caused by the code added  *
 *                  to actually populate the SYS1.MAN? dataset usage,  *
-*                  which I think is of mode use than the options.     *
+*                  which I think is of more use than the options.     *
 *                  If you uncomment the options display code you will *
 *                  have to remove something else.                     *
 *  REMOVED FEATURES =  <------- READ THE SECTION ABOVE ------------   * 

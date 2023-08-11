@@ -1,0 +1,151 @@
+//MARKADDJ JOB (0),'NEW MBR',CLASS=A,MSGCLASS=T
+//STEPA EXEC PGM=IEBUPDTE
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DSN=MARK.EXEC,DISP=SHR
+//SYSUT2   DD DSN=MARK.EXEC,DISP=SHR
+//SYSIN    DD DATA,DLM=ZZ
+./ ADD NAME=MDRXCNSL
+/* -----------------------------------------------------------
+* MDRXCNSL
+* Purpose: I have never been able to get output from RXCONSOLE
+*          so I need this.
+*          It's not pretty as I am not great with REXX but it
+*          works which is the main thing.
+*
+* Invoke with 
+*    rx mdrxcnsl 'console command'
+*    or in a rexx script
+*      call mdrxcnsl('console command')
+*
+* Issue a console command
+* Use MTT to locate the response data
+*
+* There could be lots of identical commands issues by the TSU
+* session, so we buffer what we find, at every new matching
+* find drop the buffer and start buffering the latest found,
+* so at the end we should only have the last command output
+* to display.
+* -----------------------------------------------------------
+*/
+ARG CMDRQST
+/* CMDRQST="D A,L" <- for debugging */
+IF CMDRQST=="" THEN DO
+   SAY "ERROR: NO COMMAND PROVIDED"
+   EXIT
+END
+SAY "DEBUG: COMMAND" CMDRQST
+CALL CONSOLE(CMDRQST)
+/* 
+* We need to obtain our TSU number so we can locate
+* the commands issues by this session.
+*/
+SINK=JOBINFO()
+SAY "DEBUG: MY JOB NUMBER IS " job.number    /* TSU00000 */
+NUMONLY=SUBSTR(job.number,4,5)        /* remove TSU part */
+TESTCHR="0"                           /* remove leading zeros */
+DO WHILE (TESTCHR=="0")
+   TESTCHR=SUBSTR(NUMONLY,1,1)
+   IF TESTCHR=="0" THEN DO
+      NUMONLY=SUBSTR(NUMONLY,2,(LENGTH(NUMONLY)-1))
+   END
+END
+
+/*
+* Could be lots of command matches. Buffer
+* the responses, drop if needed, until we
+* only have the last response.
+*/
+RESPCOUNT=0
+RESPBUF.0=0
+
+RESPLOC=0   /* are we looking for the ACTIVITY field ? */
+ACTID="X"   /* activity is to search for */
+RC = MTT()
+IF RC > -1 THEN DO
+  DO I=1 TO _LINE.0
+    IF RESPLOC==0 THEN DO
+       /* We are trying to find the line that recorded
+          the exact command we entered that was issued
+          by this exact TSO session (or exact STC or JOB)
+          search for lines like 
+          "0000 HH.MM.DD TSU 31 command entered" 
+          "0000 HH.MM.DD STC 31 command entered" 
+       */
+       PARSE VALUE _LINE.I WITH . . XTSU TSUNUM CMDDATA
+       /* Goes splat if nothing parsed into those fields */
+       IF TSUNUM=="" THEN TSNUM="X"
+       IF CMDDATA=="" THEN CMDDATA="X"
+       IF XTSU=="" THEN CMDDATA="X"
+       /* line continuation not working, so lots of ifs */
+       /* Normally run by a TSU user */
+       IF XTSU=="TSU" THEN DO
+          IF TSUNUM==NUMONLY THEN DO
+             IF CMDDATA==CMDRQST THEN DO
+                RESPLOC=1
+             END
+          END
+       END
+       /* STCs may run it */
+       IF XTSU="STC" THEN DO
+          IF TSUNUM==NUMONLY THEN DO
+             IF CMDDATA==CMDRQST THEN DO
+                RESPLOC=1
+             END
+          END
+       END
+       /* Potentially a JOB */
+       IF XTSU="JOB" THEN DO
+          IF TSUNUM==NUMONLY THEN DO
+             IF CMDDATA==CMDRQST THEN DO
+                RESPLOC=1
+             END
+          END
+       END
+    END
+    ELSE DO
+       /* We found the command entered, must assume the next line
+        * is the one tagged with the command ID number
+        * search 0000 HH.MM.DD IEE102I HH.MM.SS YY.DDD ACTIVITY nnn 
+        * BUGGER: IEE102I is only for D A commands.
+        * Have to just assume the next message in MTT is ours, with 
+        * the activity id at the end of it.
+        * So get the last word of the message
+        */
+       w=words(_LINE.I)
+       ACTID = word(_LINE.I, max(1, w)) 
+       /* We may have buffered earlier matches. We only want the
+        * output of the last match, so drop anything we have
+        * already buffered as we are starting again.
+        * By earlier matches I mean a TSU user may have entered
+        * D A,L multiple times for a single logon session, we do
+        * not want them all just the output of the latest one
+        */
+       DROP RESPBUF
+       RESPCOUNT=0
+       RESPBUF.0=0
+       RESPLOC=0
+    END
+    /* If any messages match the line activity Id then it is a
+    *  command from this TSU session, Buffer it.
+    */
+    PARSE VALUE _LINE.I WITH LID DATA
+    IF LID==ACTID THEN DO
+       RESPCOUNT=RESPCOUNT+1
+       RESPBUF.RESPCOUNT=DATA
+       RESPBUF.0=RESPCOUNT
+    END
+  END
+  /*
+   * Now display the last responses we buffered
+   */
+  IF RESPBUF.0 > 0 THEN DO
+      DO I=1 TO RESPBUF.0
+         SAY RESPBUF.I
+      END
+  END
+  ELSE DO
+     SAY "DEBUG: NO RESPONSE DATA FOUND"
+  END
+END
+ZZ
+//

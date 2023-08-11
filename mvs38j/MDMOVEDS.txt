@@ -1,4 +1,7 @@
-//MARKASMJ JOB  (0),'ASSEMBLE MDMOVEDS',CLASS=A,MSGCLASS=T
+//MARKASMJ JOB  (0),'ASSEMBLE MDMOVEDS',CLASS=A,MSGCLASS=T,
+// USER=MVSUSERN,PASSWORD=MVSPASSW
+//* The above user/pswd are replaced by the macro I use to
+//* netcat jobs to the card reader
 //*
 //* To assemble the program
 //*   Change MARK.LIB.LOAD to your load library
