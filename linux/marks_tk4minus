@@ -1,30 +1,45 @@
 #!/bin/bash
 #
 # chkconfig: 35 90 12
-# description: Start/Stop hercules TK3 MVS3.8J system
+# description: Start/Stop hercules TK4- MVS3.8J system
 #
 # PURPOSE:
-#    Start my MVS3.8J Turnkey3 system on a headless server without
-#    any intervention being needed by me.
+#    Start my MVS3.8J Turnkey4-minus system on a headless server without
+#    any intervention being needed.
+#    Note: chkconfig is obsolete, but this works perfectly well as a systemd service.
 #
-# REQUIRES: packages ==> screen x3270 x3270-x11 x3270-text procps-ng net-tools nmap-ncat telnet hostname
-#
-# Copy script to /etc/init.d/marks_tk3 and
-#  'chkconfig --add marks_tk3' then 'chkconfig marks_tk3 on'
-#  All the links in rc3.d and rc5.d etc will be created by
-#  chkconfig (start at S90marks_tk3, stop at S12marks_tk3)
-#  as defined in the chkconfig line at the top.
+# REQUIREMENTS:
+#    Packages:-
+#      RHEL family  : coreutils x3270-text screen telnet procps-ng net-tools nmap-ncat
+#      Debian family: c3270 screen telnet procps net-tools netcat-openbsd util-linux debianutils
+#                                                          ^^^^^^^^^^^^^^ not the default netcat-traditional
+#    Hercules configuration file:- (edit enything provided with TK4- or TK4ROB)
+#      * must have 009 defined as a console (if defined with -C herules will have console access)
+#      * Must have 010 and 011 defined as 3270 consoles
+#      * must have 01F defined as a hardcopy console
+#      * should have 30E defined as a hardcopy log (no user input, just a console log)
+#      Example from my config file:
+#          # 009 is used by hercules console interface
+#          # 010 is primary 3270 console
+#          # 011 is secondary 3270 console
+#          # 01F is a hardcopy console interface (the old printer/keuyboard instead of screen console)
+#          # 30E is a console printer (defined in unit devices)
+#          0009 3215-C
+#          0010 3270 CONS
+#          0011 3270 CONS
+#          001F 3215
+#          030E 1403 log/hardcopy.log ${TK4CRLF}
 #
 # -------------------------------------------------
 # ----> R E A D M E <----
 # Before running please update the global variables after the
 # end of the header comment block, the three variables to update are
 #    RUNUSER="mark"   # This is the userid that should do the startup
-#    TK3DIR="/home/VM/hercules/turnkey3" # where is TK3 installed
-#    CONFIG="conf/marks.conf"            # the hercules config file to use
+#    TK3DIR="/home/mark/hercules/tk4-minus" # where is TK4- installed
+#    CONFIG="conf/marks.conf"            # the hercules config file to use, under above directory
 #    IPL_VOL="148"                       # the IPL volume
 # -------------------------------------------------
-# Issues, solced and unsolved, are in a comment block at the end of
+# Issues, solved and unsolved, are in a comment block at the end of
 # the script file.
 #
 # The script may look a little messy as it is using multiple ways of
@@ -41,17 +56,17 @@
 #
 # SYNTAX:
 #    scriptname start 
-#         start the TK3 system, telnet, consoles and IPL to fully active state
+#         start the TK4- system, telnet, consoles and IPL to fully active state
 #    scriptname stop
-#         does the 'f taskmon,shutnow', ends jes2, z eod and quiesce, and
+#         does the 'f bsppilot,shutnow', ends jes2, z eod and quiesce, and
 #         tries to shutdown hercules, using a kill if needed (see the known
-#         issues at the end of this file as ti why a kill of hercules may
+#         issues at the end of this file as to why a kill of hercules may
 #         be needed)
 #
 # INTERACTIVE INTERFACES:
 #    As the user that runs this script
 #       screen -r hercules
-#             connect to the hercules hardware console
+#             connect to the hercules hardware console (ctrl-A d to disconnect again)
 #       screen -r hardcopy
 #             connect to the telnet session if you really want to
 #       screen -r c3270A
@@ -61,7 +76,8 @@
 #
 #    network interfaces
 #       tcpip port 3270 - 
-#             standard hercules assignment, telnet, consols and terminals connect here
+#             standard hercules assignment, telnet (hardcopy), and consoles 
+#             connect here during script operation
 #
 # BATCH INTERFACES:
 #       tcpip port 3271 -
@@ -81,17 +97,40 @@
 
 # ----------- U P D A T E   T H E S E -------------
 RUNUSER="mark"   # This is the userid that should do the startup
-TK3DIR="/home/mark/hercules/turnkey3" # where is TK3 installed
-CONFIG="conf/marks.conf"            # the hercules config file to use
+TK3DIR="/home/mark/hercules/tk4-minus" # where is TK3 installed
+CONFIG="mark/marks-midgw.conf"            # the hercules config file to use
 IPL_VOL="148"                       # Volume to IPL off
 localhost="127.0.0.1"               # On F18 localhost doesnt work,
                                     # 127.0.0.1 does so make it a
                                     # variable so I can change it easily
                                     # between my systems
+# THE BELOW IS IF YOU HAVE BUILT YOUR OWN COPIES OF HERCULES FROM THE
+# LATEST SOUCRCES ON GITHUB. LEAVE EMPTY IF YOU ARE USING ONE INSTALLED
+# FROM YOUR DISTRO REPOSITORIES OR INSTALLED IN YOUR SEARCHPATH
+# (Recomended: also use the latest available, of both depending on what you are doing)
+#LOCAL_HERCULES_INSTALL=""       # leave empty if already globally installed
+LOCAL_HERCULES_INSTALL="/home/mark/hercules/hyperion"    # bin and lib under here
+#LOCAL_HERCULES_INSTALL="/home/mark/hercules/spinhawk"    # bin and lib under here
 # --------- E N D   O F   U P D A T E S -----------
+
 HERCULES_RC="/tmp/hercstartup.tmp"  # must unfortunately use an rc file
                                     # (see known issues at end of this file)
 export HERCULES_RC                  
+
+# RHEL and Debian have versions of netcat that behave in different ways
+# For Debian must use "netcat-openbsd" (not netcat-traditional) and pass 
+# the -N option to tell it to complete the nc command at end of input
+# The default version of netcat on rhel family systems currently works
+# as I would expect it to so no flags needed.
+nc_opts=""
+isdebian=`uname -a | grep -i debian`
+if [ "${isdebian}." != "." ];
+then
+   nc_opts="-N"
+else
+   nc_opts=""
+fi
+unset isdebian
 
 # ----------------------------------------------------------
 # We are opening up ports, do not do so as root !!!
@@ -170,26 +209,22 @@ roll_log() {
 # ----------------------------------------------------------
 is_running() {
     active="no"
-    # additional sd-pam, ps -ef, marks_tk3, systemd; added in grep exclusion list
-    # for x1 as they all cause false positives when running under fedora x64 in an
-    # openstack instance; why I don't know as they never show up in the ps under
-    # Fedora 32bit under kvm.
-    x1=`ps -ef | grep hercules | grep -v grep | grep -v "sd-pam" | grep -v "ps -ef" | grep -v "marks_tk3" | grep -v "systemd"`
+    x1=`ps -ef | grep hercules | grep -v grep`
     if [ "${x1}." != "." ];
     then
         active="yes"
     fi
-    x2=`netstat -an | grep tcp |grep 3270 | grep LISTEN | grep -v grep`
+    x2=`netstat -an | grep tcp | grep 3270 | grep LISTEN | grep -v grep`
     if [ "${x2}." != "." ];
     then
         active="yes"
     fi
-    x3=`netstat -an | grep tcp |grep 3271 | grep LISTEN | grep -v grep`
+    x3=`netstat -an | grep tcp | grep 3271 | grep LISTEN | grep -v grep`
     if [ "${x3}." != "." ];
     then
         active="yes"
     fi
-    x4=`netstat -an | grep tcp |grep 3272 | grep LISTEN | grep -v grep`
+    x4=`netstat -an | grep tcp | grep 3272 | grep LISTEN | grep -v grep`
     if [ "${x4}." != "." ];
     then
         active="yes"
@@ -200,7 +235,7 @@ is_running() {
 
 # ----------------------------------------------------------
 # start_system:
-# start the hercules turnkey3 system
+# start the hercules TK4- system
 #
 # (a) make sure hercules is not already running
 # (b) roll the log files
@@ -208,9 +243,11 @@ is_running() {
 # (d) start the telnet session to the hardcopy print terminal
 # (e) start master console, use scriptport 3271
 # (f) start the secondary console, use scriptport 3272
-# (g) provide the 'enter' key to master console as IPL options
+# (g) provide the R 00,CLPA and 'enter' key to master console as IPL options
 # (h) switch master console to RD mode
 # (i) switch backup console to RD mode
+# (j) set master console display area to none
+# (k) set backup console display area to none
 # ----------------------------------------------------------
 start_system() {
    # Do not try to start anything if it looks like it is already
@@ -223,30 +260,26 @@ start_system() {
    fi
 
    # Roll any existing log files
-   roll_log prt/prt00e.txt 5         # roll the logs, keep 5 old versions
-   roll_log prt/prt00f.txt 5         # roll the logs, keep 5 old versions
-   roll_log log/hardcopy.log 5       # roll the logs, keep 5 old versions
-   roll_log log/hercules.log 5       # roll the logs, keep 5 old versions
+   roll_log prt/prt00f.txt 3         # roll the logs, keep 3 old versions
+   roll_log log/hardcopy.log 3       # roll the logs, keep 3 old versions
+   roll_log log/hercules.log 3       # roll the logs, keep 3 old versions
 
    # Initialise the hercules.rc file we need to IPL
    # The first commands entered to hercules must be from the hercules.rc file
    # see know issues at the end of the script for why
-   echo "pause 60" > ${HERCULES_RC}
+   echo "" > ${HERCULES_RC}    # empty any previous file
+   # Needed for FTPD 
+   # https://github.com/MVS-sysgen/FTPD/blob/main/source/build/BUILD.md
+   echo "facility enable HERC_TCPIP_EXTENSION" >> ${HERCULES_RC}
+   echo "facility enable HERC_TCPIP_PROB_STATE" >> ${HERCULES_RC}
+   # A 1 min pause before IPL to allow all the consoles to correctly attach
+   echo "pause 60" >> ${HERCULES_RC}
    echo "ipl ${IPL_VOL}" >> ${HERCULES_RC}
    screen -t hercules -S hercules -p hercules -d -m hercules -f ${CONFIG} > log/hercules.log 
    sleep 5
-   xx=""
-   while [ "${xx}." = "." ];
-   do
-      xx=`netstat -an | grep 3270 | grep tcp | grep LISTEN`
-      if [ "${xx}." = "." ];
-      then
-         echo "Waiting fot port 3270 to listen"
-         sleep 5
-      fi
-   done
    # start the telnet session to port 3270
    screen -t hardcopy -S hardcopy -p hardcopy -d -m telnet ${localhost} 3270
+   sleep 1
 
    # While commands can be "stuff'ed" into c3270 sessions I have found no
    # way to trigger the 'enter' key to get the command string accepted 
@@ -254,14 +287,13 @@ start_system() {
    # So we have to use the scriptport option of c3270 so we can trigger
    # the enter key that way, we can use nc to pass the script commands
    # to the session to be executed.
-   screen -t c3270A -S c3270A -p c3270A -d -m c3270 -scriptport 3271 ${localhost}:3270
-   sleep 1
-   screen -t c3270B -S c3270B -p c3270B -d -m c3270 -scriptport 3272 ${localhost}:3270
+   screen -t c3270A -S c3270A -p c3270A -d -m c3270 -scriptport 3271 010@${localhost}:3270
+   sleep 10      # long sleep, console A must start
+   screen -t c3270B -S c3270B -p c3270B -d -m c3270 -scriptport 3272 011@${localhost}:3270
    sleep 1
    # Not starting the 3rd screen for TSO, I start that as needed remotely
 
    # Wait for things to stabalise, and the hercules pause to pass
-   # when run from init.d 40 secs was not long enough, use 60
    sleep 60 
 
    # The hercules command session refuses to accept the initial IPl command
@@ -273,7 +305,7 @@ start_system() {
    # in daemon mode instead and rely on the hercules.rc to ipl for us.
 
    # And enter the IPL options (just the enter key normally)
-   # You can uncomment the R00,CLPA here if you want
+   # You can uncomment the R 00,CLPA here if you want
    #   CRITICAL
    #     UNDER FEDORA 18 THE BELOW COMMAND JUST DOES NOT WORK
    #     SHOWS CORRECT SYNTAX ON 3270 SCREEN BUT ISNT USEABLE
@@ -281,11 +313,17 @@ start_system() {
    #     CLPA ERRORS THE SECOND ENTER WILL CONTINUE THE IPL
    #     WITHOUT THE CLPA TO AVOID USER INTERVENTION
    #   The CLPA string worked in F13,14,15,16,17 but will
-   #   not work under F18. Wish they wouldn't break things.
-   echo 'string("R 00,CLPA")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
-   sleep 1
-   echo "enter()" | nc ${localhost} 3271
+   #   not work under F18 or F23.
+   #   Wish they wouldn't break things.
+   sleep 10
+   echo 'Debug: "R 00,CLPA"' 
+   echo 'string("R 00,CLPA")' | nc ${nc_opts} ${localhost} 3271
+   sleep 2
+   echo 'Debug: using enter"' 
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
+   sleep 5
+   echo 'Debug: using enter"' 
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    # wait for quite a while, for everything to start
    # NOTE: sleep 20 works fine on my public webserver, but on my dev server
    #       that is also my network backup server, that runs at 100%
@@ -296,24 +334,30 @@ start_system() {
    then
       sleep 150
    else
-      sleep 30
+      sleep 20
    fi
    # then change both 3270 consoles to RD mode
    # keep the K A on a seperate line, its invalid on the K S line
-   echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
-   echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${localhost} 3272
-   echo "enter()" | nc ${localhost} 3272
+   echo 'Debug: setting RD on console 3271'
+   echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
+   sleep 4
+   # OK, BUGGER, in Rob Prins new TK4 the second console is not activated !!!!
+   # fixed in my config, both must be present for my system
+   echo 'Debug: setting RD on console 3272'
+   echo 'string("K S,DEL=RD,SEG=09,RTME=001,RNUM=19,CON=N")' | nc ${nc_opts} ${localhost} 3272
+   echo "enter()" | nc ${nc_opts} ${localhost} 3272
    sleep 2
-   echo 'string("K A,NONE")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
-   echo 'string("K A,NONE")' | nc ${localhost} 3272
-   echo "enter()" | nc ${localhost} 3272
+   echo 'Debug: setting K A,NONE on console 3271'
+   echo 'string("K A,NONE")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
+   sleep 2
+   echo 'Debug: setting K A,NONE on console 3271'
+   echo 'string("K A,NONE")' | nc ${nc_opts} ${localhost} 3272
+   echo "enter()" | nc ${nc_opts} ${localhost} 3272
+   sleep 2
    # log file to be available for screen scrapes
    chmod 644 log/hardcopy.log
-   sleep 30
-   echo 'string("R 00,REBOOT BY HOST RESTART AUTOMATION")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
 } # start_system
 
 # ----------------------------------------------------------
@@ -360,36 +404,37 @@ stop_system() {
    fi
 
    # Shutdown the system using the master console script port
-   echo 'string("F BSPPILOT,SHUTNOW")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
+   echo 'string("F BSPPILOT,SHUTNOW")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    # T O D O - put an expect() into the script so we know
    #           when we can carry on, until then delay lots
    sleep 120
 
    # We assume everything has stopped by now
    # So stop JES2
-   echo 'string("$PI")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
+   echo 'string("$PI")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    sleep 1
-   echo 'string("$P")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
+   echo 'string("$P")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    sleep 1
-   echo 'string("$PJES2")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
+   echo 'string("$PJES2")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    sleep 120
 
    # We assume JES2 has stopped now
-   echo 'string("Z EOD")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
+   echo 'string("Z EOD")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    sleep 2
-   echo 'string("QUIESCE")' | nc ${localhost} 3271
-   echo "enter()" | nc ${localhost} 3271
+   echo 'string("QUIESCE")' | nc ${nc_opts} ${localhost} 3271
+   echo "enter()" | nc ${nc_opts} ${localhost} 3271
    sleep 2
 
    # Stop hercules itself now
    screen -S hercules -X stuff $'stopall \n'  # $ and quotes so \n is escaped
+   screen -S hercules -X stuff $'sysclear \n' # $ and quotes so \n is escaped
    screen -S hercules -X stuff $'quit \n'     # $ and quotes so \n is escaped
-   # If it didn't stop (see known issues) frin the pid and kill it
+   # If it didn't stop (see known issues) find the pid and kill it
    pid=`ps -ef | grep "hercules" | grep "${RUNUSER}" | grep -v grep | awk {'print $2'}`
    if [ "${pid}." != "." ];
    then
@@ -429,6 +474,17 @@ status_system() {
 # ----------------------------------------------------------
 # Now the easy bit, what are we doing and do it.
 # ----------------------------------------------------------
+# Do I have a local copy of hyperion to use instead of the
+# repository provided one ?
+if [ -d /home/mark/hercules/hyperion ];
+then
+   oldpath="$PATH"
+   oldldpath="$LD_LIBRARY_PATH"
+   export PATH=/home/mark/hercules/hyperion/bin:$PATH
+   export LD_LIBRARY_PATH=/home/mark/hercules/hyperion/lib:$LD_LIBRARY_PATH
+#   export PATH=/home/mark/hercules/spinhawk/bin:$PATH
+#   export LD_LIBRARY_PATH=/home/mark/hercules/spinhawk/lib:$LD_LIBRARY_PATH
+fi
 case "$1" in
    "start")  start_system
              ;;
@@ -438,9 +494,19 @@ case "$1" in
              ;;
    *)        echo "Syntax: $0 start|stop|status"
              echo "$0 $1 $2 : invalid"
-             exit 1
              ;;
 esac
+# restore paths info if we changed it
+if [ -d /home/mark/hercules/hyperion ];
+then
+   export PATH=${oldpath}
+   if [ "${oldldpath}." == "." ];
+   then
+      unset LD_LIBRARY_PATH
+   else
+      export LD_LIBRARY_PATH=${oldldpath}
+   fi
+fi
 exit 0
 # ==========================================================
 # KNOWN ISSUES SECTION:
@@ -449,7 +515,7 @@ exit 0
 # ------------------------------------------
 # (1) c3270 running under screen - no way to provide the ENTER AID key
 #     while the screen -X command can place commands into the command
-#     line of teh c3270 session I could find no way of triggering the
+#     line of the c3270 session I could find no way of triggering the
 #     ENTER key AID code to process the command. Newline (\n) just
 #     tabbed between the two command linput lines, \0x07d, \0x013,
 #     \0x027 all did nothing either.
@@ -483,6 +549,12 @@ exit 0
 #            as a workaround, but getting it back under screen is 
 #            handier.
 #
+# (3) The reason for the kill of hercules at the end of the shutdown
+#     logic... is because sometimes in the past IO to hercules 'blocked'
+#     and did not accept quit commands (also hyperion and spinhawk
+#     behave differetly under screen sessions), so it is there just
+#     to make sure it stops.
+#
 # Issues remaining
 # ---------------------------------------------
 # (A) Timing issues at startup.
@@ -507,25 +579,18 @@ exit 0
 # (B) Shutdown procedure
 # Not actually an issue as such, if the shutdown is run manually its fine.
 # The issue is at server shutdown, of course the script is started, but a
-# Fedora server will have completed its shutdown and powered off the 
-# server long before the script finishes running.
-# Nothing to be done about that.
+# Linux server issues a shutdown command will have completed its shutdown and  
+# powered off the server long before the script finishes running.
+# Nothing to be done about that (note: could make it a systemd service with 
+# a long timeout; I haven't).
 #
 # (C) Fedora Core 18... so many problems
 # The fixed one is 'nc' to localhost failed, so I created a variable
 # 'localhost' to replace all references to localhost. On F18 systems
 # this needs to be set to "127.0.0.1" (which works) instead of
 # "localhost" which stopped working in F18.
-# -- The unfixed issue --
-# Changes in either netcat (nc) or c3270 prevent the CLPA command
-# from working (the origional "string (R00,CLPA)" had the comma
-# stripped out when it hit the c3270 session, changing to 
-# 'string("R00,CLPA")' shows the correct format in the c3270 
-# session but still is treated as an invalid response.
-# So I sleep 1 and submit another enter to allow the IPL to
-# continue without a CLPA (if the clpa was accepted the extra
-# enter causes no issues).
-# This error is F18 specific, the script runs OK on F13,14,15,16,17
-# SO IF YOU NEED TO CLPA YOU MUST START HERCULES MANUALLY TO DO SO
-# INSTEAD OF USING THIS SCRIPT... FOR FEDORA 18 ONLY.
+# I do not know if this is still an issue as I have moved
+# on through to Alma 8/9 and Debian 11/12 with no issues with
+# the script ny not changing that tweak in the script.
+#
 # ==========================================================

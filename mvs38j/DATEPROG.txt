@@ -17,6 +17,7 @@
 //* Also the programs are setup to assemble into dataset name
 //* MARK.LIB.LOAD. You may want to globally change that before
 //* running this job to save on editing later.
+//* Exception: the actual scheduler uses MARK.LIB.LOAD.APFAUTH
 //*
 //* The SYSLIB macro searchlist for the programs and example
 //* programs will source macros from the install library name
@@ -156,7 +157,8 @@ Edit SCHED002,
    you installed this file as
  - run the job
 Edit SCHEDTST ( *** very optional, the scheduler will start ***)
- - change the load library from MARK.LIB.LOAD to one you want to use
+ - change the load library from MARK.LIB.LOAD.APFAUTH to one you have
+   available for testing APF authorised programs
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
    you installed this file as
  - CHANGE THE TEST DATA CARDS, CHANGE THE JOBDECKS DD TO A DATASET
@@ -3397,15 +3399,21 @@ R15      EQU   15
 //* enhanced constantly as I think of extras I need.
 //*
 //* This is fully functional for scheduling JOBs on MVS3.8J
+//* It is what I am now using.
 //*
 //* Note: the test program step uses a SYSIN card deck stream for
 //*       input. To test the reload function you probably really
 //*       want to use a dataset so you can edit the data cards.
 //*
+//* CURRENT OPERATOR COMMANDS:
+//*    F STCNAME,STATUS
+//*    F STCNAME,RELOAD
+//*    P STCNAME
+//*
 //* CURRENT STATUS:
 //*   --> scheduling of jobs and commands works OK. Jobs are 
 //*       submitted via INTRDR so the program does not have to be
-//*       authurised if only job submission is required.
+//*       authourised if only job submission is required.
 //*       If command members are to be used then it must be
 //*       assembled AC=1 into an APF authourised library to access
 //*       the restricted SVC34 function.
@@ -3417,16 +3425,11 @@ R15      EQU   15
 //*   + PARM="USER=user,PASSWORD=password" can be provided to
 //*     the program which will be appended as a job continuation
 //*     card for batch jobs if provided. Needed on RAKF systems
-//*     where the default batch class should be denied by default
-//*
-//* IN PROGRESS
-//*   - the ability to issue console commands on schedule. Same
-//*     jobfile but members starting @ are assumed to be command
-//*     cards instead of JCL cards. REQUIRES that we are APF
-//*     authourised so a test is done and if we are not then
-//*     at execution time we just log that the command member
-//*     will be skipped. This allows all the scheduling to
-//*     continue to be tested.
+//*     (mine anyway) where the default batch class is sensibly
+//*     denied access to anything so they are needed
+//*   + issuing console commands can also be scheduled, same
+//*     scheduling syntax but any member name begining @ is treated
+//*     a a list of commands to be issued.
 //*
 //* PENDING, in order of requirements
 //*   - sanity check input cards to ensure numbers are where
@@ -3434,7 +3437,7 @@ R15      EQU   15
 //*   - Thinking, maybe replace the PARM= to provide a user/password
 //*     pair with a control file that does it based on jobname
 //*     prefix so different batch jobs can run with different
-//*     authorities
+//*     authorities.
 //*   - change console status display to only display on the
 //*     requesting console
 //*   - LOW PRIORITY as I already do this externally
@@ -3985,13 +3988,12 @@ INITBLK  NI    0(R6),X'00'           RESET BLOCK TO BINARY ZEROS.
          LR    R10,R8                R10= ADDRESS OF MEMBER BLOCK, REC1
          LR    R9,R10                use r9 to address block end
          AH    R9,JFCBLKSI           to block end (what we getmained)
-NEXTREC  CLI   0(R10),X'00'          SKIP NULLS AT END OF BLOCK
-         BE    SKIPBLNK
-*
+NEXTREC  CLI   0(R10),X'00'          IF NULLS END OF DATA IN MEMBER
+         BE    EOFMMBR           Possibly because we zero filled first
+*                                rather than a end of data marker
 * If a command stream go do trhat with the line
          CLI   CMDDECK,C'Y'       IF CMDS GO DO THAT       
          BE    CSKIP002
-*
 * Else if is JCL we write to PUNCH
          MVC   JCLCARD(L'JCLCARD),0(R10)   MOVE LINE TO JCLCARD
 * Extra steps for inserting continuation jobcard
@@ -4012,9 +4014,13 @@ XTR002   ST    R1,SAVEJOB1           PUT USES REGS 1,14,15
 * Process a command card
 CSKIP002 CLI   0(R10),C'*'           COMMENT CARD ?
          BE    SKIPBLNK              YES, IGNORE IT
+         CLI   0(R10),C' '           LEADING SPACE IS NOT LEGAL
+         BE    SKIPBLNK              YES, IGNORE IT
+         CLI   0(R10),X'00'          MAY BE JUNK AT END Of DATA BLOCK
+         BE    SKIPBLNK              YES, IGNORE IT
          MVC   SVC34CMD(L'SVC34CMD),0(R10)  MOVE COMMAND TO SVC34 BUF
          MVC   WTOCMD+33(35),SVC34CMD
-WTOCMD   WTO   'MIDX2XXI ISSUING COMMAND ....+....1....+....2....+....3X
+WTOCMD   WTO   'MID0242I ISSUING COMMAND ....+....1....+....2....+....3X
                ....+'
          MODESET KEY=ZERO,MODE=SUP
          SR    R1,R1
@@ -4273,7 +4279,7 @@ LT       EQU   4    * A LOW
 * *********************************************************************
 *
 * Y O U   S H O U L D   H A V E   C O N T R O L   C A R D S   I N   A
-* P D S   M E M B E R.
+* P D S   M E M B E R (Needed for the "reload" command at least).
 * The inline SYSIN here is to DEMO the functions, for live use 
 * (and the reload function to be of use) you need a datafile that
 * can be edited.

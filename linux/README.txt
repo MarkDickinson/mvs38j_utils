@@ -1,4 +1,4 @@
-I now run Turnkey3 under Hercules on a linux system.
+I now run Turnkey4- under Hercules on a linux system.
 Using a Linux host system allows a lot of flexibility, my key scripts
 are provided here.
 
@@ -14,16 +14,15 @@ makepdf                  - convert a text file to a PDF file.
                            job output as well as the text output.
                            Can be used standalone to convert text
                            files to PDF files but line/column sizes
-                           I have tries to tweak for lineflow output.
+                           I have tried to tweak for lineflow output.
 
-marks_tk3                - LINUX headless startup/shutdown of a TK3
+marks_tk4minus           - LINUX headless startup/shutdown of a TK4-
                            system using screen and c3270. Push the
                            power on button on the server and five
                            minutes later from any remote client you
-                           can logon to tso.
-                           or ssh to the server and use 'screen' to
-                           directly connect to the backgrounded
-                           application sessions on the server
+                           can logon to tso, or ssh to the server and
+                           use 'screen' to directly connect to the
+                           backgrounded application sessions on the server
 
 printer_interface.sh     - bash script to process text streams from
                            a hercules printer into unique job files.

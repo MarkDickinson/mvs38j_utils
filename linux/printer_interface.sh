@@ -17,6 +17,11 @@
 #                  being dropped from lines as we want the PDF file
 #                  to look correct, didn't matter when the browser
 #                  was displaying just text.
+# 2023/02/16: MID: added a chmod 644 after each output file is 
+#                  created so it can be read without changing userid
+#                  (needed for my containers that v mount to local storage)
+#                  Always create a JOB PDF, having it inside a
+#                  check to for other functions was not logical
 # ----------------------------------------------------------------
 
 # Figure out where our prt directory is knowing we are in xxx/mark/scripts
@@ -71,6 +76,18 @@ do
       if [ "${is_eoj}." != "." ];
       then
          echo "${dataline}" >> ${PRTDEST}
+      else 
+         chmod 644 ${PRTDEST}
+      fi
+      #
+      # create a copy as a PDF file 
+      if [ -x ${mydir}/makepdf ];
+      then
+         PRTDEST2=`echo "${PRTDEST}" | sed -e 's/txt/pdf/'`
+         ${mydir}/makepdf "${PRTDEST}" "${PRTDEST2}"
+         chmod 644 ${PRTDEST2}
+      else
+         PRTDEST2=""
       fi
       # added the below to copy printed output files to the
       # hercules section of my website so users of my guest
@@ -87,15 +104,13 @@ do
       then
          if [ "${PRTDEST}." != "default.txt." ];
          then
-            # added convert to PDF before the copy if my makepdf is present
-            if [ -x ${mydir}/makepdf ];
-            then
-               PRTDEST2=`echo "${PRTDEST}" | sed -e 's/txt/pdf/'`
-               ${mydir}/makepdf "${PRTDEST}" "${PRTDEST2}"
-               nohup sudo ${mydir}/printer_copytowebsite.sh "${PRTDEST2}" &
-            fi
             # text file to always be there
             nohup sudo ${mydir}/printer_copytowebsite.sh "${PRTDEST}" &
+            # PDF file may not be
+            if [ "${PRTDEST2}." != "." -a -f ${PRTDEST2} ];
+            then
+               nohup sudo ${mydir}/printer_copytowebsite.sh "${PRTDEST2}" &
+            fi
          fi
       fi
       PRTDEST="default.txt"
