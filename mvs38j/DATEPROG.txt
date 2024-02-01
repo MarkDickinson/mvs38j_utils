@@ -826,6 +826,7 @@ UDATE001 TITLE 'Get date and time'
 * 2013/07/18 MID Replace the leap yer checking/testing code. It was 
 *                all wrong in James origional code that I blindly
 *                copied. Should be OK now.
+* 2024/02/02 MID Update the yeartab table for the next 10yrs 
 *----------------------------------------------------------------------
          PRINT  ON,GEN
 UDATE001 CSECT
@@ -985,7 +986,7 @@ GETDAY2  IC    R1,DAYTABLE(R1)          GET CURRENT DAY OF THE WEEK
          MVC   D370WKDY(1),CURRDAY          0-6
          MVC   D370TIME(8),SACHRTM          hhmmssth
          BAL   R1,V1DAYNAM             (2013/06/21) add dayname
-EXIT     EQU   *
+EXIT     CNOP  0,4
          L     R13,4(R13)
          LM    R14,R12,12(R13)
          SLR   R15,R15
@@ -1084,19 +1085,18 @@ THUR     EQU   4
 FRI      EQU   5
 SAT      EQU   6
 * YEARTAB:   YY OF YEAR, DAY (0-6) OF JAN 1ST FOR YEAR
-YEARTAB  DC    X'13',AL1(TUES) 2013
-         DC    X'14',AL1(WED)  2014
-         DC    X'15',AL1(THUR) 2015
-         DC    X'16',AL1(FRI)  2016
-         DC    X'17',AL1(SUN)  2017
-         DC    X'18',AL1(MON)  2018
-         DC    X'19',AL1(TUES) 2019
-         DC    X'20',AL1(WED)  2020
-         DC    X'21',AL1(FRI)  2021
-         DC    X'22',AL1(SAT)  2022
-         DC    X'23',AL1(SUN)  2023
-         DC    X'24',AL1(MON)  2024
+YEARTAB  DC    X'24',AL1(MON)  2024
          DC    X'25',AL1(WED)  2025
+         DC    X'26',AL1(THUR) 2026
+         DC    X'27',AL1(FRI)  2027
+         DC    X'28',AL1(SAT)  2028
+         DC    X'29',AL1(MON)  2029
+         DC    X'30',AL1(TUES) 2030
+         DC    X'31',AL1(WED)  2031
+         DC    X'32',AL1(THUR) 2032
+         DC    X'33',AL1(SAT)  2033
+         DC    X'34',AL1(SUN)  2034
+         DC    X'35',AL1(MON)  2035
          DC    X'FF'
 DAYTABLE DC    AL1(SUN),AL1(MON),AL1(TUES),AL1(WED),AL1(THUR),AL1(FRI)
          DC    AL1(SAT),AL1(SUN),AL1(MON),AL1(TUES),AL1(WED),AL1(THUR)
@@ -1668,6 +1668,8 @@ Change History
              programs shipped with this file.
 2016/11/13   Updated SCHEDTST member, now also supports issuing
              console commands as well as submitting jobs
+2024/02/02   Updated UDATE001 table YEARTAB for the next 10yrs as
+             I had been using this for so long it expired on me
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&REG=
@@ -4381,9 +4383,9 @@ DUMPEREP W 2200 5            EVERY FRIDAY, DUMPEREP
 MONTH01  D 1105 01           FIRST OF EVERY MONTH, DEMO
 MONTH01  D 1105 20           TWENTIETH OF EVERY MONTH, DEMO
 MONTH31  D 0105 31           THIRTYFIRST, **READ** PGM COMMENTS
-XMASMSG  U 0900 2016/12/25   EXACT TIME DATE PROVIDED, DEMO
-XMASMSG  U 0900 2017/12/25   EXACT TIME DATE PROVIDED, DEMO
-XMASMSG  U 0900 2018/12/25   EXACT TIME DATE PROVIDED, DEMO
+XMASMSG  U 0900 2025/12/25   EXACT TIME DATE PROVIDED, DEMO
+XMASMSG  U 0900 2026/12/25   EXACT TIME DATE PROVIDED, DEMO
+XMASMSG  U 0900 2027/12/25   EXACT TIME DATE PROVIDED, DEMO
 DUPTIME  W 1135 4            EXPECT EVERY THURSDAY 
 /*
 //
