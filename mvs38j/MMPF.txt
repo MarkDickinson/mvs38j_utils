@@ -1326,10 +1326,11 @@ MDSCHED1 S MDSCHED1
 *   cards twice. In the smaller library blksize 3200 there were 41    *
 *   cards so it should have just gone over the blocksize, but it was  *
 *   not the last card read twice but the whole file ?????.            *
-*   Still to be debugged, WORKAROUND: a card of ENDDECK at the end of *
+*   WORKAROUND: a card of ENDDECK at the end of                       *
 *   the file will now be used to stop the 'read next data block' loop *
-*   (although its not looping as such, it just does it twice rather   *
-*    than loop forever; bugger of a thing to figure out)              *
+*   NOTE: I have the fix, just not time to code it, not urgent as the *
+*         ENDDECK workaround works fine (note: fix in datelib/schedtst*
+*         if interested)                                              *
 *                                                                     *
 ***********************************************************************
 *
@@ -4215,11 +4216,8 @@ ENDDECK
 **********************************************************************
 MMPF
 ====
-(1) In a dataset where there are not enough message rules to fill more
-    than the first block in the file for some reason the PDS read
-    routines I have coded read the block twice (store double the rules
-    expected). Where the message rules do need more than one data block
-    it works just fine ?.
+(1) If a member being read does not use more than one block garbage   
+    can be read/processed.
     The workaround, as seen in my example ruleset above, is to code an
     ENDDECK card at the end of the ruleset. This indicates to the
     program not to read any further cards.
@@ -4227,6 +4225,9 @@ MMPF
     testing, I can move rules below it for safekeeping when I don't
     want to use them but don't want to lose them, so have no need to
     bother fixing this bug.
+    Notes: I have identified the fix for this issue, just have not
+    got time to code/test it in this program yet (has been tested in
+    others)
 (2) A blank comma seperated field (ie: ,,) will return , rather than
     a blank field in message parsing. I am happy with that as I would
     have somthing always returned for a field; documented here as

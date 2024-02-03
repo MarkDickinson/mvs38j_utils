@@ -1670,6 +1670,10 @@ Change History
              console commands as well as submitting jobs
 2024/02/02   Updated UDATE001 table YEARTAB for the next 10yrs as
              I had been using this for so long it expired on me
+2024/02/03   Finally fixed the member block READ/CHECK code so
+             it does not use junk data at the end of the block
+             (probably made D2 field too large but hard to find out
+             what if should be for the decb extract).
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&REG=
@@ -3696,6 +3700,7 @@ OPCMDRET CNOP  0,4
 CALCNEW  SR    R2,R0              else use nexttime-currtime
 CALCDONE ST    R2,MINDIFF         and save the new difference
 * debugging, what the hell is happening to that timer
+* it works while this debug code/msg is in place
          SLR   R0,R0
          L     R1,MINDIFF           minutes until next activity
          D     R0,ONEMIN            div by 1min hsecs
@@ -3985,13 +3990,18 @@ NEXTBLK  LR    R6,R8                 SET R6 TO THE BEGINNING OF BLOCK
          LA    R9,1                  ONE BYTE CHAR INCREMENT IN BXLE
 INITBLK  NI    0(R6),X'00'           RESET BLOCK TO BINARY ZEROS.
          BXLE  R6,R9,INITBLK
-         READ  D2,SF,JOBDECKS,(R8)   READ A BLOCK FROM MEMBER TO BUF R8
+         READ  D2,SF,JOBDECKS,(R8),MF=E   READ A BLOCK TO BUF R8
          CHECK D2                    WAIT FOR IO TO COMPLETE
          LR    R10,R8                R10= ADDRESS OF MEMBER BLOCK, REC1
          LR    R9,R10                use r9 to address block end
          AH    R9,JFCBLKSI           to block end (what we getmained)
+         L     R1,D2+16          R1 ---> IOB
+         SH    R9,14(R1)         subtrack residual length to get actual
+*                                blocksize read into R9
 NEXTREC  CLI   0(R10),X'00'          IF NULLS END OF DATA IN MEMBER
          BE    EOFMMBR           Possibly because we zero filled first
+         CLI   0(R10),X'FF'          IF FF END OF DATA IN MEMBER
+         BE    EOFMMBR          
 *                                rather than a end of data marker
 * If a command stream go do trhat with the line
          CLI   CMDDECK,C'Y'       IF CMDS GO DO THAT       
@@ -4019,6 +4029,8 @@ CSKIP002 CLI   0(R10),C'*'           COMMENT CARD ?
          CLI   0(R10),C' '           LEADING SPACE IS NOT LEGAL
          BE    SKIPBLNK              YES, IGNORE IT
          CLI   0(R10),X'00'          MAY BE JUNK AT END Of DATA BLOCK
+         BE    SKIPBLNK              YES, IGNORE IT
+         CLI   0(R10),X'FF'          MAY BE JUNK AT END Of DATA BLOCK
          BE    SKIPBLNK              YES, IGNORE IT
          MVC   SVC34CMD(L'SVC34CMD),0(R10)  MOVE COMMAND TO SVC34 BUF
          MVC   WTOCMD+33(35),SVC34CMD
@@ -4203,6 +4215,8 @@ EXTRACT1 EXTRACT ,FIELDS=COMM,MF=L
 CMDSTOP  DC    CL5'STOP',X'00'     to test operator input
 CMDSTATU DC    CL7'STATUS',X'00'   show pending jobs/status display
 CMDRELOD DC    CL7'RELOAD',X'00'   reload schedule control file    
+         DS    0F                  align the below
+D2       DS    CL152               extract area for mf=e READ
          EJECT
 ***********************************************************************
 *                                                                     *
