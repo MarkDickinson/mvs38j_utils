@@ -1,5 +1,5 @@
 //MARKMMPF JOB (0),'INSTALL MMPF',CLASS=A,MSGCLASS=T,
-//  MSGLEVEL=(1,1)
+//  MSGLEVEL=(1,1),USER=MARK,PASSWORD=MVS38J
 //*
 //*   My MPF / Marks MPF / MVS 3.8J console automation 
 //*      without IEECVXIT (almost, see notes below)
@@ -1135,8 +1135,12 @@ WILL THIS BREAK-ON-HYPHEN NOW
 * ANY LINE STARTING WITH AN * IS A COMMENT
 * YOU CANNOT PUT COMMENTS AT THE END OF A ACTION LINE
 *
-* LNK - link to another program in your linklist
-* CMD - issue the command to the console
+* LNK - link to another program in your linklist with the parms
+*       that expects. for mmpfex it is two bytes indicating the 
+*       mmpfexNN NN member to be used and the second a string 
+*       identifing the rule (examples in here)
+* CMD - issue the command to the console. this includes replying
+*       to WTORs with &WORD1 as the reply number
 * CMK - like cmd but message being processed is dommed, added 
 *       as some messages do not get DOMed by the OS after a
 *       action condition is cleared, so this prevents an endless
@@ -1150,70 +1154,93 @@ WILL THIS BREAK-ON-HYPHEN NOW
 *       will be checked by MMPF on the next cycle, so you can
 *       rewrite messages into a common format for automation
 *       should you want to. Added for no particular reason.
-*       Note: WTORs will not be DOMed, you must reply to those
+*
+* Columns are fixed
+* Message-id cols 1-8
+* Action-type cols 10-12
+*    for LNK program module 14-21, program parm string 23-end of line
+*    for DOM no parms expected
+*    for CMD and CMK command is 14-end of line
+*    for WTO and WTH console message to write is 14-end of line
 *
 *...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
 * ---------------------------------------------------------------------
-* TAPE MOUNT MESSAGES TO BE AUTOMATED, MOUNT THE .AWS TAPES
-* YOU CAN ONLY USE THESE IF YOU ALSO HAVE MY TAPEMAN3 PROGRAM INSTALLED
-* TO AUTOMATE YOUR .AWS TAPE MOUNTS.
+* ---- Tape automation requires my tapeman3 modules provided 
+*      seperately, not everybody needs that.
 * ---------------------------------------------------------------------
 *...+....1....+....2....+....3....+....4....+....5....+....6....+....7.
 IEC501A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD8
 IEF233A  LNK TAPEMAN3 &WORD1 &WORD3 &WORD4 &WORD6
-* 701D IS IEHINITT REQUEST THAT TAPEMAN WILL REPLY TO THE WTOR FOR
-* WHICH IS WHY WE PROVIDE THE WTOR REPLY NUMBER HERE.
 IEC701D  LNK TAPEMAN3 &WORD2 &WORD4 &WORD9 &WORD1
-* ---------------------------------------------------------------------
-* TAPEMAN SAYING JOB IS REQUESTED A NON AUTOMATED VOLSER REQUIRING
-* MANUAL INTERVENTION FOR JOBNAME IN WORD8
-* (IF I WAS USING NON-AUTOMATED TAPED I WOULD SHUTDOWN AUTOMATION)
-* A USER MUCKING ABOUT, CANCEL THE JOB AND DOM THE MESSAGE
-* ---------------------------------------------------------------------
+* BELOW IS A USER REQUESTING A TAPE NOT IN THE AUTOMATION POOL
+* SO CANCEL THE USERS JOB
 TAP005A  CMK CANCEL &WORD8
 * ---------------------------------------------------------------------
-* MY TASKMON AND MMPF MESSAGE TRIGGERS
-* ---------------------------------------------------------------------
-MID107W  CMD R &WORD1,C
-MID111I  CMK P MMPF
-MID007I  DOM
-* ---------------------------------------------------------------------
 * SOME JES2 MESSAGE I WANT TO REPLY TO
-*     SETUP PRINTERS
-*     PRINTER NOT READY
-* ON HERCULES OK TO JUST REPLY START (UNLESS USING A TCPIP PRINTER
-* OF COURSE).
 * ---------------------------------------------------------------------
+* $HASP190 SETUP PRINTERS
 $HASP190 CMD $S &WORD4
+* $HASP191 PRINTER NOT READY, POSSIBLE DATA LOSS
 $HASP191 CMD $S &WORD3
+* SPOOLER > 80% FULL NEEDS ACTION
+$HASP093 LNK MMPFEX   00 SPOOLFULL
 * ---------------------------------------------------------------------
-* DEVICE INTERRUPTS, USE THE MMPF EXTENTION TO HANDLE THESE SO A 
-* DIFFERENT RULE CAN BE TRIGGERED PER DEVICE NUMBER
+* SOME OTHER STUFF I HAVE ADDED
+* ** TK3 IEECVXIT DOES SOME OF THESE I THINK
 * ---------------------------------------------------------------------
-IEE001A LNK MMPFEX   00 &WORD1&WORD2&WORD3
+* TWO FOR EREP FULL
+* ** IFB040I  CMK S DUMPEREP
+* ** IFB060E  CMK S DUMPEREP
+* IEA994A DUMP DATASES ALL FULL
+IEA994A  CMK S DUMPFULL
+* THE MIP IPL REASON, WHEN AUTOMGR STARTS IT CAN CLEAR THAT ONE
+* ** IFB010D  CMD R &WORD1,U
+* THE TSO SHUTDOWN PROMPTS - TK4ROB IEECVXIT DOES NOT REPLY TO THESE
+IKT010D  CMD R &WORD1,SIC
+IKT012D  CMD R &WORD1,U
 * ---------------------------------------------------------------------
-* MISCELLANEOUS STUFF
+* DEVICE INTERRUPTS, USE THE MMPF EXTENTION TO HANDLE THESE
+IEE001A  LNK MMPFEX   00 &WORD1&WORD2&WORD3
 * ---------------------------------------------------------------------
-* THE MIP IPL REASON, WHEN MMPF STARTS IT CAN CLEAR THAT ONE
-IFB010D  CMD R &WORD1,U
-* ---------------------------------------------------------------------
-* DEVICE OFFLINE, REPLY DEVICE OR CANCEL.
-* ALWAYS CANCEL, USER MUST FIX THEIR JOB
-* ---------------------------------------------------------------------
+* DEVICE OFFLINE MESSAGE, IF A DISK IS OFFLINE FIX THE JOB !
+* IEF238D JOBNAME  - REPLY DEVICE NAME OR 'CANCEL'
 IEF238D  CMD R &WORD1,CANCEL
 * ---------------------------------------------------------------------
-* ALL DUMP DATASETS FULL, RUN MY ROUTINE TO CLEAN THEM UP
+BSPRS16D CMD R &WORD1,U
 * ---------------------------------------------------------------------
-IEA994A  CMD S DUMPFULL
+* IEC301A IS THE PASSWORD PROMPT FOR CATALOG UPDATE, ON A SYSTEM WITH
+* RAKF YOU WILL NEVER SEE THIS.
+* ON A RAKF SYSTEM THE USER WILL GET A VIOLATION ON THE CATALOG,
+* UNFORTUNATELY THIS MEANS THE DATASETS ARE CREATED UNCATLOGUED
+* AS RAKF DOES NOT IMPLEMENT DASD VOLUME RULES.
+*IEC301A  CMD CANCEL &WORD5
 * ---------------------------------------------------------------------
-* If the response to BSPPILOT shutdown is cancel then BSPPILOT hangs.
-* So we must always reply U.                 
+* MESSAGES SPECIFIC TO MY PROGRAMS
 * ---------------------------------------------------------------------
-BSPRD16D CMD R &WORD1,U
-BSPPILOT DOM
+* REPLY YES TO START THE WEEKLY BATCH
+MIDBCH01 CMD R &WORD1,YES
+* FILE EXTENT ALERT MESSAGES
+*  MDFC001A JUST DOM FOR NOW
+*  MDFC002A PASS MSG NUMBER AND DATASET NAME TO MMPFEX
+MDFC001A DOM
+MDFC002A LNK MMPFEX   00 MDFC002A&WORD7
+* MMPF AUTOMATION TERMINATED MESSAGE, IF MMPF HAS BEEN RESTARTED
+* WE NEED TO DOM THIS OFF
+MID007I  DOM
+* UNTIL I FIGURE OUT A SUITABLE DELAY FOR SNASOL
+* STARTUP JUST DOM THE ABEND (THAT IS RECOVERED FROM)
+* AFTER STCS ARE RESTARTED AFTER WEEKLY BACKUP JOBS
+SNASOL - DOM
+* ---------------------------------------------------------------------
+* THE MIP IPL REASON, WHEN MMPF STARTS IT CAN CLEAR THAT ONE
+* ONLY TK3, DOES NOT APPEAR IN TK4-
+*IFB010D  CMD R &WORD1,U
 *
-* KEYWORD LINE YOU SHOULD USE TO END THE DECK, SEE THE KNOWN BUGS
-* STATEMENT IN THE MAIN MMPF PROGRAM BANNER COMMENTS
+* T E S T I N G
+MDMMPF01 LNK MMPFEX   00 MDMMPF01&WORD4+&WORD6
+* ---------------------------------------------------------------------
+* ALWAYS USE ENDDECK
+* ---------------------------------------------------------------------
 ENDDECK
 ./ ADD NAME=MMPFSTCL
 *----------------------------------------------------------6   
@@ -1224,15 +1251,21 @@ ENDDECK
 *                                                              
 *STC/JOB STARTCMD                                              
 *---+----1----+----2----+----3----+----4----+----5----+----6   
-* JES2 RESTART IS ONLY NEEDED IF I HAVE ABENDED IT REMOTELY    
-* TO CHANGE THE CONFIG, SO ALWAYS COLD START                   
-JES2     S JES2,PARM='FORMAT,NOREQ'                            
-TSO      S TSO.TSO                                             
-NET      S NET.NET                                             
-BSPPILOT S BSPPILOT,PARM='NOWTO'                               
-CMD1     S CMD1                                                
-MF1      S MF1                                             
-MDSCHED1 S MDSCHED1                                            
+* JES2 RESTART IS ONLY NEEDED IF I HAVE DELIBERATELY ABENDED
+* IT REMOTELY TO CHANGE THE CONFIG, SO ALWAYS COLD START                   
+JES2     S JES2,PARM='FORMAT,NOREQ'
+TSO      S TSO.TSO
+NET      S NET.NET
+BSPPILOT S BSPPILOT,PARM='NOWTO'
+CMD1     S CMD1
+MF1      S MF1
+JRP      S JRP
+SNASOL   S SNASOL
+MDSCHED1 S MDSCHED1
+* NO NJE38 - MY CONTAINER STARTUP ENVIRONMENT VARIABLES
+* WILL ADD AN ENTRY FOR THAT IF THE CONTAINER PARMS
+* CONFIGURE THAT TO RUN
+* LIKEWISE NO CTCSERV, CONTAINER VARS WILL ADD IF NEEDED
 ./ ADD NAME=MMPF 
 //MARKJ002 JOB (0),'ASSEMBLE MMPF',CLASS=A,MSGCLASS=T,
 //  MSGLEVEL=(1,1)
@@ -1388,7 +1421,7 @@ LE       EQU   13 -                A NOT HIGH
 * *******************************************************************
 * CONSOLE MESSAGE OFFSETS USED.
 * SET THIS VARIABLE TO 1 FOR A TURNKEY3 SYSTEM
-* (DEFAULT IS 0 FOR MY SYSTEM)
+* SET TO 0 FOR MY SYSTEM THAT USES DIFFERENT DISPLAY SETTINGS
 * *******************************************************************
 *                                          <== TK3 CHANGE TO 1
          LCLB  &OSISTK3                                              
@@ -2132,7 +2165,39 @@ CHKANDBG DS    0F
          BNE   CHKAMSG4            NO, NOTHING TO DO FOR THIS ONE
 *
 * ------- AN ATTENTION/ALERT MESSAGE, SEE IF IT IS AUTOMATED -----
-CHKDOWRK L     R2,ADDRRULS       ADDRESS RULE TABLE STORAGE
+CHKDOWRK CNOP  0,4
+*
+* KLUDGE. 
+* Annoying message ieecvxit should hanldle but it is written before
+* bsppilot starts. Its also before console display format is set so
+* is in the wrong position for all this program logic to handle.
+* The start will be at postion 3 in this case
+         CLC   3(22,R1),=CL22'*IEE362A SMF ENTER DUMP'
+         BC    NE,CHKONWRD    Not this message, skip to normal code
+* Kludge is for message below.* is at the offset +3
+*  "*IEE362A SMF ENTER DUMP FOR SYS1.MAN? ON MVSRES"
+         MVC   CMDBUF(17),=CL17'S SMFDAILY,MAN=X '
+         MVC   CMDBUF+15(R1),39(R1)     MOVE OVER X OR Y
+         STM   R0,R1,KLUDGBUF     WE TRASH THESE TWO REGS
+         MVI   SYSPRLIN,C' '        LOG WE DID THIS ACTION
+         MVC   SYSPRLIN+1(L'SYSPRLIN-1),SYSPRLIN
+         MVC   SYSPRLIN(17),CMDBUF  
+         PUT   SYSPRINT,SYSPRLIN
+         MODESET KEY=ZERO
+         LA    R1,21              LEN OF CMD + 4 BYTE HEADER
+         STH   R1,CMDLEN          PUT IN CMD BUFFER LEN
+         LA    R1,CMDLEN          COMMAND BUFFER ADDRESS
+         L     R0,CONSOLE         CONSOLE ID
+         SVC   34
+         MODESET KEY=NZERO
+         LM    R0,R1,KLUDGBUF     GET THE REGS BACK
+         B     CHKAMSG4           SKIP ALL FURTHE CHECKS THIS INTERVAL
+KLUDGBUF DS    2F                 FOR SAVE OF R0,R1
+         LTORG                    ALWAYS IF IMBEDDING DATA AREAS
+* And skip to end of message checking
+*
+CHKONWRD CNOP  0,4
+         L     R2,ADDRRULS       ADDRESS RULE TABLE STORAGE
          USING RULETABL,R2
          L     R3,RULECNT        LOOP FOR # RULES
          C     R3,=F'0'          IF NO RULES, JUST SKIP ALL THIS
@@ -2145,6 +2210,7 @@ CHKAMSG1 CLC   0(8,R5),$MSGOFST(R1) RULE TABLE ENTRY MATCH MSGID ?
 * BY THREE BYTES (FOR THE NN IN NN MSGNUM, THE REPLY NUMBER)
          CLC   0(8,R5),$MSGOFST+3(R1)  RULE TABLE ENTRY MATCH MSGID ?
          BC    EQ,CHKAMSG2         YES, PROCESS IT AND EXIT
+* AND NO RULE MATCH YET
          A     R5,=F'80'           NO, MOVE TO NEXT RULE ENTRY
          BCT   R3,CHKAMSG1             AND LOOP UNTIL NO MORE RULES
          B     CHKAMSG4
@@ -2157,9 +2223,9 @@ CHKAMSG2 DS    0F
          L     R1,CHKASAVE         WAS TRASHED, GET IT BACK
          CLC   DEBUGON(1),CHARY      ARE WE IN DEBUG ONLY MODE ?
          BNE   CHKANDB2              NO, WE ARE LIVE
-         MVI   SYSPRLIN,C' '         ELSE LOG RULE ONLY
+         MVI   SYSPRLIN,C'<'         ELSE LOG RULE ONLY FLAGGED <<<
          MVC   SYSPRLIN(L'SYSPRLIN-1),SYSPRLIN
-         MVC   SYSPRLIN(70),70(R5) 
+         MVC   SYSPRLIN(70),0(R5) 
          PUT   SYSPRINT,SYSPRLIN
          B     CHKAMSG4          --- AND DONE ---
 * WHAT OFFSET IS PASSED TO THE TEMPLATE PROCESSOR DEPENDS UPON
@@ -2678,7 +2744,7 @@ STCLTBLL EQU   *-STCLTBL
 //
 ./ ADD NAME=MMPFEX00
 * --------------------------------------------------------------------
-* MMPFEX - MMPF Extesion 
+* MMPFEX - MMPF Extesion
 * ruleset called by MMPFEX when invoked from a LNK from MMPF
 *
 * Uses the same SYSIN DD as MMPF (is triggered from MMPF so has the
@@ -2686,18 +2752,38 @@ STCLTBLL EQU   *-STCLTBL
 * library as the MMPF ruleset resides.
 * --------------------------------------------------------------------
 *
+* 00CINTREQ - Interrupt event on the 00C card reader
+* On my windows instance of hercules the card reader goes into
+* an interrupt state until a valid JCL card is submitted through
+* it (it doesn't use the socket interface). This rule will on
+* that interrupt event submit dummy.jcl (just a comment card)
+* with the EOF parm to reset the card reader.
 * MMPF event is IEE001A
 RULE:00CINTREQ
-* On a 00C intterupt use DIAG8 (LNK to MDDIAG8) submit a dummy JCL job
-* dummy.jcl is expected to exist in the hercules working directory
-LNK devinit 00C dummy.jcl eof
+* LNK devinit 00C dummy.jcl eof
 * back to listening on port 3505 only on my linux server
-*LNK devinit falcon:3505 sockdev ascii trunc eof
+LNK devinit falcon:3505 sockdev ascii trunc eof
 *
-* On an intterupt on 00D just take it offline
-RULE:00DINTREQ
-CMD V 00D,OFFLINE
-CMD S DEALLOC
+* ON SPOOLER FILLING UP PURGE EVERY JOB CLASS WE USE
+* AND MAKE SURE ALL OUTPUT DEVICES ARE STARTED
+RULE:SPOOLFULL
+CMD $OQ,Q=C,CANCEL
+CMD $OQ,Q=T,CANCEL
+CMD $OQ,Q=G,CANCEL
+CMD $PQ,Q=A
+CMD $PQ,Q=X
+CMD $PQ,Q=Z
+CMD $PQ,Q=B
+CMD $SPUN1
+CMD $SPUN2
+CMD $SPRT1
+CMD $SPRT2
+CMD $SPRT3
+*
+* HANDLERS FOR DATASETS BECOMING FULL
+RULE:MDFC002ASYS9.JOBDECKS.LOGFILE
+CMD S AOMTASK,J=AUTOR002
+WTO S AOMTASK,J=AUTOR002 << MMPF
 *
 * Oops, 009 is the telnet console for TK3, forgot to start it again
 RULE:009INTREQ
@@ -3761,9 +3847,9 @@ LT       EQU   4 -                 A LOW
  ENTRY MMPFMSG
  NAME MMPFMSG(R)
 /*
-//TESTIT EXEC PGM=MMPFMSG,COND=(0,NE),
-// PARM='MDMMPF01 TEST DSN=INSTALL.MID.MMPF.LOADLIB AND MORE WORDS'
-//STEPLIB DD DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB
+//*TESTIT EXEC PGM=MMPFMSG,COND=(0,NE),
+//* PARM='MDMMPF01 TEST DSN=INSTALL.MID.MMPF.LOADLIB AND MORE WORDS'
+//*STEPLIB DD DISP=SHR,DSN=INSTALL.MID.MMPF.LOADLIB
 //
 ./ ENDUP
 ZZ
@@ -4366,6 +4452,19 @@ MMPF Changes
                 included the MMPFMSG program so testing against
                 messages can be done without waiting for an OS error
                 or action consition to raise one.
+   2025/12/18 - (1) Fixed a offset error in a debug message.
+                (2) added kludge code to handle smf dump reqd msg
+                    at system startup (hard coded not in mmpf rules)
+                   - is automated in ieecvxit, however at system
+                     startup bsppilot is not running when msg written
+                     so it is not handled by ieecvxit in that one case
+                   - is before consoel display format cmds issued so
+                     not at offsets handled by the mmpf rules
+                   - so hard coded check at unhandled offset for that
+                     one explicit message; mmpf will only do anything
+                     with it it ieecvxit/bsppilot have not as mmpf
+                     only works on outstanding action messages
+                   + basically that one unhandled msg was annoying me
 Pending changes
 ... still to check the new message numbers added on 2017/03/28 are
     not used by any other of my programs
