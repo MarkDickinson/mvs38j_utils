@@ -14,6 +14,11 @@
 #
 # TODO: put the recomended binary flags after the start of the
 #       header section.
+#
+# Last change:
+# 2024/09/24 - start trying to work out colours (BETA change),
+#              default is origional behaviour. Have not figured
+#              that out yet.
 # ==============================================================
 infile="$1"    # input file to process
 diskfile="$2"  # optional, to screen if not provided
@@ -47,7 +52,8 @@ YPOSINIT=600   # default Yposition on page for line 1
 fontsize=9
 linespace="8"
 fontname="Courier"
-IBMFFCHAR=''  # hercules specific, form feed on this
+IBMFFCHAR=''        # hercules specific, form feed on this
+IBMNEWLINECHAR=""   # hercules specific again, newline char
 
 # -----------------------------------------------------------
 # A little helper to clean up work files so we keep things
@@ -183,8 +189,8 @@ EOF
 
 # ------------------------------------------------------------
 # Process everything in the file, break into new page
-# objects after every 59 lines. (Max a 10pt font will
-# fit on a page before showing just a blank page)
+# objects after every 'maxlines' lines. (Max a 10pt font will
+# fit on a 72 line page before showing just a blank page)
 # ------------------------------------------------------------
 begin_page() {
    echo "BT">> ${workfile1}

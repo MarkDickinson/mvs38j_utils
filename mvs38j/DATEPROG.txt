@@ -17,7 +17,8 @@
 //* Also the programs are setup to assemble into dataset name
 //* MARK.LIB.LOAD. You may want to globally change that before
 //* running this job to save on editing later.
-//* Exception: the actual scheduler uses MARK.LIB.LOAD.APFAUTH
+//* Exception to that:
+//*   the actual scheduler uses MARK.LIB.LOAD.APFAUTH
 //*
 //* The SYSLIB macro searchlist for the programs and example
 //* programs will source macros from the install library name
@@ -120,12 +121,14 @@ I will store all my date related code in this library so it is
 all collected in one place for easy reference.
 I have started creating macros for simple functions so the
 overhead of calling external programs is only needed for really
-complex stuff.
-Some stuff in here does not work (the only known bug is in
-the sched001 program providing the calccard function)
+complex stuff (ie: LEAPYEAR check is a macro as calling a
+linklisted program for that is overkill).
 
+==================================================================
 Quick install (assumes you are running TK3, sys2.maclib for YREGS)
-=============
+==================================================================
+
+-------------- Required ---------------
 Edit UDATE001  (date calculations using TIME DEC values)
  - change the load library from MARK.LIB.LOAD to one you want to use
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
@@ -137,7 +140,11 @@ Edit UDATE003  (date calculations using time STCK values)
    you installed this file as
  - run the job
 
+-------------- Optional 1 -------------
 ----> Optional Additional SCHED* utilities (B E T A)
+      This is the joib scheduler I now use. Included in this
+      file as it needs the programs here in the linklist and
+      the macros in this file to assemble.
       Truely BETA, no sanity checking of input data is done yet
       These are used to obtain information on future dates/times
       and require a different data mapping macro to the UDATE*
@@ -166,8 +173,23 @@ Edit SCHEDTST ( *** very optional, the scheduler will start ***)
  - run the job to assemble the program, IT WILL ALSO START THE
    PROGRAM running, use 'P jobname' to stop the test.
 
-Testing
--------
+-------------- Optional 2 -------------
+----> Optional Additional XMASWAIT
+ - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
+   you installed this file as
+ - change MARK.LIB.LOAD to your personal loadlib
+ - copy XMASPROC to one of your proclibs if you want to run it from
+   the console (and maybe rename it as XMAS so you can just 'S XMAS')
+ ===> truely optional, I just got bored approaching xmas. As it
+   required the macros in this file to assemble, and the programs
+   in this file to be in the linklist, I have added it to this file
+   as it is not a standalone program.
+   But really optional, unless the number of days before xmas is
+   really important to you.
+
+==================================================================
+Testing the programs
+==================================================================
 Edit TESTALL,
  - repeat the customisations above and run to test all programs
    UDATEnnn are working correctly.
@@ -219,12 +241,11 @@ SCHEDTST - A prototype job scheduler, fully functional for
 TESTDOW  - test the DAYOWEEK macro, example of how to use it
 DAYOWEEK - macro to return the day of the week (0-6 for sun-mon)
 LEAPYEAR - macro to see if the year passed is a leap year
-           this is BETA, haven't tested the DEC format yet and
-           the YYYY format does not determine a leap year.
-TESTS001 - test SCHED001 program, standalone test BETA, not OK
-           as it uses the LEAPYEAR macro
+           this is BETA, haven't tested the DEC format yet.
 TESTS001 - test SCHED002 program, standalone test BETA, is OK
 TESTLEAP - test the LEAPYEAR macro
+
+XMASWAIT and XMASPROC - OK I was getting really bored.
 
 
 MEMBER    TYPE PURPOSE
@@ -279,6 +300,7 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
                                * ==> in testing - BETA - not OK
                                *  --> REQUIRES SCHED001 IN LINKLIST 
                                *  --> data mapping is D370SCHD
+                               * example syntax in sysin of SCHEDTST
                 Extra Macro parameters required if REQ=DATA or DATATZ
                   DATEREG=     required if INFMT=DEC,REQ=DATA is used
                   TIMEREG=     required if INFMT=DEC,REQ=DATA is used
@@ -374,6 +396,16 @@ LEAPYEAR  MACRO Test a year to see if it is a leap year or not. BETA
                 that need to test for a leap year, but at the moment
                 only on YYYY. I will test TYPE=DEC only when I need it
                 Refer to the comments in the macro for usage
+
+MEMBER    TYPE PURPOSE
+--------  ----- ------------------------------------------------------
+XMASWAIT  ASM   OK I was getting really bored so created a program to
+XMASPROC  PROC  count down the number of days until XMAS, using the 
+                macros and linklisted programs in this library, so as
+                it cannot run standalone I have added it in here so I
+                have everything needed it I want to re-assemble and 
+                run it. From Nov onwad will WTO a tree with the
+                countdown, otherwise just the days remaining.
 ./ ADD NAME=UDATEVAR
          MACRO
 &NAME    UDATEVAR &DSECT=NO
@@ -1674,6 +1706,10 @@ Change History
              it does not use junk data at the end of the block
              (probably made D2 field too large but hard to find out
              what if should be for the decb extract).
+2026/01/07   Just added the XMAS countdown program and proc I created
+             when a little bored. As it depends on the macros and 
+             programs in this file this file is where I chose to store
+             the code.
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&REG=
@@ -3376,17 +3412,14 @@ R15      EQU   15
 //SYSPRINT DD   SYSOUT=*
 //SYSIN    DD   *
 * YYYY is all that is expected
-2010
-2011
-2012
-2013
-2014
-2015
-2016
-2017
-2018
-2019
-2020
+2024
+2025
+2026
+2027
+2028
+2029
+2031
+2031
 /*
 //
 ./ ADD NAME=SCHEDTST
@@ -4403,6 +4436,179 @@ XMASMSG  U 0900 2027/12/25   EXACT TIME DATE PROVIDED, DEMO
 DUPTIME  W 1135 4            EXPECT EVERY THURSDAY 
 /*
 //
+./ ADD NAME=XMASWAIT
+//MARKXMAS JOB (0),'ASM XMAS COUNT',CLASS=A,MSGLEVEL=(1,1),
+// MSGCLASS=T
+//* REQUIRES
+//*   MY DATE MACRO LIBRARY AVAILABLT TO ASSEMBLE
+//*   MY UDATEnnn PROGRAMS ARE IN THE LINKLIST TO EXECUTE
+//* WILL ALSO
+//*   ADD A PROC TO MY SYS9.PROCLIB CALLED XMAS SO I CAN RUN
+//*   IT FROM A CONSOLE.
+//*
+//ASM1     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
+//         DD  DISP=SHR,DSN=MARK.PROD.LIB.MACROS.ASM
+//         DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS2.MACLIB
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+XMASWAIT TITLE 'DAYS TO WAIT UNTIL XMAS'
+*----------------------------------------------------------------------
+*
+* BORED AND APPROACHING XMAS
+*
+* IF > 11 MONTHS BEFORE XMAS JUST SAY NNN DAYS (NNN MONTHS) TO WAIT
+* IF NOV OR DEC DISPLAY DAYS TO WAIT AND AN OUTLINED TREE
+* IF DEC 25 DISPLAY XMAS TREE AND HAPPY XMAS
+*
+* REQUIRES
+*   MY DATE MACRO LIBRARY AVAILABLE TO ASSEMBLE
+*   MY UDATEnnn PROGRAMS ARE IN THE LINKLIST TO EXECUTE
+*
+*----------------------------------------------------------------------
+         PRINT ON,GEN
+XMASWAIT CSECT
+         YREGS
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* USE UDATE001 FOR CURRENT DATE
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT
+         XC    DOUBLE(8),DOUBLE          CLEAR THE WORK AREA
+         PACK  DOUBLE+5(3),D370MMDD(2)   PACK MM
+         CVB   R3,DOUBLE                 CONVERT TO BINARY INTO R3
+         ST    R3,MONTH                  SAVE BINARY VALUE
+         XC    DOUBLE(8),DOUBLE          CLEAR THE WORK AREA
+         PACK  DOUBLE+5(3),D370MMDD+2(2) PACK DD 
+         CVB   R3,DOUBLE                 CONVERT TO BINARY INTO R3
+         ST    R3,DAY                    SAVE BINARY VALUE
+         XC    DOUBLE(8),DOUBLE          CLEAR THE WORK AREA
+*
+         L     R3,MONTH
+         C     R3,=F'12'                 DEC
+         BE    DECWRK
+         C     R3,=F'11'                 NOV
+         BE    NOVWRK
+* ELSE MONTHS AWAY, AND WE ARE NOT IN NOV OR DEC
+         L     R4,=F'12'                  12TH MONTH
+         SR    R4,R3                     LESS CURRENT MONTH
+* WTO MONTHS LEFT TO WAIT IN R4
+         TODEC3 REG=R4,BUF=DOUBLE
+         MVC   XX2WTO+34(3),DOUBLE
+* AND THE EXACT DAYS AS WELL
+         XC    DOUBLE(8),DOUBLE          CLEAR THE WORK AREA
+         PACK  DOUBLE+5(3),D370JDAY(3)   PACK JJJ
+         CVB   R3,DOUBLE                 CONVERT TO BINARY INTO R3
+         ST    R3,JDAYNOW                SAVE BINARY VALUE
+         L     R4,=F'359'                NORMALLY DEC25 ID DAY 359
+         PACK  DOUBLE,D370YEAR(4)        CURRENT YEAR
+         CVB   R3,DOUBLE                 CONVERT TO BINARY
+         LEAPYEAR TYPE=YYYY,REG=R3       IS IT A LEAP YEAR ?
+         C     R1,=F'1'                  IF LEAP YEAR R1=1, ELSE R1=0
+         AR    R4,R1                     SO ADD R1 TO HANDLE LEAPYR
+         L     R3,JDAYNOW                PUT TODAYS BACK TO R3
+         SR    R4,R3                     SUBTRACT FROM XMAS TO GET DAYS
+         TODEC3 REG=R4,BUF=DOUBLE        MAKE DISPLAYABLE
+         MVC   XX2WTO+8(3),DOUBLE        INTO THE WTO
+XX2WTO   WTO   'nnn DAYS UNTIL CHRISTMAS (nnn MONTHS)'
+         B     EXIT                      AND EXIT
+*
+NOVWRK   L     R4,=F'30'                 NEED TO ADD DAYS IN NOV
+         L     R3,DAY                    GET CURRENT DAY IN NOV
+         SR    R4,R3                     LESS CURRENT DAY
+         A     R4,=F'25'                 ADD THE 25 DAYS IN DEC
+         TODEC3 REG=R4,BUF=DOUBLE
+         B     WAITXMAS                  LOG THE DAYS LEFT BANNER
+DECWRK   L     R3,DAY                    GET CURRENT DAY
+         C     R3,=F'25'                  IF > 25 PAST XMAS
+         BH    DECPAST                   
+         L     R4,=F'25'                  ITS 25TH
+         SR    R4,R3                     LESS CURRENT DAY
+         C     R4,=F'0'                  IF ZERO IS THE 25TH
+         BE    ITSXMAS                   SO JUST WTO THAT
+         TODEC3 REG=R4,BUF=DOUBLE
+         B     WAITXMAS                  LOG THE DAYS LEFT BANNER
+WAITXMAS CNOP  0,4  
+         MVC   WAITXNN+24(3),DOUBLE
+         WTO   '       +'
+         WTO   '      +++'
+         WTO   '     +++++'
+WAITXNN  WTO   '    +++++++     NNN DAYS BEFORE'
+         WTO   '   +++++++++       CHRISTMAS'
+         WTO   '      |||'
+         WTO   '      |||    Zzzzzz'
+         B     EXIT
+ITSXMAS  CNOP  0,4  
+         WTO   '       *'
+         WTO   '      ***'
+         WTO   '     *****'
+         WTO   '    *******          HAPPY'
+         WTO   '   *********       CHRISTMAS'
+         WTO   '      ###'
+         WTO   '      ###'
+         B     EXIT
+*
+* In DEC BUT PAST 25 SO 12 MONTHS TO WAIT
+DECPAST  WTO   'XMAS IS OVER, ANOTHER 12 MONTHS UNTIL CHRISTMAS'
+*        B     EXIT                      AND EXIT
+*
+* ALL TESTS DONE
+EXIT     EQU   *
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14                      RETURN
+         LTORG ,
+SAVEAREA DS    18F
+PACKTEMP DS    PL4
+STCKTEMP DS    2F
+DOUBLE   DS    D
+MONTH    DS    F
+DAY      DS    F
+JDAYNOW  DS    F
+* The buffer area
+         UDATEVAR DSECT=NO
+         END   ,
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=WORK,
+//    DSN=&&OBJLIB,SPACE=(CYL,(2,2))
+//LKED1A  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD(XMASWAIT),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED1B  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
+//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(XMASWAIT)
+ ENTRY XMASWAIT
+ NAME XMASWAIT(R)
+/*
+//
+./ ADD NAME=XMASPROC
+//XMAS     PROC 
+//XMASWAIT EXEC PGM=XMASWAIT
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSABEND DD   SYSOUT=*
+//SYSUDUMP DD   SYSOUT=*
 ./ ENDUP
 @@
 //
