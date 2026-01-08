@@ -1,7 +1,7 @@
 //MARKJ001 JOB  (0),MSGLEVEL=1,CLASS=A,MSGCLASS=T
 //* *****************************************************************
 //*
-//* INSTALL DATE/TIME UTILITY PROGRAM
+//* INSTALL DATE/TIME UTILITY PROGRAMS
 //*
 //* This job just creates the install dataset and loads the members
 //* into it. See the $DOC member 'quick install' steps on how to
@@ -9,16 +9,26 @@
 //*
 //* QUICK CUSTOMISATIONS
 //* ====================
-//* Globally change install library from INSTALL.UTILS.DATETIME to a
-//* dataset suitable for your site... and customise the unit
+//* Globally change install library from
+//*    INSTALL.UTILS.DATETIME 
+//* to a dataset suitable for your site... and customise the unit
 //* and volser to suit before running this. Thats in the first step
 //* after this comment block.
+//* Now also globally change install file
+//*   INSTALL.UTILS.DATETIME.TEST
+//* to a dataset suitable for your site (new for some prgrams that
+//* need the library, I broke them out to a seperate file).
 //*
 //* Also the programs are setup to assemble into dataset name
-//* MARK.LIB.LOAD. You may want to globally change that before
+//*    MARK.LIB.LOAD.
+//* You may want to globally change that before
 //* running this job to save on editing later.
-//* Exception to that:
+//* Exception to that: the scheduler needs an APF authorised library
 //*   the actual scheduler uses MARK.LIB.LOAD.APFAUTH
+//*
+//* Additionally this JCL uses
+//*    UNIT=3350 and VOL SRCMD1 you will need to change. 
+//*
 //*
 //* The SYSLIB macro searchlist for the programs and example
 //* programs will source macros from the install library name
@@ -30,7 +40,8 @@
 //* so page down to that to see what the program will actually
 //* do for you.
 //*
-//* Example usage for calling from asm/370 is in member TESTALL.
+//* Example usage for calling from asm/370 is in member TESTALL
+//* in INSTALL.UTILS.DATETIME.TEST
 //*
 //* --------------------------------------------------------------
 //*
@@ -74,7 +85,12 @@
 // SPACE=(CYL,(1,1,10)),
 // UNIT=3350,VOL=SER=SRCMD1,
 // DSN=INSTALL.UTILS.DATETIME
-//STEPX    EXEC PGM=IEBUPDTE,COND=(0,NE)
+//DD2      DD   DISP=(NEW,CATLG,DELETE),
+// DCB=SYS1.MACLIB,
+// SPACE=(CYL,(1,1,10)),
+// UNIT=3350,VOL=SER=SRCMD1,
+// DSN=INSTALL.UTILS.DATETIME.TEST
+//STEPX1   EXEC PGM=IEBUPDTE,COND=(0,NE)
 //SYSPRINT DD   SYSOUT=*
 //SYSUT1   DD   DISP=SHR,
 // DSN=INSTALL.UTILS.DATETIME
@@ -115,14 +131,23 @@ Always use UDATEMAC macro as the interface, it will call the correct
 program for the request type you are making, the macro parameters
 are covered in detail further down in this documentation.
 
+IMPORTANT EXCEPTIONS: <<<----------
+The SCHEDnnn programs expect data in a different format to the
+UDATEVAR layout used by the UDATEnnn programs.
+These are primarily used by the job scheduler
+in the xxx.TEST dataset but I have started using some of their
+functions in other programs so they belong in this shared library.
+Currently only the CALCARD option of the U370DATE macro will use
+any of the SCHEDnnn programs and that option just means you are
+expected to have the non-standard layout data ready :-). The
+CALCARD option expects data in the format of the scheduler data
+card header so look at the schedtst member in the xxx.TEST library
+for what that looks like.
+
 Additional Purpose - Enhancements
 =================================
 I will store all my date related code in this library so it is
 all collected in one place for easy reference.
-I have started creating macros for simple functions so the
-overhead of calling external programs is only needed for really
-complex stuff (ie: LEAPYEAR check is a macro as calling a
-linklisted program for that is overkill).
 
 ==================================================================
 Quick install (assumes you are running TK3, sys2.maclib for YREGS)
@@ -139,64 +164,33 @@ Edit UDATE003  (date calculations using time STCK values)
  - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
    you installed this file as
  - run the job
-
--------------- Optional 1 -------------
-----> Optional Additional SCHED* utilities (B E T A)
-      This is the joib scheduler I now use. Included in this
-      file as it needs the programs here in the linklist and
-      the macros in this file to assemble.
-      Truely BETA, no sanity checking of input data is done yet
-      These are used to obtain information on future dates/times
-      and require a different data mapping macro to the UDATE*
-      programs that are only concerned with activities around the
-      current time; refer to the test programs for syntax.
-      ---> they are refenced by the main u370date macro if you
-           intend to use some of the BETA functions such as
-           CALCCARD
 Edit SCHED001,
- - change the load library from MARK.LIB.LOAD to one you want to use
- - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
-   you installed this file as
+ - change the load library from MARK.LIB.LOAD
+    to one you want to use
+ - change the SYSLIB from INSTALL.UTILS.DATETIME
+   to whatever filename you installed this file as
  - run the job
 Edit SCHED002,
- - change the load library from MARK.LIB.LOAD to one you want to use
- - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
-   you installed this file as
+ - change the load library from MARK.LIB.LOAD
+   to one you want to use
+ - change the SYSLIB from INSTALL.UTILS.DATETIME
+   to whatever filename you installed this file as
  - run the job
-Edit SCHEDTST ( *** very optional, the scheduler will start ***)
- - change the load library from MARK.LIB.LOAD.APFAUTH to one you have
-   available for testing APF authorised programs
- - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
-   you installed this file as
- - CHANGE THE TEST DATA CARDS, CHANGE THE JOBDECKS DD TO A DATASET
-   YOU HAVE JOBS DERFINED IN
- - run the job to assemble the program, IT WILL ALSO START THE
-   PROGRAM running, use 'P jobname' to stop the test.
 
--------------- Optional 2 -------------
-----> Optional Additional XMASWAIT
- - change the SYSLIB from INSTALL.UTILS.DATETIME to whatever filename
-   you installed this file as
- - change MARK.LIB.LOAD to your personal loadlib
- - copy XMASPROC to one of your proclibs if you want to run it from
-   the console (and maybe rename it as XMAS so you can just 'S XMAS')
- ===> truely optional, I just got bored approaching xmas. As it
-   required the macros in this file to assemble, and the programs
-   in this file to be in the linklist, I have added it to this file
-   as it is not a standalone program.
-   But really optional, unless the number of days before xmas is
-   really important to you.
-
-==================================================================
-Testing the programs
-==================================================================
+---------------- Testing the programs ----------
+In INSTALL.UTILS.DATELIB.TEST
+---- UDATEnnn tests
 Edit TESTALL,
  - repeat the customisations above and run to test all programs
    UDATEnnn are working correctly.
 Edit TESTDOW,
  - repeat the customisations above and run to test the DAYOWEEK
-   macro os working correctly... maybe change the data cards to
+   macro is working correctly... maybe change the data cards to
    the year you download this :-)
+Edit TESTLEAP,
+ - repeat the customisations above and run to test the LEAPYEAR
+   macro is working correctly.
+---- SCHEDnnn tests
 Edit TESTS001,
  - repeat the customisations above and run to test the sched001
    program... check/change the testdata cards to a date range you
@@ -214,39 +208,23 @@ you may want to use them for.
 Member Summary... details are below
 ===================================
 $DOC     - this member
-
 UDATEVAR - macro, data area layout
 UDATEMAC - macro, used to invoke all the date programs needed
-
-TESTALL  - test all the UDATEnnn programs, examples of how to
-           use the library
-
 UDATE001 - the date program to convert TIME DEC format values
            to displayable date information
 UDATE003 - the date program to convert STCK format values to
            displayable date information; and also now used to
            provide the last IPL time... will eventually obsolete
            udate002
-
 SCHED001 - date utility program to find the next day/date matching
            the search request (exact date, next weekday, next month
-           day). See tests001 for example usage (B E T A and not
-           yet working correctly, a work in progress)
+           day). See tests001 for example usage (B E T A)
 SCHED002 - date utility program to find the number of hsecs from  
            the current time until a target time, if target time
            is within 24hrs
-SCHEDTST - A prototype job scheduler, fully functional for     
-           scheduling jobs and commands
-
-TESTDOW  - test the DAYOWEEK macro, example of how to use it
 DAYOWEEK - macro to return the day of the week (0-6 for sun-mon)
 LEAPYEAR - macro to see if the year passed is a leap year
            this is BETA, haven't tested the DEC format yet.
-TESTS001 - test SCHED002 program, standalone test BETA, is OK
-TESTLEAP - test the LEAPYEAR macro
-
-XMASWAIT and XMASPROC - OK I was getting really bored.
-
 
 MEMBER    TYPE PURPOSE
 --------  ----- ------------------------------------------------------
@@ -299,7 +277,9 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
                                type information in D370SCHD area
                                * ==> in testing - BETA - not OK
                                *  --> REQUIRES SCHED001 IN LINKLIST 
-                               *  --> data mapping is D370SCHD
+                               *  --> data mapping is D370SCHD which
+                                  is just an offset into the udatevar
+                                  area used for unstructured input
                                * example syntax in sysin of SCHEDTST
                 Extra Macro parameters required if REQ=DATA or DATATZ
                   DATEREG=     required if INFMT=DEC,REQ=DATA is used
@@ -322,17 +302,6 @@ UDATEMAC  MACRO Created to make it easier to invoke the correct date
 
 MEMBER    TYPE PURPOSE
 --------  ----- ------------------------------------------------------
-TESTALL   ASM   JCL job to assemble and run a program that will test
-                all the date programs and macros.
-                Note: uses MARK.LIB.LOAD for the program, change to
-                      one of your existing load libraries before
-                      running this.
-                Note: this won't work unless you assemble the 
-                      UDATEnnn programs of course, but fire away and
-                      test the way a missing program is handled.
-
-MEMBER    TYPE PURPOSE
---------  ----- ------------------------------------------------------
 UDATE001  ASM   The actual program that does all the work, preferably
                 invoked by calling programs that use the macros
                 provided. Uses UDATEVAR macro with the DSECT option
@@ -347,27 +316,10 @@ MEMBER    TYPE PURPOSE
 --------  ----- ------------------------------------------------------
 UDATE003  ASM   This program is similar to UDATE001 but uses STCK     
                 timestamp values as input instead of TIME DEC values.
-                As this almost duplicates the STCK processing used by
-                udate002 the ability to get the last IPL date and time
-                has also been included in this program.
                 Uses UDATEVAR to map the data area
                 Note: uses MARK.LIB.LOAD for the program, change to
                       one of your existing load libraries before
                       running this.
-
-MEMBER    TYPE PURPOSE (Scheduler utilities) 
---------  ----- ------------------------------------------------------
-SCHED001  ASM   Scheduler utility, used to get info on a future date  
-SCHED002  ASM   Scheduler utility, used to get hsecs between current
-                time and a future time; if future time within 24hrs
-SCHEDTST  ASM   Scheduler, assembles and start the scheduler using
-                the test SYSIN time scheduling datastream 
-
-MEMBER    TYPE PURPOSE (Testing utilities; examples of use)
---------  ----- ------------------------------------------------------
-TESTDOW   ASM   Test the functionality of the DAYOWEEK macro
-TESTALL   ASM   Test all the UDATEnnn programs
-TESTS001  ASM   Test the SCHED001 program
 
 MEMBER    TYPE PURPOSE
 --------  ----- ------------------------------------------------------
@@ -395,17 +347,9 @@ LEAPYEAR  MACRO Test a year to see if it is a leap year or not. BETA
                 Created as I am starting to get a lot of programs
                 that need to test for a leap year, but at the moment
                 only on YYYY. I will test TYPE=DEC only when I need it
-                Refer to the comments in the macro for usage
-
-MEMBER    TYPE PURPOSE
---------  ----- ------------------------------------------------------
-XMASWAIT  ASM   OK I was getting really bored so created a program to
-XMASPROC  PROC  count down the number of days until XMAS, using the 
-                macros and linklisted programs in this library, so as
-                it cannot run standalone I have added it in here so I
-                have everything needed it I want to re-assemble and 
-                run it. From Nov onwad will WTO a tree with the
-                countdown, otherwise just the days remaining.
+                Refer to the comments in the macro for usage but simply
+                pass a binary YYYY value in a register and R1 will
+                be 1 if a leap year or 0 if not (again type=yyyy)
 ./ ADD NAME=UDATEVAR
          MACRO
 &NAME    UDATEVAR &DSECT=NO
@@ -661,125 +605,6 @@ DT&SYSNDX WTO 'MID0200E MODULE NOT FOUND IN LINKLIST LIBRARIES'
          B     &ERROR
 DTX&SYSNDX CNOP 0,4
          MEND
-./ ADD NAME=TESTALL 
-//MARKTEST JOB (0),'TEST ALL',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
-//*
-//* TEST THE UDATEnnn PROGRAMS.
-//* THIS IS ASSEMBLED INTO MY PERSONAL LIBRARY
-//*
-//ASM1     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//         DD  DISP=SHR,DSN=SYS1.MACLIB
-//         DD  DISP=SHR,DSN=SYS2.MACLIB
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *
-TESTPROG TITLE 'Test UDATEnnn Programs'
-*----------------------------------------------------------------------
-*
-* Tests
-*    UDATEVAR dsect mapping macro
-*    UDATEMAC interface macro
-*    UDATE001 program functions
-*    UDATE003 program functions
-*
-*----------------------------------------------------------------------
-         PRINT ON,GEN
-TESTPROG CSECT
-         YREGS
-         STM   R14,R12,12(13)
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-* TESTING FOR UDATE001
-         WTO   'MID0201I --- UDATE001 : CURRENT DATE'
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT
-         BAL   R3,DUMPDATA
-         WTO   'MID0202I --- UDATE001 : PROVIDED DATE (HOUR FORCED 01)'
-         TIME  DEC
-         ST    R0,PACKTEMP
-         MVI   PACKTEMP,X'01'   MAKE HOUR 1
-         L     R0,PACKTEMP     
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATA,                   X
-               DATEREG=R1,TIMEREG=R0
-         BAL   R3,DUMPDATA
-* ADDED FOR UDATE003 
-         WTO   'MID0203I --- UDATE003 : IPL TIME'
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=IPL
-         BAL   R3,DUMPDATA
-         WTO   'MID0204I --- UDATE003 : CURRENT TIME'
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=CURR,INFMT=STCK
-         BAL   R3,DUMPDATA
-         WTO   'MID0205I --- UDATE003 : PROVIDED TIME, NO TZ OFFSET'
-         STCK  STCKTEMP
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATA,                   X
-               INFMT=STCK,STCKVAL=STCKTEMP
-         BAL   R3,DUMPDATA
-         WTO   'MID0206I --- UDATE003 : PROVIDED TIME, USE TZ OFFSET'
-         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATATZ,                 X
-               INFMT=STCK,STCKVAL=STCKTEMP
-         BAL   R3,DUMPDATA
-* ALL TESTS DONE
-EXIT     EQU   *
-         L     R13,4(R13)
-         LM    R14,R12,12(R13)
-         SLR   R15,R15
-         BR    R14                      RETURN
-DUMPDATA EQU   *
-         MVC   DUMPWTO1+22(4),D370YEAR
-         MVC   DUMPWTO1+27(2),D370MMDD
-         MVC   DUMPWTO1+30(2),D370MMDD+2
-         MVC   DUMPWTO1+39(2),D370TIME  
-         MVC   DUMPWTO1+42(2),D370TIME+2
-         MVC   DUMPWTO1+51(3),D370JDAY
-         MVC   DUMPWTO1+62(3),D370DNAM
-         MVC   DUMPWTO1+67(1),D370WKDY
-*               ..1....+....2....+....3....+....4....+....5....+....6
-DUMPWTO1 WTO   'MID0207I DATE yyyy/mm/dd, TIME hh:mm, JDAY=ddd, WKDAY=xX
-               xx (n)'
-         BR    R3
-         LTORG ,
-SAVEAREA DS    18F
-PACKTEMP DS    PL4
-STCKTEMP DS    2F
-* The buffer area
-         UDATEVAR DSECT=NO
-         END   ,
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=WORK,
-//    DSN=&&OBJLIB,SPACE=(CYL,(2,2))
-//LKED1A  EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=MARK.LIB.LOAD(TESTPROG),DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
-//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED1B  EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
-//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- INCLUDE SYSLMOD(TESTPROG)
- ENTRY TESTPROG
- NAME TESTPROG(R)
-/*
-//TEST     EXEC PGM=TESTPROG,COND=(0,NE)
-//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
-//SYSABEND DD   SYSOUT=*
-//SYSUDUMP DD   SYSOUT=*
-//
 ./ ADD NAME=UDATE001
 //MARK001  JOB (0),'ASM UDATE001',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
 //*
@@ -1706,10 +1531,6 @@ Change History
              it does not use junk data at the end of the block
              (probably made D2 field too large but hard to find out
              what if should be for the decb extract).
-2026/01/07   Just added the XMAS countdown program and proc I created
-             when a little bored. As it depends on the macros and 
-             programs in this file this file is where I chose to store
-             the code.
 ./ ADD NAME=LEAPYEAR
          MACRO
 &NAME    LEAPYEAR &TYPE=YYYY,&REG=
@@ -1815,254 +1636,6 @@ DONE&SYSNDX CNOP 0,4
 .LPYERR3 MNOTE 12,'*** TYPE MUST BE YYYY OR DEC ***'
 .LPYEXIT ANOP
          MEND
-./ ADD NAME=TESTDOW
-//MARKTEST JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
-//ASM     EXEC PGM=IFOX00,
-//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
-//   REGION=4096K,COND=(0,NE)
-//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
-//         DD  DISP=SHR,DSN=SYS1.AMODGEN              
-//         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
-//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
-//SYSTERM  DD  SYSOUT=*
-//SYSPRINT DD  SYSOUT=*
-//SYSIN    DD  *               
-* --------------------------------------------------------------------
-*
-* Test Day of Week calculations performed by macro DAYOWEEK
-*
-* Input - sysin cards containing YYYYMMDD values on first
-*         8 bytes of each card.
-* Output- sysout lines containing teh input YYYYMMDD plus the NN
-*         day number calculated for the date (0-6 for sun-mon)
-*
-* --------------------------------------------------------------------
-         MACRO
-&NAME    SPACEOUT &A
-         MVI   &A,C' '
-         MVC   &A+1(L'&A-1),&A
-         MEND
-DATETST  CSECT
-         STM   R14,R12,12(13)         , standard program entry
-         BALR  R12,R0
-         USING *,R12
-         LA    R15,SAVEAREA
-         ST    R15,8(R13)
-         ST    R13,4(R15)
-         LR    R13,R15
-* OPEN THE FILES
-         OPEN  (SYSIN,(INPUT),SYSPRINT,(OUTPUT))
-         SPACEOUT PRNTLINE
-READNEXT GET   SYSIN
-         MVC   PRNTLINE(80),0(R1)
-         CLI   PRNTLINE,C'*'       Comment ?
-         BE    WRITCARD
-*
-         PACK  DOUBLE,PRNTLINE(4)
-         CVB   R2,DOUBLE
-         ST    R2,DAYOWDAT
-         PACK  DOUBLE,PRNTLINE+4(2)
-         CVB   R2,DOUBLE
-         ST    R2,DAYOWDAT+4
-         PACK  DOUBLE,PRNTLINE+6(2)
-         CVB   R2,DOUBLE
-         ST    R2,DAYOWDAT+8
-*
-         DAYOWEEK DATAA=DAYOWDAT,WORKA=DAYOWWRK 
-         CVD   R1,DOUBLE
-         UNPK  DOUBLE(3),DOUBLE+6(2)
-         OI    DOUBLE+2,C'0'
-         MVC   PRNTLINE+14(2),DOUBLE+1
-         OI    PRNTLINE+14,C'0'   MAKE PRINTABLE
-WRITCARD PUT   SYSPRINT,PRNTLINE
-         B     READNEXT
-*
-*
-EOFSYSIN CLOSE (SYSPRINT,,SYSIN)
-EXIT     L     R13,4(R13)
-         LM    R14,R12,12(R13)
-         SLR   R15,R15
-         BR    R14
-         EJECT
-***********************************************************************
-***********************************************************************
-SAVEAREA DS    18F
-DAYOWDAT DS    3F
-DAYOWWRK DS    4F
-DOUBLE   DS    D
-PRNTLINE DC    CL132' '
-SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=PM,DSORG=PS,RECFM=F,              X
-               LRECL=132,BLKSIZE=132
-SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,RECFM=F,EODAD=EOFSYSIN,X
-               LRECL=80,BLKSIZE=80
-* REGISTER EQUATES
-R0       EQU   0
-R1       EQU   1
-R2       EQU   2
-R3       EQU   3
-R4       EQU   4
-R5       EQU   5
-R6       EQU   6
-R7       EQU   7
-R8       EQU   8
-R9       EQU   9
-R10      EQU   10
-R11      EQU   11
-R12      EQU   12
-R13      EQU   13
-R14      EQU   14
-R15      EQU   15
-GE       EQU   11   * NOT A LOW
-LT       EQU   4    * A LOW
-         END
-/*
-//SYSPUNCH DD  SYSOUT=*
-//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
-//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
-//LKED1   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=MARK.LIB.LOAD(DATETST),DISP=SHR
-//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//LKED2   EXEC PGM=IEWL,
-//             PARM='XREF,LIST,LET,TEST,AC=0',
-//             REGION=1024K,COND=(0,NE)
-//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
-//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
-//SYSPRINT DD  SYSOUT=*
-//SYSLIN   DD  *
- INCLUDE SYSLMOD(DATETST)
- ENTRY DATETST
- NAME DATETST(R)
-/*
-//* ==================================================
-//* ALWAYS TEST IT !.
-//* ==================================================
-//TEST1    EXEC PGM=DATETST,COND=(0,NE)
-//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
-//SYSPRINT DD   SYSOUT=*
-//SYSIN    DD   *
-20131101
-20131102
-20131103
-20131104
-20131105
-20131106
-20131107
-20131108
-20131109
-20131110
-20131111
-20131112
-20131113
-20131114
-20131115
-20131116
-20131117
-20131118
-20131119
-20131120
-20131121
-20131122
-20131123
-20131124
-20131125
-20131126
-20131127
-20131128
-* --------------------------------
-20140101
-20140102
-20140103
-20140104
-20140105
-20140106
-20140107
-20140108
-20140109
-20140110
-20140111
-20140112
-20140113
-20140114
-20140115
-20140116
-20140117
-20140118
-20140119
-20140120
-20140121
-20140122
-20140123
-20140124
-20140125
-20140126
-20140127
-20140128
-* --------------------------------
-20140201
-20140202
-20140203
-20140204
-20140205
-20140206
-20140207
-20140208
-20140209
-20140210
-20140211
-20140212
-20140213
-20140214
-20140215
-20140216
-20140217
-20140218
-20140219
-20140220
-20140221
-20140222
-20140223
-20140224
-20140225
-20140226
-20140227
-20140228
-* --------------------------------
-20140301
-20140302
-20140303
-20140304
-20140305
-20140306
-20140307
-20140308
-20140309
-20140310
-20140311
-20140312
-20140313
-20140314
-20140315
-20140316
-20140317
-20140318
-20140319
-20140320
-20140321
-20140322
-20140323
-20140324
-20140325
-20140326
-20140327
-20140328
-/*
-//
 ./ ADD NAME=DAYOWEEK
          MACRO
 &NAME    DAYOWEEK &DATAA=,&WORKA=
@@ -2901,8 +2474,328 @@ LT       EQU   4    * A LOW
  NAME SCHED002(R)
 /*
 //
+./ ENDUP
+@@
+//*  AND NOW THE TEST STUFF SPLIT INTO A SEPERATE FILE
+//STEPX2   EXEC PGM=IEBUPDTE,COND=(0,NE)
+//SYSPRINT DD   SYSOUT=*
+//SYSUT1   DD   DISP=SHR,
+// DSN=INSTALL.UTILS.DATETIME.TEST
+//SYSUT2   DD   DISP=SHR,
+// DSN=INSTALL.UTILS.DATETIME.TEST
+//SYSIN    DD   DATA,DLM=@@
+./ ADD NAME=TESTDOW
+//MARKTDOW JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
+//ASM     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS1.AMODGEN              
+//         DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *               
+* --------------------------------------------------------------------
+*
+* Test Day of Week calculations performed by macro DAYOWEEK
+*
+* Input - sysin cards containing YYYYMMDD values on first
+*         8 bytes of each card.
+* Output- sysout lines containing teh input YYYYMMDD plus the NN
+*         day number calculated for the date (0-6 for sun-mon)
+*
+* --------------------------------------------------------------------
+         MACRO
+&NAME    SPACEOUT &A
+         MVI   &A,C' '
+         MVC   &A+1(L'&A-1),&A
+         MEND
+DATETST  CSECT
+         STM   R14,R12,12(13)         , standard program entry
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* OPEN THE FILES
+         OPEN  (SYSIN,(INPUT),SYSPRINT,(OUTPUT))
+         SPACEOUT PRNTLINE
+READNEXT GET   SYSIN
+         MVC   PRNTLINE(80),0(R1)
+         CLI   PRNTLINE,C'*'       Comment ?
+         BE    WRITCARD
+*
+         PACK  DOUBLE,PRNTLINE(4)
+         CVB   R2,DOUBLE
+         ST    R2,DAYOWDAT
+         PACK  DOUBLE,PRNTLINE+4(2)
+         CVB   R2,DOUBLE
+         ST    R2,DAYOWDAT+4
+         PACK  DOUBLE,PRNTLINE+6(2)
+         CVB   R2,DOUBLE
+         ST    R2,DAYOWDAT+8
+*
+         DAYOWEEK DATAA=DAYOWDAT,WORKA=DAYOWWRK 
+         CVD   R1,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   PRNTLINE+14(2),DOUBLE+1
+         OI    PRNTLINE+14,C'0'   MAKE PRINTABLE
+WRITCARD PUT   SYSPRINT,PRNTLINE
+         B     READNEXT
+*
+*
+EOFSYSIN CLOSE (SYSPRINT,,SYSIN)
+EXIT     L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14
+         EJECT
+***********************************************************************
+***********************************************************************
+SAVEAREA DS    18F
+DAYOWDAT DS    3F
+DAYOWWRK DS    4F
+DOUBLE   DS    D
+PRNTLINE DC    CL132' '
+SYSPRINT DCB   DDNAME=SYSPRINT,MACRF=PM,DSORG=PS,RECFM=F,              X
+               LRECL=132,BLKSIZE=132
+SYSIN    DCB   DDNAME=SYSIN,MACRF=(GL),DSORG=PS,RECFM=F,EODAD=EOFSYSIN,X
+               LRECL=80,BLKSIZE=80
+* REGISTER EQUATES
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+GE       EQU   11   * NOT A LOW
+LT       EQU   4    * A LOW
+         END
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=SYSDA,
+//    DSN=&&OBJLIB,SPACE=(TRK,(2,2))
+//LKED1   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD(DATETST),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED2   EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
+//SYSUT1   DD  UNIT=SYSDA,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(DATETST)
+ ENTRY DATETST
+ NAME DATETST(R)
+/*
+//* ==================================================
+//* ALWAYS TEST IT !.
+//* ==================================================
+//TEST1    EXEC PGM=DATETST,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSPRINT DD   SYSOUT=*
+//SYSIN    DD   *
+* --------------------------------
+20260201
+20260202
+20260203
+20260204
+20260205
+20260206
+20260207
+20260208
+20260209
+20260210
+20260211
+20260212
+20260213
+20260214
+20260215
+20260216
+20260217
+20260218
+20260219
+20260220
+20260221
+20260222
+20260223
+20260224
+20260225
+20260226
+20260227
+20260228
+* --------------------------------
+20260301
+20260302
+20260303
+20260304
+20260305
+20260306
+20260307
+20260308
+20260309
+20260310
+20260311
+20260312
+20260313
+20260314
+20260315
+20260316
+20260317
+20260318
+20260319
+20260320
+20260321
+20260322
+20260323
+20260324
+20260325
+20260326
+20260327
+20260328
+/*
+//
+./ ADD NAME=TESTALL 
+//MARKTALL JOB (0),'TEST ALL',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
+//*
+//* TEST THE UDATEnnn PROGRAMS.
+//* THIS IS ASSEMBLED INTO MY PERSONAL LIBRARY
+//*
+//ASM1     EXEC PGM=IFOX00,
+//   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
+//   REGION=4096K,COND=(0,NE)
+//SYSLIB   DD  DISP=SHR,DSN=INSTALL.UTILS.DATETIME
+//         DD  DISP=SHR,DSN=SYS1.MACLIB
+//         DD  DISP=SHR,DSN=SYS2.MACLIB
+//SYSUT1   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT2   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSUT3   DD  SPACE=(CYL,(25,5)),UNIT=WORK
+//SYSTERM  DD  SYSOUT=*
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  *
+TESTPROG TITLE 'Test UDATEnnn Programs'
+*----------------------------------------------------------------------
+*
+* Tests
+*    UDATEVAR dsect mapping macro
+*    UDATEMAC interface macro
+*    UDATE001 program functions
+*    UDATE003 program functions
+*
+*----------------------------------------------------------------------
+         PRINT ON,GEN
+TESTPROG CSECT
+         YREGS
+         STM   R14,R12,12(13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+* TESTING FOR UDATE001
+         WTO   'MID0201I --- UDATE001 : CURRENT DATE'
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT
+         BAL   R3,DUMPDATA
+         WTO   'MID0202I --- UDATE001 : PROVIDED DATE (HOUR FORCED 01)'
+         TIME  DEC
+         ST    R0,PACKTEMP
+         MVI   PACKTEMP,X'01'   MAKE HOUR 1
+         L     R0,PACKTEMP     
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATA,                   X
+               DATEREG=R1,TIMEREG=R0
+         BAL   R3,DUMPDATA
+* ADDED FOR UDATE003 
+         WTO   'MID0203I --- UDATE003 : IPL TIME'
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=IPL
+         BAL   R3,DUMPDATA
+         WTO   'MID0204I --- UDATE003 : CURRENT TIME'
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=CURR,INFMT=STCK
+         BAL   R3,DUMPDATA
+         WTO   'MID0205I --- UDATE003 : PROVIDED TIME, NO TZ OFFSET'
+         STCK  STCKTEMP
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATA,                   X
+               INFMT=STCK,STCKVAL=STCKTEMP
+         BAL   R3,DUMPDATA
+         WTO   'MID0206I --- UDATE003 : PROVIDED TIME, USE TZ OFFSET'
+         UDATEMAC DATA=UDATEVAR,ERROR=EXIT,REQ=DATATZ,                 X
+               INFMT=STCK,STCKVAL=STCKTEMP
+         BAL   R3,DUMPDATA
+* ALL TESTS DONE
+EXIT     EQU   *
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         SLR   R15,R15
+         BR    R14                      RETURN
+DUMPDATA EQU   *
+         MVC   DUMPWTO1+22(4),D370YEAR
+         MVC   DUMPWTO1+27(2),D370MMDD
+         MVC   DUMPWTO1+30(2),D370MMDD+2
+         MVC   DUMPWTO1+39(2),D370TIME  
+         MVC   DUMPWTO1+42(2),D370TIME+2
+         MVC   DUMPWTO1+51(3),D370JDAY
+         MVC   DUMPWTO1+62(3),D370DNAM
+         MVC   DUMPWTO1+67(1),D370WKDY
+*               ..1....+....2....+....3....+....4....+....5....+....6
+DUMPWTO1 WTO   'MID0207I DATE yyyy/mm/dd, TIME hh:mm, JDAY=ddd, WKDAY=xX
+               xx (n)'
+         BR    R3
+         LTORG ,
+SAVEAREA DS    18F
+PACKTEMP DS    PL4
+STCKTEMP DS    2F
+* The buffer area
+         UDATEVAR DSECT=NO
+         END   ,
+/*
+//SYSPUNCH DD  SYSOUT=*
+//SYSGO    DD  DISP=(MOD,PASS,DELETE),UNIT=WORK,
+//    DSN=&&OBJLIB,SPACE=(CYL,(2,2))
+//LKED1A  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD(TESTPROG),DISP=SHR
+//SYSLIN   DD  DSN=&&OBJLIB,DISP=(OLD,PASS,DELETE)
+//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//LKED1B  EXEC PGM=IEWL,
+//             PARM='XREF,LIST,LET,TEST,AC=0',
+//             REGION=1024K,COND=(0,NE)
+//SYSLMOD  DD  DSN=MARK.LIB.LOAD,DISP=SHR
+//SYSUT1   DD  UNIT=WORK,SPACE=(CYL,(8,1))
+//SYSPRINT DD  SYSOUT=*
+//SYSLIN   DD  *
+ INCLUDE SYSLMOD(TESTPROG)
+ ENTRY TESTPROG
+ NAME TESTPROG(R)
+/*
+//TEST     EXEC PGM=TESTPROG,COND=(0,NE)
+//STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
+//SYSABEND DD   SYSOUT=*
+//SYSUDUMP DD   SYSOUT=*
+//
 ./ ADD NAME=TESTS001
-//MARKS001 JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
+//MARKTS01 JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
 //* 
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
@@ -3109,7 +3002,7 @@ W 2200 5            EXPECT NEXT FRIDAY
 //*SYSUDUMP DD   SYSOUT=*
 //
 ./ ADD NAME=TESTS002
-//MARKS002 JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
+//MARKTS02 JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T
 //ASM     EXEC PGM=IFOX00,
 //   PARM='DECK,LOAD,TERM,TEST,SYSPARM((NOSP,NODEBUG)),XREF(SHORT)',
 //   REGION=4096K,COND=(0,NE)
@@ -3423,7 +3316,7 @@ R15      EQU   15
 /*
 //
 ./ ADD NAME=SCHEDTST
-//MARKTEST JOB (0),'TESTING',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T,
+//MARKTSCH JOB (0),'TEST SCHED',CLASS=A,MSGLEVEL=(1,1),MSGCLASS=T,
 // TIME=1440
 //*
 //* ===================================================================
@@ -4436,6 +4329,38 @@ XMASMSG  U 0900 2027/12/25   EXACT TIME DATE PROVIDED, DEMO
 DUPTIME  W 1135 4            EXPECT EVERY THURSDAY 
 /*
 //
+./ ADD NAME=MDSCHED1
+//MDSCHED1 PROC M='$CONTROL'
+//*
+//* RUNS MY JOB SCHEDULER ('S MDSCHED1')
+//*
+//* M=      THE MEMBER WITH THE SCHEDULER CONTROL CARDS
+//*
+//* RUN MY JOB SCHEDULER
+//* 1  REPLACE THE PARM WITH A USER THAT HAS AUTHORITY
+//*    TO RUN BATCH JOBS. REQUIRED IN MY ENVIRONMENT
+//*    AS I HAVE GIVEN THE DEFAULT RAKF BATCH USERID ACCESS
+//*    TO NOTHING (OR ANYONE COULD SUBMIT JOBS USING INTRDR)
+//*    I HAVE THE PROC IN A PROCLIB ONLY STC TASKS AND MY USER CAN READ
+//*    BUT THE USER/PASSWORD HAVE TO BE CODED SOMEWHERE AND BETTER
+//*    THERE THAN IN EVERY JOB MEMBER (THE PARM IS INSERTED INTO JOBS
+//*    THE SCHEDULER SUBMITS VIA INTRDR
+//*    HERC01 ONLY AN EXAMPLE HERE
+//* 2  REPLACE THE JOBDECKS FILE NAME WITH THE NAME OF THE FILE
+//*    YOU USE TO STORE MEMBERS FOR JOBDECJS AND COMMANDS TO
+//*    BE RUN. ONLY THE PDS FILE NAME (NO MEMBER).
+//* 3  SYSIN SHOULD BE A FILE (SO THE RELOAD COMMAND CAN RE-READ IT)
+//*    AND I FIND IT EASIEST TO JUST USE A MEMBER IN THE JOBS/COMMANDS
+//*    FILE, THE MEMBER NAME IS PASSED IN THE PROC M= VALUE.
+//*
+//SCHEDULE EXEC PGM=MDSCHED1,TIME=1440,
+// PARM='USER=HERC01,PASSWORD=CUL8TER'
+//STEPLIB  DD DISP=SHR,DSN=MARK.LIB.LOAD.APFAUTH
+//JOBDECKS DD DISP=SHR,DSN=SYS9.JOBDECKS
+//PUNCH    DD SYSOUT=(A,INTRDR)   JOBS SUBMITTED VIA INTERNAL READER
+//SYSABEND DD SYSOUT=A
+//SYSUDUMP DD SYSOUT=A
+//SYSIN    DD DISP=SHR,DSN=SYS9.JOBDECKS(&M)
 ./ ADD NAME=XMASWAIT
 //MARKXMAS JOB (0),'ASM XMAS COUNT',CLASS=A,MSGLEVEL=(1,1),
 // MSGCLASS=T
@@ -4609,6 +4534,652 @@ JDAYNOW  DS    F
 //STEPLIB  DD   DISP=SHR,DSN=MARK.LIB.LOAD
 //SYSABEND DD   SYSOUT=*
 //SYSUDUMP DD   SYSOUT=*
+./ ADD NAME=IPLINFO
+//MARKA JOB (0),'ASSEMBLE IPLREASN',CLASS=A,MSGCLASS=T
+//*
+//* PGM ASSEMBLED TO IPLREASN
+//*    This member name is to keep it distict from the proc :-)
+//*
+//* REQUIRES:
+//*   You do need the MVS source volumes (MVSSRC.SYM101.F01) in order
+//*   to obtain dsect mappings we need
+//*   And my date libraries of course.
+//*   Does not need to be APF authorised.
+//*
+//* PURPOSE: 
+//*   To help me keep track of what I IPL'ed for, CLPA/MLPA etc
+//*   during a perios when I was breaking everything. Although
+//*   quite honestly a 'NIP failed to load' message is a good
+//*   giveaway that I was playing below a CLPA level :-).
+//* FUNCTION:
+//*   Writes a WTOR asking for the reason for the IPL, and
+//*   records it in a disk log file for posterity if the disk
+//*   log file is available.
+//*   For lights-out if there is no response to the WTOR in
+//*   10mins the WTOR cancels itself and records a 'no response'
+//*   message to the disk log file.
+//*
+//* ========= TO INSTALL ========
+//* GLOBALLY REPLACE MARK.LIB.LOAD WITH THE DSN OF YOUR
+//* LOAD LIBRARY TO BE USED BEFORE RUNNING THIS TO ASSEMBLE
+//* THE PROGRAM.
+//*
+//* IT REQUIRES MY DATE LIBRARIES/MACROS IN ORDER TO ASSEMBLE
+//* (either download my date utility from my site,
+//* http://mdickinson.dyndns.org/hercules/downloads/
+//* or search on "MY PERSONAL DATE UTILITES" and replace
+//* that block of code with lots of your code instead).
+//* Sorry but I wasn't going to recode all that stuff inline in
+//* the program when I can just call existing working macros.
+//*
+//* GLOBALLY REPLACE INSTALL.UTILS.DATETIME WITH THE DSN 
+//* YOU INSTALLED MY DATE LIBRARY TO FOR THE MACROS TO BE FOUND.
+//* And of course the program modules are expected to have been
+//* assembled into one of your linklist libraries.
+//*
+//ASMLKD EXEC ASMFCL,MAC='SYS1.AMODGEN',MAC1='MVSSRC.SYM101.F01',
+//             PARM.ASM='OBJECT,NODECK,TERM,XREF(SHORT)',
+//             PARM.LKED='LIST,MAP,NCAL,AC=0'
+//ASM.SYSLIB DD DISP=SHR,DSN=SYS1.MACLIB
+// DD DISP=SHR,DSN=SYS1.AMODGEN            CVT, CVTSMCA, IEFJFCBN
+// DD DISP=SHR,DSN=MVSSRC.SYM101.F01       ILRASMVT
+// DD DISP=SHR,DSN=INSTALL.UTILS.DATETIME  MY DATE UTILITIES
+//ASM.SYSIN DD *
+***********************************************************************
+*
+* IPLREASN: Mark Dickinson, 2013
+*           Tested only on MVS3.8J Turnkey3
+*           Does NOT need to run APF authorised under Turnkey3
+*
+* PURPOSE: RECORD THE REASON AN IPL WAS DONE TO A HISTORY LOG FILE
+*          (LRECL=132) AND A COPY OF THE LOGGED RECORD IS ALSO WTO'D
+*          WITH MSGID MIDIP04I
+* purpose2:ok, its fun to write code that requires looking through
+*          macros and obsolete source code (and frustrating).
+*          but it's a way to pass the time.
+*
+* FUNCTION: ISSUES A WTOR PROMPT FOR A 82 BYTE REPLY, AND USES A TIMER
+*           TO CANCEL THE WTOR IF A REPLY IS NOT RECIEVED IN 10 MINS.
+*           IF THE WTOR TIMES OUT A DEFAULT 'NO REPLY FROM OP' WILL BE
+*           LOGGED.
+*           SHOULD BE CALLED AS A 'S xxx' FROM COMMND00 AT IPL TIME TO
+*           PROMPT FOR THE REASON FOR THE IPL BEING PERFORMED.
+*           IF THE LOGFILE DD USED IS IN INVALID OR MISSING THE
+*           INFORMATION WILL STILL BE WTO'ED FOR REFERENCE.
+* 
+* LOG FILE RECORD CONTAINS...
+* 2013/07/10 09:14 WED MID1 MVSRES(0148) IPL=CVIO,TEST NONCLPA
+*      |       |    |    |       |           |    |
+* yyyy/mm/dd   |    |    |       |           |    |
+*              |    |    |       |           |    |
+*            hh:mm  |    |       |           |    |
+*                   |    |       |           |    |
+*               day name |       |           |    |
+*                                |           |    operator response to
+*                   system smfid |           |    WTOR after comma
+*                                |           |    (82 bytes (wtorrepl))
+*                      ipl volser(ipl CCUU)  |    
+*                                            |    
+*                                       ipl type
+*                                 clpa/cvio(quick)/warm
+* 
+* EXAMPLE PROCEDURE:
+*    //IPLREASN PROC
+*    //IPLREASN EXEC PGM=IPLREASN
+*    //LOGFILE  DD   DISP=MOD,DSN=MARK.IPLS.LOG
+* LOGFILE IS DSORG=FB,LRECL=132
+* 
+*
+* ON MVS3.8J (TURNKEY3 PATCH LEVEL) DOES NOT HAVE TO BE APF
+* AUTHORISED AS THE CONTROL BLOCKS USED ARE AVAILABLE TO NON-AUTHORISED
+* PROGRAMS.
+* 
+* REQUIRES
+*    - SYS1.AMODGEN      (EXISTS ON TK3) for CVT, CVTSMCA, IECSDSL1 
+*    - MVSSRC.SYM101.F01 (EXISTS ON TK3) for ILRASMVT 
+*
+* MAINTENANCE NOTES
+*    With the exception of the WTO MIDIP04I (which is hardcoded with
+*    132 to prevent overwriting beyong the WTO space allocated) to
+*    change the log message length to add extra values just change
+*    the length of the OUTREC variable; all code apart from that 
+*    single WTO will adjust for the change as L'OUTREC is used for
+*    everything else including the file DCB.
+*    However... while I think JES2 SYSOUT will automatically
+*    truncate long print lines you might want to change the
+*    check I have to allow JES2 spool to be used as output to be
+*    disallowed (It is only there for debugging after all).
+*
+*
+* ALL WTO/WTOR MESSAGES USED BY THIS PROGRAM
+*  WTOR - MIDIP01A : ENTER THE REASON FOR THE IPL
+*              Self explainatory. Operator enyters a reason
+*              ACTION: reply to the WTOR
+*  WTO  - MIDIP02I : NO OP-REPLY IN 10MINS, WTOR CANCELLED
+*              Self explainatory.
+*              ACTION: none required
+*  WTO  - MIDIP03I : DATE LIBRARY PROGRAMS UNAVAILABLE
+*              My date utility programs are not in your linklist,
+*              the logfile message will not be timestamped.
+*              ACTION: none required (or install my libraries)
+*  WTO  - MIDIP04I : copy of the log message also WTO'ed in this
+*              A copy of the message written to LOGFILE is always
+*              WTO'ed; this message will be WTO'ed even if it was
+*              not possible to use the LOGFILE dataset so there
+*              will always be some record of the IPL.
+*              ACTION: none required
+*  WTO  - MIDIP05E : LOGFILE IS LRECL=nnn, REQUIRE nnn, DSN file.name
+*              The file on the LOGFILE DD card has a different LRECL
+*              than that expected by this program.
+*              ACTION: use a dataset with the correct LRECL 
+*  WTO  - MIDIP06E : NO LOGFILE DD CARD PROVIDED'
+*              Self explainatory.
+*              ACTION: provide the LOGFILE DD card 
+*  WTO  - MIDIP07E : VTOC LOOKUP ON VOLSER vvvvvv FAILED FOR file.name
+*              The dataset does not exist on the volume it was
+*              catalogued to; obviously we cannot write to it.
+*              ACTION: provide a properly cataloged dataset for the
+*                      LOGFILE DD card
+*  WTO  - MIDIP08E : LOGFILE NOT DSORG=PS, DSN file.name
+*              This program will only write to DSORG=PS log files.
+*              Live with it.
+*              ACTION: Use a DSORG=PS dataset on the LOGFILE DD card
+*
+* CHANGES:
+*   MID 2013/05/31 - Initial implementation of a simple WTOR and
+*                    datestamped op reply that ran out of a non-apf
+*                    library
+*   MID 2013/06/14 - Changed to include SMFID, IPL VOLSER and the CCUU
+*                    the IPL volser was on, reformatted message.
+*                    WTOR reply length dropped from 60 to 40 bytes
+*   MID 2013/07/09 - Changed to include IPL TYPE (CLPA/QUICK/WARM) in
+*                    the log message as that info can be obtained from
+*                    the ASMVT control block; also changed log record
+*                    length from 80 to 132 so opertaor reply is now
+*                    able to be 82 bytes (would have only been 30
+*                    bytes allowed with lrecl of 80).
+*   MID 2013/07/12 - Check the LOGFILE DD card is present, and that  
+*                    the file assigned to it is LRECL=132 and DSORG=PS.
+*                    Using an old copy of the pgm corrupted the disk
+*                    file so added these checks. Note: bad lrecl
+*                    should cause a S013-20 abend when the file is
+*                    opened, but it didn't in at least one test case
+*                    so I decided I needed these checks. Interesting
+*                    code examples in here anyway.
+*   MID 2013/07/18 - The REAL time of the IPL is now calculated and  
+*                    used in the log message (provided by my date
+*                    library).
+*
+***********************************************************************
+         PRINT NOGEN
+IPLREASN CSECT
+         STM   R14,R12,12(R13)
+         BALR  R12,R0
+         USING *,R12
+         LA    R15,SAVEAREA
+         ST    R15,8(R13)
+         ST    R13,4(R15)
+         LR    R13,R15
+*
+* --------------------------------------------------------------------
+* COLLECT THE INFO WE WANT FROM THE SYSTEM CONTROL SPACES
+* --------------------------------------------------------------------
+*
+* R15 : ADDRESS THE CVT,
+*       PURPOSE=NEEDED TO OBTAIN OTHER ADDRESSES
+         L     R15,CVTPTR             CVTPTR IS DEFINED IN CVT (16)
+         USING CVTMAP,R15             CVTMAP IN CVT ADDRESSES CVT
+*
+* MID - commented below, I only run mvs38j so even though I have
+*       figured out how to extract the 03.8 for the message I
+*       have decided not to use it in the message.
+* R3  : ADDRESS CVTFIX (CVT PREFIX) AREA
+*       PURPOSE =NEEDED TO PROVIDE OS VERSION
+*                NEEDED TO PROVIDE HARDWARE MODEL
+*        LR    R3,R15                   COPY CVT ADDRESS
+*        SH    R3,=Y(CVTMAP-CVTFIX)     LOCATE TO CVT PREFIX
+*        USING CVTFIX,R3
+*        MVC   OUTREC2+10(2),CVTNUMB     OS RELEASE NUMBER
+*        MVC   OUTREC2+13(2),CVTLEVL     OS LEVEL NUMBER
+*        UNPK  OUTMDL(4),CVTMDL(2)       MODELNUMBER INSIGNED PL2 
+*        OI    OUTMDL+3,X'F0'            CORRECT SIGN
+*           -- model number shows as 3030 instead of my expected
+*              3033 so something wrong here...oops, need len of
+*              5 for the unpack anyway, maybe look at this later.
+*        DROP  R3
+* R3  : DONE WITH R3 
+*
+* R3 : ADDRESS CVTSMCA, ADDRESS IS PROVIDED BY CVT THAT
+*      IS STILL ADDRESSES BY R15
+*      PURPOSE=OBTAIN THE SYSTEM NAME/SMFID
+         L     R3,CVTSMCA
+         USING SMCABASE,R3
+         MVC   OUTSYSID,SMCASID       SMFID INTO OUTPUT LINE
+*
+* - R3 STILL ADDRESSING SMCA, GET THE IPL VOLUME AND CCUU
+*   R2 TO REFERENCE CVTSYSAD OFFSET PROVIDED BY SMCA
+         L     R2,CVTSYSAD            MID
+         MVC   OUTVOLID(6),28(R2)     VOLID INTO OUTPUT LINE
+         L     R2,48(15)              GET SYSRES UCB POINTER
+         UNPK  UNPKFLD(5),4(3,R2)     UNPK BINARY CCUU + 1 BYTE
+         TR    UNPKFLD(4),TRTAB-240   MAKE IT DISPLAYABLE HEX
+         MVC   OUTCCUU,UNPKFLD        GET UNIT ADDRESS
+* DONE WITH THAT CONTROL BLOCK, DROP R3 FOR NEXT MAPPING NEEDED
+         DROP  R3
+*
+*
+* R3 : ADDRESS CVTASMVT, ADDRESS IS PROVIDED BY CVT THAT
+*      IS STILL ADDRESSES BY R15
+         L     R3,CVTASMVT
+         USING ASMVT,R3
+         TM    ASMFLAG2,ASMQUICK      CVIO QUICK START ?
+         BNO   IPLTYPE2
+         MVC   OUTIPL(4),=CL4'CVIO'
+         B     IPLTYPEX
+IPLTYPE2 TM    ASMFLAG2,ASMWARM       WARM START ?
+         BNO   IPLTYPE3
+         MVC   OUTIPL(4),=CL4'WARM'
+         B     IPLTYPEX
+IPLTYPE3 MVC   OUTIPL(4),=CL4'CLPA'  CLPA START
+IPLTYPEX EQU   *
+         DROP  R3
+*
+* MY PERSONAL DATE UTILITES
+* LINK TO UIPLTIME (VIA MIPLTIME MACRO) TO DO ALL THE MESSY
+* CALCULATIONS TO FIND THE ACTUAL IPL TIME.
+*    UDATEVAR RETURNS MAPPED FIELDS AS USED BELOW
+         UDATEMAC DATA=UDATEVAR,ERROR=SKIPDATE,REQ=IPL
+         MVC   OUTYEAR(4),D370YEAR           CCYY
+         MVC   OUTMNTH(2),D370MMDD           MM
+         MVC   OUTDAY(2),D370MMDD+2          DD
+         MVC   OUTHH(2),D370TIME             HH
+         MVC   OUTMM(2),D370TIME+2           MM
+         MVC   OUTDNAME(3),D370DNAM          SUN THRU SAT
+         B     DOWTOR
+SKIPDATE MVC   LOGRESP(21),=CL21'DATE LIBRARY PROGRAMS UNAVAILABLE'
+         WTO   'MIDIP03I : DATE LIBRARY PROGRAMS UNAVAILABLE'
+         EJECT
+* --------------------------------------------------------------------
+* WTOR NOW TO GET THE OPERATOR REASON
+* --------------------------------------------------------------------
+***********************************************************************
+* (1) START A TIMER
+* (2) START A WTOR
+* (3) PUT BOTH ON AN ECB LIST
+* (4) WAIT UNTIL ONE OF THOSE EVENTS TRIGGERS
+* NOTE: WHEN THE TIMER EXPIRES THE TIMER HANDLER DOES POSTS THE TIMEOUT
+*       EVENT TO THE ECB LIST FOR US TO CHECK
+***********************************************************************
+DOWTOR   XC      TIMERECB,TIMERECB     CLEAR THE STIMER EXIT'S ECB
+         XC      WTORECB,WTORECB       CLEAR THE WTOR ECB
+         LA      R15,TIMERECB          LOAD ADDRESS OF TIMER ECB
+         ST      R15,TIMEXPRM          STORE IT FOR TIMER EXIT TO POST
+*                                      START THE TIMER, THE TIMER
+*                                      HANDLER IS AT LABEL 'TIMEOUT'
+*                                      FOR THE DEMO, WAIT 60 SECONDS
+         STIMER REAL,TIMEOUT,DINTVL=SECS600
+*                                      ISSUE THE WTOR,
+*                                         TEXT
+*                                         DATA AREA FOR OPERATOR REPLY
+*                                         LENGTH OF THAT DATA AREA
+*                                         WHERE TO STORE INFO FOR ECB
+WTORMSG  WTOR  'MIDIP01A : ENTER THE REASON FOR THE IPL',              X
+               WTORREPL,L'WTORREPL,WTORECB
+         ST      R1,WTORMSID           SAVE MESSAGE ID OF WTOR
+*                                        RETURNED IN R1 FROM WTOR CALL
+         LA      R3,WTORECB            POINT TO THE WTOR ECB
+         ST      R3,ECBLIST            STORE ADDR OF WTORECB IN ECBLIST
+         LA      R3,TIMERECB           POINT TO THE STIMER ECB
+         ST      R3,ECBLIST+4          STORE IN NEXT ECB LIST ENTRY
+         OI      ECBLIST+4,X'80'       MARK END OF ECB LIST TABLE
+         WAIT    1,ECBLIST=ECBLIST     WAIT FOR ANYTHING IN ECB LIST
+*                                      FIGURE OUT WHAT IT WAS
+         TTIMER  CANCEL                CANCEL THE TIMER FOR ANY EVENT
+*                                      OR SOME NASTY LOOPS OCCUR
+*        CHECK THE COMMAND THAT TRIGGERED THE EVENT
+         LA      R3,TIMERECB           POINT TO TIMER ECB
+         USING   ECB,R3                COVER THE STIMER ECB
+         TM      ECBCC,ECBPOST         DID THE TIMER POP?
+         BO      TIMEERR               YES, NO RESPONSE IN TIME
+         DROP    R3
+*                                      ELSE THE WTOR REPLY
+         MVC     LOGRESP,WTORREPL      MOVE TO THE LOG MSG
+         B     CHECKLOG
+TIMEERR  WTO   'MIDIP02I : NO OP-REPLY IN 10MINS, WTOR CANCELLED'
+*                                      AS WE SAY WE ARE CANCELLING IT,
+*                                      LETS CANCEL IT THEN
+         L     R1,WTORMSID           RETRIEVE MSGID OF WTOR
+         DOM   MSG=(R1),REPLY=YES    REPLY=YES (AS IT IS A WTOR),
+*                                        CANCEL/DOM THE WTOR INSTEAD
+*                                        OF WAITING UNTIL MVS CANCELS
+*                                        IT WHEN THE PROGRAM ENDS
+         MVC   LOGRESP(39),DEFAULTR  USE DEFAULT RESPONSE
+         DROP  R15                     DONT NEED TO ADDRESS CVT NOW
+         EJECT
+* --------------------------------------------------------------------
+* SEE IF WE HAVE A USABLE LOGFILE. IF WE DON'T WE WILL SKIP THE
+* LOGFILE WRITE AND JUST DO THE WTO PART.
+*
+* TESTS DONE ARE
+* (1) DD CARD MUST BE PRESENT, WE OBVIOUSLY CANNOT WRITE TO IT IF 
+*     IT'S NOT THERE
+* (2) IF JES2 SPOOL, PROBABLY TESTING, ALLOW TO WRITE TO THE LOGFILE,
+*     BUT IF I EVER CHANGE OUTREC TO BE > 132 BYTES WILL HAVE TO
+*     REVISIT ALLOWING THAT; BUT OBVIOUSLY IS ONLY USED FOR TESTING
+* (3) MUST BE DSORG=PS  
+* (4) LRECL MUST MATCH L'OUTREC (length of the OUTREC area)
+*
+* I USE THE OBTAIN MACRO TO GET THE LRECL FROM THE VTOC ENTRY FOR THE
+* DISK FILE AS THE INFORMATION IN THE DCB IS NOT POPULATED UNTIL THE
+* FILE IS ACTUALLY OPENED, AND ITS A BIT LATE TO CHECK THERE IF THE
+* OPEN ABENDS DUE TO BAD LRECL :-)
+* --------------------------------------------------------------------
+CHECKLOG EQU     *
+*    DD CARD PRESENT ?
+         RDJFCB IPLOUT                 READ IPLOUT JFCB(DDNAME LOGFILE)
+         LTR   R15,R15                 WAS THE DD PRESENT
+         BNZ   BADDDCRD                NO, DD CARD NOT PRESENT
+*    OUTPUT IS A JES2 SPOOL DATASET ?
+         CLC   JFCBDSNM(6),=CL6'JES2.J'  IF JES2 SPOOL OUTPUT, 
+         BE    WRITELOG                  THEN ANY LRECL IS OK
+*                                      ALLOW NON DSORG=PS LOGFILES
+*    READ THE VTOC ENTRY FOR THE DATASET TO GET EXTRA INFO
+*    WE USE THIS INSTEAD OF INFO IN THE DCB AS THE DCB IS
+*    NOT POPULATED UNTIL THE FILE IS OPENED, AND IN THE CASE
+*    OF A BAD LRECL THE OPEN CAUSES AN ABEND SO TOO LATE TO
+*    CHECK THEN.
+         MVC DSN,JFCBDSNM          The RDJFCB gave us dsn and volser
+         MVC VOL,JFCBVOLS
+         OBTAIN CAMLIST            Read the VTOC record
+         LTR   R15,R15
+         BNZ   BADVTOC             Oopsie, obtain faled
+*    DSORG=PS ?                        
+         CLI   DS1DSORG,DS1DSGPS       CAN'T VTOC LOOKUP A FILE NAME
+         BNE   BADDSORG                LIKE X.X(MBR) SO JUST DON'T
+*                                      WE COULD STRIP OFF THE ( AND
+*                                      FOLLOWING CHARS BUT THEN WOULD
+*                                      ALSO NEED TO CHECK IF IT WAS
+*                                      DSORG=PO THAT A MEMBER NAME
+*                                      WAS PROVIDED BEFORE DOING A
+*                                      WRITE TO THE FILE.
+*                                      IF YOU ARE INTERESTED IN HOW TO
+*                                      DO THOSE CHECKS LOOK AT HOW MY 
+*                                      BKBYVTOC PROGRAM CHECKS ITS
+*                                      BACKUP LISTING IS SANE FOR
+*                                      DSORG=PS AND DSORG=PO(MBR).
+*                                      FOR THIS PROGRAM, ONLY ALLOW PS
+*    VTOC LRECL ENTRY IS THE SAME AS OUR RECORD LENGTH ?
+         XR    R4,R4                   CHECK LRECL
+         LH    R4,DS1LRECL             LRECL FIELD IN THE VTOC ENTRY
+         LA    R5,L'OUTREC               WHAT WE ACTUALLY REQUIRE
+         CR    R4,R5
+         BNE   BADLRECL            Bad LRECL
+*    A L L    G O O D    A T    T H I S    P O I N T
+         B    WRITELOG             ALL CHECKS PASSED
+         EJECT
+* --------------------------------------------------------------------
+* This page just contains the WTO error events for the possible file
+* errors tested for on the previous page.
+* Was using DESC=(2) or 3, and ROUTCDE=(2) to highlight these, but
+* for non-authorised programs WTO's are DOM'ed as soon as the job
+* ends... so that was a bit pointless. Just normal msgs now.
+* --------------------------------------------------------------------
+BADDSORG MVC   BADORGWT+45(44),JFCBDSNM 
+BADORGWT WTO   'MIDIP08E : LOGFILE NOT DSORG=PS, DSN ....+....1....+...X
+               .2....+....3....+....4....'
+         B     WRITEWTO                SKIP DISK LOG STEP
+BADLRECL MVC   BADLRWTO+58(44),JFCBDSNM
+         CVD   R4,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   BADLRWTO+36(3),DOUBLE
+         LA    R4,L'OUTREC               WHAT WE ACTUALLY REQUIRE
+         CVD   R4,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   BADLRWTO+49(3),DOUBLE
+BADLRWTO WTO   'MIDIP05E : LOGFILE IS LRECL=nnn, REQUIRE nnn, DSN ....+X
+               ....1....+....2....+....3....+....4....'
+         B     WRITEWTO                SKIP DISK LOG STEP
+BADDDCRD WTO   'MIDIP06E : NO LOGFILE DD CARD PROVIDED'
+         B     WRITEWTO                SKIP DISK LOG STEP
+BADVTOC  MVC   BADVTOC1+60(44),JFCBDSNM
+         MVC   BADVTOC1+49(6),JFCBVOLS
+         CVD   R15,DOUBLE
+         UNPK  DOUBLE(3),DOUBLE+6(2)
+         OI    DOUBLE+2,C'0'
+         MVC   BADVTOC1+35(3),DOUBLE
+BADVTOC1 WTO   'MIDIP07E : VTOC SEARCH ERR nnn ON VOLSER vvvvvv FOR ...X
+               .+....1....+....2....+....3....+....4....'
+         B     WRITEWTO                SKIP DISK LOG STEP
+         LTORG
+         EJECT
+* --------------------------------------------------------------------
+* LOG THE INFO COLLECTED NOW
+*    TO THE LOGFILE IF IT PASSED SANITY CHECKS
+*    TO THE CONSOLE ALWAYS
+* --------------------------------------------------------------------
+WRITELOG OPEN  (IPLOUT,(OUTPUT))
+         PUT   IPLOUT,OUTREC          WRITE THE INFO
+         CLOSE (IPLOUT)
+*
+* WTO THE LOG RECORD AS WELL, USE 132 AS LENGTH INSTEAD OF L'WTORREPL
+* TO ENSURE NO ISSUES WITH THIS BIT IF L'WTORREPL EVER GETS INCREASED
+WRITEWTO EQU   *
+         MVC   WTOMSG+19(132),OUTREC   USE 132 NOT L'WTORREPL 
+WTOMSG   WTO   'MIDIP04I : ....+....1....+....2....+....3....+....4....X
+               +....5....+....6....+....7....+....8....+....9....+....0X
+               ....+....1....+....2....+....3..'
+*
+* --------------------------------------------------------------------
+* COMPLETED
+* --------------------------------------------------------------------
+         L     R13,4(R13)
+         LM    R14,R12,12(R13)
+         XR    R15,R15                SET RC=0
+         BR    R14
+         LTORG
+* ********************************************************************
+* CALLED WHEN THE STIMER TIMEOUT PERIOD EXPIRES. THIS IS THE EXIT
+* ROUTINE DEFINED TO THE STIMER CALL EARLIER IN THE CODE.
+* IT ISSUES A POST ON THE TIMER EXPIRY EVENT WHICH WILL BE PICKED UP
+* BY THE MAINLINE WAIT ON THE ECB LIST (THE POST TRIGGERS THE TIMER
+* ENTRY MATCH IN THE ECB LIST).
+* THEN AS IT IS EFFECTIVELY JUST AN EXIT WE MUST BRANCH BACK TO
+* THE OS/CALLER AND WAIT FOR THE ECBLIST WAIT TO HANDLE THE POST
+* WE HAVE JUST MADE.
+* ********************************************************************
+TIMEOUT  SAVE  (14,12)
+         L     R2,TIMEXPRM        IT IS THE TIMER EVENT WE ARE POSTING
+         POST  (2)                POST THE TIMER EVENT, DO NO MORE !!!
+         RETURN (14,12)           STIMER EXIT END, RETURN CONTROL
+         EJECT
+***********************************************************************
+*                                                                     *
+*        D A T A   A R E A   B I T S                                  *
+*                                                                     *
+***********************************************************************
+         LTORG
+SAVEAREA DS    18F
+WTORMSID DS    F                  SAVE MESSAGE ID OF WTOR HERE
+WTORREPL DC    CL82' '            REPLY AREA FOR WTOR, ONLY 82 BYTES
+WTORECB  DS    F                  WTOR ECB
+TIMERECB DS    F                  THE STIMER ECB
+ECBLIST  DS    3F                 ECB LIST FOR STIMER,WTOR
+TIMEXPRM DS    F                  TIMER PARAMETER
+SECS600  DC    CL8'00060000'      10 MINUTES FOR STIMER INVOCATION
+DOUBLE   DC    D'0'               WORK AREA FOR LRECL ERROR MSG
+*
+DEFAULTR DC    CL39'NO RESPONSE FROM OPERATOR AFTER 10 MINS'
+*                   80-39 = 35 bytes for reply msg length
+*                    ....+....1....+....2....+....3....+....4....+....
+OUTREC   DC    CL132'yyyy/mm/dd hh:mm ddd xxxx vvvvvv(ccuu) IPL=...., '
+OUTYEAR  EQU   OUTREC+0,4
+OUTMNTH  EQU   OUTREC+5,2
+OUTDAY   EQU   OUTREC+8,2
+OUTHH    EQU   OUTREC+11,2
+OUTMM    EQU   OUTREC+14,2
+OUTDNAME EQU   OUTREC+17,2
+OUTSYSID EQU   OUTREC+21,4
+OUTVOLID EQU   OUTREC+26,6
+OUTCCUU  EQU   OUTREC+33,4
+OUTIPL   EQU   OUTREC+43,5
+LOGRESP  EQU   OUTREC+48,L'WTORREPL    WHERE IN OUTREC FOR REPLY
+         SPACE
+UNPKFLD  DS    CL5
+TRTAB    DC    C'0123456789ABCDEF'
+IPLOUT   DCB   DDNAME=LOGFILE,DSORG=PS,RECFM=FB,LRECL=L'OUTREC,        X
+               MACRF=PM,EXLST=EXLSTLGF
+         DS    0F
+EXLSTLGF DC    X'87',AL3(JFCBAREA)      FUNCTION,AREA
+JFCBAREA DC    176X'00'                 JFCB AREA
+         ORG   JFCBAREA
+         IEFJFCBN              map the jfcbarea
+         LTORG
+* -- FOR OBTAIN/CAMLIST
+* CAMDUM CAMLST SEARCH,DSNAME,VOLSER,DSCB+44
+CAMLIST  CAMLST SEARCH,DSN,VOL,DS1FMTID
+* -- TO MAP THE FORMAT 1 DSCB VTOC ENTRY
+*    THERE MUST BE THE LEADING 44 BYTES, THE ACTUAL
+*    IECSDSL1 MAPPING EXPECTS THOSE BYTES TO BE THERE.
+VOL      DS    CL6
+         DS    0F         Align on fullword boundary
+DSN      DS    CL44
+DSCB     DS    CL140
+         ORG   DSN            overlay from DSN not from DSCB
+         IECSDSL1 1           Map the Format 1 DSCB
+* -- UDATEVAR FOR UDATEMAC FIELDS
+         UDATEVAR DSECT=NO
+         SPACE 2
+* -- ECB FIELDS NEEDED FOR THE WTOR AND TIMER
+         IHAECB DSECT=NO          ECB INFORMATION REQUIRED
+         EJECT   
+* THE BELOW WILL GENERATE SEPERATE DSECTS
+*
+* -- THE CVT PREFIX HAS THE OSVER AND HW MODEL TYPE, PREFIX=YES
+*    OH, AND POINTERS TO LOTS OF OTHER THINGS WE NEED :-)
+         CVT   DSECT=YES,PREFIX=YES,LIST=YES
+* -- THE SMCA AREA HAS SYSRES VOLUME AND SYSRES UCB POINTER (FOR CCUU)
+         IEESMCA
+* -- THIS HAS THE ASMVT WHICH HAS THE TYPE OF IPL (QUICK/WARM/CLPA)
+         ILRASMVT DSECT=YES
+         EJECT   
+* STANDARD REGISTER EQUATES HERE
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*              AND COMPARE INSTRUCTIONS I ALWAYS INCLUDE
+GT       EQU   2 -                 A HIGH
+LT       EQU   4 -                 A LOW
+NE       EQU   7 -                 A NOT EQUAL B
+EQ       EQU   8 -                 A EQUAL B
+GE       EQU   11 -                A NOT LOW
+LE       EQU   13 -                A NOT HIGH
+         END   IPLREASN
+//ASM.SYSTERM DD SYSOUT=*
+//LKED.SYSLMOD DD DISP=SHR,
+// DSN=MARK.LIB.LOAD(IPLREASN)
+//
+./ ADD NAME=IPLREASN
+//IPLREASN PROC
+//* RUN THE IPLREASN PROGRAM TO PROMPT FOR THE REASON
+//* LOGFILE DISP IS MOD (APPEND)
+//IPLREASN EXEC PGM=IPLREASN
+//LOGFILE  DD   DISP=MOD,DSN=MARK.IPLS.LOG
+./ ADD NAME=$DOC
+==================================================================
+Testing the programs
+==================================================================
+Edit TESTALL,
+ - repeat the customisations above and run to test all programs
+   UDATEnnn are working correctly.
+Edit TESTDOW,
+ - repeat the customisations above and run to test the DAYOWEEK
+   macro os working correctly... maybe change the data cards to
+   the year you download this :-)
+Edit TESTS001,
+ - repeat the customisations above and run to test the sched001
+   program... check/change the testdata cards to a date range you
+   can easily check.
+Edit TESTS002,
+ - repeat the customisations above and run to test the sched002
+   program... check/change the testdata cards to a date range you
+   can easily check.
+
+Member Summary... details are below
+===================================
+$DOC     - this member
+TESTALL  - test all the UDATEnnn programs
+TESTLEAP - test the LEAPYEAR macro
+TESTDOW  - test the DAYOWEEK macro, example of how to use it
+TESTS001 - test SCHED001 program, standalone test BETA, is OK
+TESTS002 - test SCHED002 program, standalone test BETA, is OK
+           scheduling jobs and commands
+
+Some actual programs bundled in here that need the library
+MDSCHED1 - my job scheduler STC proc
+IPLINFO  - assembles the IPLREASN program
+IPLREASN - example proc to run IPLREASN
+XMASWAIT - assembled the xmaswait program, OK I was getting bored
+XMASPROC - exampel prc to run XMASWAIT
+
+MEMBER    TYPE PURPOSE
+--------  ----- ------------------------------------------------------
+TESTALL   ASM   JCL job to assemble and run a program that will test
+                all the date programs and macros.
+                Note: uses MARK.LIB.LOAD for the program, change to
+                      one of your existing load libraries before
+                      running this.
+                Note: this won't work unless you assemble the 
+                      UDATEnnn programs of course, but fire away and
+                      test the way a missing program is handled.
+
+MEMBER    TYPE PURPOSE (Scheduler utilities) 
+--------  ----- ------------------------------------------------------
+SCHED001  ASM   Scheduler utility, used to get info on a future date  
+SCHED002  ASM   Scheduler utility, used to get hsecs between current
+                time and a future time; if future time within 24hrs
+SCHEDTST  ASM   assembles MDSCHED1 my job and command Scheduler, also
+                starts it running to test SYSIN time scheduling 
+MDSCHED1  PROC  Runs my job scheduler - example of running live
+
+MEMBER    TYPE PURPOSE (Testing utilities; examples of use)
+--------  ----- ------------------------------------------------------
+TESTDOW   ASM   Test the functionality of the DAYOWEEK macro
+TESTALL   ASM   Test all the UDATEnnn programs
+TESTS001  ASM   Test the SCHED001 program
+
+MEMBER    TYPE PURPOSE
+--------  ----- ------------------------------------------------------
+XMASWAIT  ASM   OK I was getting really bored so created a program to
+XMASPROC  PROC  count down the number of days until XMAS, using the 
+                macros and linklisted programs in this library, so as
+                it cannot run standalone I have added it in here so I
+                have everything needed it I want to re-assemble and 
+                run it. From Nov onwad will WTO a tree with the
+                countdown, otherwise just the days remaining.
+
+MEMBER    TYPE PURPOSE
+--------  ----- ------------------------------------------------------
+IPLINFO   ASM   Assembles the IPLREASN program I use to keep track of
+                why I needed to IPL (what I broke or changed) so I can
+                easily (hopefully) work out what to revert (created
+                when I was making a lot of changes and not really
+                needed now)
+IPLREASN  PROC  An example proc to run the above IPLREASN 
 ./ ENDUP
 @@
 //
